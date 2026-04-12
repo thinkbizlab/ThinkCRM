@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#2563eb" />
+    <title>ThinkCRM</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section id="auth-screen" class="screen active">
+        <header class="hero">
+          <h1>ThinkCRM</h1>
+          <p>Mobile-first web app (API-first)</p>
+        </header>
+        <form id="login-form" class="card form">
+          <label>Tenant Slug
+            <input name="tenantSlug" value="thinkcrm-demo" required />
+          </label>
+          <label>Email
+            <input name="email" type="email" value="admin@thinkcrm.demo" required />
+          </label>
+          <label>Password
+            <input name="password" type="password" value="ThinkCRM123!" required />
+          </label>
+          <button type="submit">Sign In</button>
+        </form>
+        <p id="auth-message" class="message"></p>
+      </section>
+
+      <section id="app-screen" class="screen">
+        <div class="workspace">
+          <aside class="sidebar">
+            <div class="brand-block">
+              <div class="brand-mark" id="brand-mark">TC</div>
+              <div>
+                <h3 id="brand-title">ThinkCRM</h3>
+                <p>Sales workspace</p>
+              </div>
+            </div>
+            <nav class="side-nav">
+              <button class="nav-btn active" data-view="dashboard"><span>🏠</span>Dashboard</button>
+              <button class="nav-btn" data-view="master"><span>🗂️</span>Master</button>
+              <button class="nav-btn" data-view="deals"><span>🧩</span>Deals</button>
+              <button class="nav-btn" data-view="visits"><span>📍</span>Visits</button>
+              <button class="nav-btn" data-view="calendar"><span>🗓️</span>Calendar</button>
+              <button class="nav-btn" data-view="integrations"><span>🔌</span>Logs</button>
+              <button class="nav-btn" data-view="settings"><span>⚙️</span>Settings</button>
+            </nav>
+          </aside>
+
+          <div class="content">
+            <header class="topbar">
+              <div>
+                <h2 id="page-title">Dashboard</h2>
+                <p id="user-meta"></p>
+              </div>
+              <div class="topbar-actions">
+                <button id="theme-toggle-btn" class="ghost">Theme: Auto</button>
+                <button id="logout-btn" class="ghost">Logout</button>
+              </div>
+            </header>
+
+            <section id="status-bar" class="status"></section>
+
+            <section id="view-dashboard" class="view active"></section>
+            <section id="view-master" class="view"></section>
+            <section id="view-deals" class="view"></section>
+            <section id="view-visits" class="view"></section>
+            <section id="view-calendar" class="view"></section>
+            <section id="view-integrations" class="view"></section>
+            <section id="view-settings" class="view"></section>
+          </div>
+        </div>
+
+        <nav class="bottom-nav">
+          <button class="nav-btn active" data-view="dashboard"><span>🏠</span><small>Home</small></button>
+          <button class="nav-btn" data-view="master"><span>🗂️</span><small>Master</small></button>
+          <button class="nav-btn" data-view="deals"><span>🧩</span><small>Deals</small></button>
+          <button class="nav-btn" data-view="visits"><span>📍</span><small>Visits</small></button>
+          <button class="nav-btn" data-view="calendar"><span>🗓️</span><small>Calendar</small></button>
+          <button class="nav-btn" data-view="integrations"><span>🔌</span><small>Logs</small></button>
+          <button class="nav-btn" data-view="settings"><span>⚙️</span><small>Settings</small></button>
+        </nav>
+      </section>
+    </main>
+
+    <div id="voice-note-modal" class="modal-root" hidden aria-modal="true" role="dialog" aria-labelledby="voice-note-modal-title">
+      <div class="modal-backdrop" data-voice-note-close type="button" aria-label="Close"></div>
+      <div class="modal-panel card">
+        <header class="modal-head">
+          <div>
+            <h3 id="voice-note-modal-title">Voice note</h3>
+            <p id="voice-note-modal-subtitle" class="muted small"></p>
+          </div>
+          <button type="button" class="ghost" data-voice-note-close aria-label="Close">✕</button>
+        </header>
+        <p id="voice-note-status" class="message small"></p>
+        <div class="voice-note-actions">
+          <button type="button" id="voice-note-record" class="primary">Record</button>
+          <button type="button" id="voice-note-stop" disabled>Stop &amp; transcribe</button>
+          <label class="voice-note-file-label ghost">
+            Upload file
+            <input type="file" id="voice-note-file" accept="audio/*" hidden />
+          </label>
+        </div>
+        <div id="voice-note-review" class="voice-note-review" hidden>
+          <label>Transcript
+            <textarea id="voice-note-transcript" rows="4"></textarea>
+          </label>
+          <label>Summary (saved to CRM on confirm)
+            <textarea id="voice-note-summary" rows="3"></textarea>
+          </label>
+          <div class="inline-actions">
+            <button type="button" id="voice-note-confirm" class="primary">Confirm &amp; save</button>
+            <button type="button" id="voice-note-reject" class="ghost danger-text">Reject</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
