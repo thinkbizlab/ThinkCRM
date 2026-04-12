@@ -1,4 +1,10 @@
-import { DealStatus, EntityType, VisitStatus, VisitType } from "@prisma/client";
+import {
+  DealStatus,
+  EntityType,
+  VisitStatus,
+  VisitType,
+  type Prisma
+} from "../../lib/prisma-generated.js";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { listVisibleUserIds, requireTenantId, requireUserId } from "../../lib/http.js";
@@ -7,6 +13,28 @@ import { prisma } from "../../lib/prisma.js";
 
 const ONSITE_MAX_DISTANCE_METERS = 200;
 const EARTH_RADIUS_METERS = 6371000;
+
+type VisitWithCustomerRep = Prisma.VisitGetPayload<{
+  include: {
+    customer: { select: { id: true; name: true } };
+    rep: { select: { id: true; fullName: true } };
+  };
+}>;
+
+type DealCalendarWithRelations = Prisma.DealGetPayload<{
+  include: {
+    customer: { select: { id: true; name: true } };
+    owner: { select: { id: true; fullName: true } };
+    stage: { select: { id: true; stageName: true } };
+  };
+}>;
+
+type DealTodoWithRelations = Prisma.DealGetPayload<{
+  include: {
+    customer: { select: { id: true; name: true } };
+    owner: { select: { id: true; fullName: true } };
+  };
+}>;
 
 const plannedVisitCreateSchema = z.object({
   customerId: z.string().min(1),
@@ -239,7 +267,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
     visitType: VisitType;
     changedById: string;
   }) {
-    return prisma.$transaction(async (tx) => {
+    return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const customer = await tx.customer.findFirst({
         where: { id: input.customerId, tenantId: input.tenantId },
         select: { id: true }
@@ -406,7 +434,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.badRequest(parsed.error.message);
     }
 
-    return prisma.$transaction(async (tx) => {
+    return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const visit = await tx.visit.findFirst({
         where: { id: params.id, tenantId, repId },
         include: {
@@ -512,7 +540,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.badRequest(parsed.error.message);
     }
 
-    return prisma.$transaction(async (tx) => {
+    return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const visit = await tx.visit.findFirst({
         where: { id: params.id, tenantId, repId }
       });
@@ -585,7 +613,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
 
     const visitPromise =
       query.eventType === "deal"
-        ? Promise.resolve([])
+        ? Promise.resolve([] as VisitWithCustomerRep[])
         : prisma.visit.findMany({
             where: {
               tenantId,
@@ -607,7 +635,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
 
     const dealPromise =
       query.eventType === "visit"
-        ? Promise.resolve([])
+        ? Promise.resolve([] as DealCalendarWithRelations[])
         : prisma.deal.findMany({
             where: {
               tenantId,
@@ -630,7 +658,10 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
             orderBy: { followUpAt: "asc" }
           });
 
-    const [visits, deals] = await Promise.all([visitPromise, dealPromise]);
+    const [visits, deals]: [VisitWithCustomerRep[], DealCalendarWithRelations[]] = await Promise.all([
+      visitPromise,
+      dealPromise
+    ]);
     const queryText = query.query?.toLowerCase();
 
     const visitEvents = visits
@@ -746,9 +777,9 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
     const endNextMonth = addDays(startToday, 31);
     const queryText = query.query?.toLowerCase();
 
-    const [visits, deals] = await Promise.all([
+    const [visits, deals]: [VisitWithCustomerRep[], DealTodoWithRelations[]] = await Promise.all([
       query.eventType === "deal"
-        ? Promise.resolve([])
+        ? Promise.resolve([] as VisitWithCustomerRep[])
         : prisma.visit.findMany({
             where: {
               tenantId,
@@ -771,7 +802,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
             orderBy: { plannedAt: "asc" }
           }),
       query.eventType === "visit"
-        ? Promise.resolve([])
+        ? Promise.resolve([] as DealTodoWithRelations[])
         : prisma.deal.findMany({
             where: {
               tenantId,

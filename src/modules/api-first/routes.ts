@@ -580,7 +580,7 @@ export const apiFirstRoutes: FastifyPluginAsync = async (app) => {
           customFields: {
             ...asRecord(customer.customFields),
             ...parsed.data.customFields
-          }
+          } as Prisma.InputJsonObject
         }
       });
       return updated;
@@ -600,7 +600,7 @@ export const apiFirstRoutes: FastifyPluginAsync = async (app) => {
           customFields: {
             ...asRecord(item.customFields),
             ...parsed.data.customFields
-          }
+          } as Prisma.InputJsonObject
         }
       });
       return updated;
@@ -619,7 +619,7 @@ export const apiFirstRoutes: FastifyPluginAsync = async (app) => {
         customFields: {
           ...asRecord(paymentTerm.customFields),
           ...parsed.data.customFields
-        }
+        } as Prisma.InputJsonObject
       }
     });
     return updated;

@@ -253,7 +253,7 @@ function mapTenantCredential(
   record:
     | {
         id: string;
-        platform: TenantIntegrationPlatform;
+        platform: IntegrationPlatform;
         status: SourceStatus;
         clientIdRef: string | null;
         clientSecretRef: string | null;

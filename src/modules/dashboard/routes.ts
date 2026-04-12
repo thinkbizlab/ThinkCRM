@@ -12,9 +12,10 @@ const monthQuerySchema = z.object({
 });
 
 function resolveMonthWindow(month?: string): { monthKey: string; dateFrom: Date; dateTo: Date } {
-  const [year, monthIndex] = (month ?? new Date().toISOString().slice(0, 7))
-    .split("-")
-    .map((part) => Number(part));
+  const raw = month ?? new Date().toISOString().slice(0, 7);
+  const [yearStr = "", monthStr = ""] = raw.split("-");
+  const year = Number(yearStr);
+  const monthIndex = Number(monthStr);
   const safeYear = Number.isFinite(year) ? year : new Date().getUTCFullYear();
   const safeMonthIndex = Number.isFinite(monthIndex) ? Math.min(Math.max(monthIndex, 1), 12) - 1 : new Date().getUTCMonth();
   const dateFrom = new Date(Date.UTC(safeYear, safeMonthIndex, 1, 0, 0, 0, 0));
@@ -102,7 +103,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
       })
     ]);
 
-    const visibleUserIds = resolveVisibleUserIds(users, requesterId, requesterRole);
+    const visibleUserIds = resolveVisibleUserIds(users, requesterId, requesterRole ?? undefined);
     const visibleUserIdList = [...visibleUserIds];
 
     const [deals, visits, targets] = await Promise.all([

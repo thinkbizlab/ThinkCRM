@@ -8,7 +8,7 @@ import {
   VisitStatus,
   VisitType
 } from "@prisma/client";
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyPluginAsync, FastifyRequest } from "fastify";
 import { extname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -89,7 +89,7 @@ function resolveAudioFileExtension(fileName: string, mimeType: string): string {
 }
 
 async function createAudioObjectFromMultipart(input: {
-  request: Parameters<FastifyPluginAsync>[0]["request"];
+  request: FastifyRequest;
   tenantId: string;
   app: Parameters<FastifyPluginAsync>[0];
 }): Promise<{
@@ -525,7 +525,7 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
       }
     });
 
-    const customerRecommendations: RecommendationDraft[] = ownedCustomers.flatMap((customer) => {
+    const customerRecommendations: RecommendationDraft[] = ownedCustomers.flatMap((customer): RecommendationDraft[] => {
       const latestVisitAt = customer.visits[0]?.plannedAt ?? null;
       const latestWonClosedAt = customer.deals[0]?.closedAt ?? null;
       const proposedDate = dateFrom > now ? dateFrom : now;

@@ -81,12 +81,14 @@ describe("api-first contract routes", () => {
     const adminToken = await app.jwt.sign({
       tenantId: tenant.id,
       userId: admin.id,
-      role: admin.role
+      role: admin.role,
+      email: admin.email
     });
     const managerToken = await app.jwt.sign({
       tenantId: tenant.id,
       userId: manager.id,
-      role: manager.role
+      role: manager.role,
+      email: manager.email
     });
 
     return { tenant, admin, manager, adminToken, managerToken };
