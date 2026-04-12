@@ -1,0 +1,222 @@
+{
+  "info": {
+    "_postman_id": "1e09ef82-53f4-48e1-a703-2ecedac9757e",
+    "name": "ThinkCRM Smoke Tests",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Seed + smoke-test calls for ThinkCRM backend."
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000"
+    },
+    {
+      "key": "tenantId",
+      "value": "tenant_demo"
+    },
+    {
+      "key": "adminUserId",
+      "value": "user_admin_demo"
+    },
+    {
+      "key": "repUserId",
+      "value": "user_rep_demo"
+    },
+    {
+      "key": "tenantSlug",
+      "value": "thinkcrm-demo"
+    },
+    {
+      "key": "adminEmail",
+      "value": "admin@thinkcrm.demo"
+    },
+    {
+      "key": "password",
+      "value": "ThinkCRM123!"
+    },
+    {
+      "key": "accessToken",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "Auth Login (sets accessToken)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const data = pm.response.json();",
+              "pm.collectionVariables.set('accessToken', data.accessToken);"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "content-type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"tenantSlug\": \"{{tenantSlug}}\",\n  \"email\": \"{{adminEmail}}\",\n  \"password\": \"{{password}}\"\n}"
+        },
+        "url": "{{baseUrl}}/api/v1/auth/login"
+      }
+    },
+    {
+      "name": "Auth Me",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{accessToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/v1/auth/me"
+      }
+    },
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": "{{baseUrl}}/api/v1/health"
+      }
+    },
+    {
+      "name": "Payment Terms",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{accessToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/v1/payment-terms"
+      }
+    },
+    {
+      "name": "Customers",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{accessToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/v1/customers"
+      }
+    },
+    {
+      "name": "Deal Kanban",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{accessToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/v1/deals/kanban"
+      }
+    },
+    {
+      "name": "Visit Check-In Block (expected 409 first run)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "content-type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{accessToken}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"lat\": 13.7563,\n  \"lng\": 100.5018,\n  \"selfieUrl\": \"r2://tenant_demo/selfies/new-selfie.jpg\"\n}"
+        },
+        "url": "{{baseUrl}}/api/v1/visits/visit_planned_demo/checkin"
+      }
+    },
+    {
+      "name": "Visit Check-Out Open Visit",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "content-type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{accessToken}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"lat\": 13.7565,\n  \"lng\": 100.5020,\n  \"result\": \"Resolved issue and collected requirements\"\n}"
+        },
+        "url": "{{baseUrl}}/api/v1/visits/visit_checkedin_demo/checkout"
+      }
+    },
+    {
+      "name": "Visit Check-In Planned (expected success after checkout)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "content-type",
+            "value": "application/json"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{accessToken}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"lat\": 13.7563,\n  \"lng\": 100.5018,\n  \"selfieUrl\": \"r2://tenant_demo/selfies/new-selfie.jpg\"\n}"
+        },
+        "url": "{{baseUrl}}/api/v1/visits/visit_planned_demo/checkin"
+      }
+    },
+    {
+      "name": "Dashboard Overview",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{accessToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/v1/dashboard/overview"
+      }
+    },
+    {
+      "name": "Integration Logs",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{accessToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/v1/integrations/logs"
+      }
+    }
+  ]
+}

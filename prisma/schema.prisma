@@ -1,0 +1,832 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Tenant {
+  id                    String                   @id @default(cuid())
+  name                  String
+  slug                  String                   @unique
+  createdAt             DateTime                 @default(now())
+  updatedAt             DateTime                 @updatedAt
+  users                 User[]
+  subscriptions         Subscription[]
+  subscriptionProrationEvents SubscriptionProrationEvent[]
+  invoices              TenantInvoice[]
+  storageQuotas         TenantStorageQuota[]
+  storageUsageDaily     TenantStorageUsageDaily[]
+  paymentTerms          PaymentTerm[]
+  customers             Customer[]
+  items                 Item[]
+  deals                 Deal[]
+  quotations            Quotation[]
+  visits                Visit[]
+  integrations          IntegrationSource[]
+  integrationCredentials TenantIntegrationCredential[]
+  integrationLogs       IntegrationExecutionLog[]
+  integrationSyncJobs   IntegrationSyncJob[]
+  teams                 Team[]
+  branding              TenantBranding?
+  taxConfig             TenantTaxConfig?
+  kpiTargets            SalesKpiTarget[]
+  aiAnalysisRuns        AiAnalysisRun[]
+  aiVisitRecommendationRuns AiVisitRecommendationRun[]
+  voiceNoteJobs         VoiceNoteJob[]
+  notificationChannels  TeamNotificationChannel[]
+  customFieldDefinitions CustomFieldDefinition[]
+  quotationFormConfig    QuotationFormConfig?
+  entityChangelogs       EntityChangelog[]
+  roleChainEntries       TenantRoleChain[]
+}
+
+model User {
+  id                  String                @id @default(cuid())
+  tenantId            String
+  email               String
+  passwordHash        String                @default("")
+  fullName            String
+  role                UserRole
+  isActive            Boolean               @default(true)
+  mustResetPassword   Boolean               @default(false)
+  managerUserId       String?
+  teamId              String?
+  externalAccounts    UserExternalAccount[]
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+  tenant              Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  manager             User?                 @relation("UserManager", fields: [managerUserId], references: [id], onDelete: SetNull)
+  team                Team?                 @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  reports             User[]                @relation("UserManager")
+  dealUpdates         DealProgressUpdate[]
+  integrationLogs     IntegrationExecutionLog[]
+  ownedDeals          Deal[]                @relation("DealOwner")
+  ownedVisits         Visit[]               @relation("VisitRep")
+  voiceNoteRequested  VoiceNoteJob[]        @relation("VoiceRequestedBy")
+  voiceNoteConfirmed  VoiceNoteTranscript[] @relation("VoiceConfirmedBy")
+  aiVisitRecommendationRuns AiVisitRecommendationRun[] @relation("AiVisitRecommendationRunRep")
+  entityChangelogs      EntityChangelog[]      @relation("EntityChangelogChangedBy")
+
+  @@unique([tenantId, email])
+}
+
+model EntityChangelog {
+  id          String    @id @default(cuid())
+  tenantId    String
+  entityType  EntityType
+  entityId    String
+  action      String
+  beforeJson  Json?
+  afterJson   Json?
+  contextJson Json?
+  changedById String?
+  createdAt   DateTime  @default(now())
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  changedBy   User?     @relation("EntityChangelogChangedBy", fields: [changedById], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, entityType, entityId, createdAt])
+}
+
+model Subscription {
+  id                 String             @id @default(cuid())
+  tenantId           String
+  provider           BillingProvider
+  pricingModel       PricingModel       @default(FIXED_PER_USER)
+  status             SubscriptionStatus
+  seatPriceCents     Int
+  seatCount          Int                @default(1)
+  currency           String             @default("THB")
+  paymentMethodRef   String?
+  billingCycle       BillingCycle       @default(MONTHLY)
+  billingPeriodStart DateTime           @default(now())
+  billingPeriodEnd   DateTime           @default(now())
+  externalCustomerId String?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  tenant             Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  prorationEvents    SubscriptionProrationEvent[]
+}
+
+model TenantStorageQuota {
+  id                String   @id @default(cuid())
+  tenantId          String
+  includedBytes     BigInt   @default(1073741824)
+  overagePricePerGb Int      @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model TenantStorageUsageDaily {
+  id                     String   @id @default(cuid())
+  tenantId               String
+  usageDate              String
+  totalBytes             BigInt
+  overageBytes           BigInt
+  estimatedOverageAmount Int      @default(0)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  tenant                 Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, usageDate])
+}
+
+model SubscriptionProrationEvent {
+  id                    String       @id @default(cuid())
+  tenantId              String
+  subscriptionId        String
+  oldSeatCount          Int
+  newSeatCount          Int
+  seatDelta             Int
+  daysRemaining         Int
+  totalPeriodDays       Int
+  proratedAmountCents   Int
+  effectiveAt           DateTime
+  createdAt             DateTime     @default(now())
+  tenant                Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  subscription          Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+}
+
+model TenantInvoice {
+  id                       String        @id @default(cuid())
+  tenantId                 String
+  invoiceMonth             String
+  periodStart              String
+  periodEnd                String
+  currency                 String
+  seatsBaseCents           Int
+  storageOverageCents      Int
+  prorationAdjustmentsCents Int
+  totalDueCents            Int
+  status                   InvoiceStatus @default(DRAFT)
+  finalizedAt              DateTime?
+  createdAt                DateTime      @default(now())
+  updatedAt                DateTime      @updatedAt
+  tenant                   Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, invoiceMonth])
+}
+
+model Team {
+  id          String                  @id @default(cuid())
+  tenantId    String
+  teamName    String
+  isActive    Boolean                 @default(true)
+  createdAt   DateTime                @default(now())
+  updatedAt   DateTime                @updatedAt
+  tenant      Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  users       User[]
+  channels    TeamNotificationChannel[]
+}
+
+model TeamNotificationChannel {
+  id            String      @id @default(cuid())
+  tenantId      String
+  teamId        String
+  channelType   ChannelType
+  channelTarget String
+  isEnabled     Boolean     @default(true)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  team          Team        @relation(fields: [teamId], references: [id], onDelete: Cascade)
+}
+
+model TenantIntegrationCredential {
+  id              String              @id @default(cuid())
+  tenantId        String
+  platform        IntegrationPlatform
+  clientIdRef     String?
+  clientSecretRef String?
+  apiKeyRef       String?
+  webhookTokenRef String?
+  status          SourceStatus        @default(DISABLED)
+  lastTestedAt    DateTime?
+  lastTestResult  String?
+  lastTestStatus  ExecutionStatus?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  tenant          Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, platform])
+}
+
+model TenantBranding {
+  id             String   @id @default(cuid())
+  tenantId       String   @unique
+  logoUrl        String?
+  primaryColor   String   @default("#2563eb")
+  secondaryColor String   @default("#0f172a")
+  themeMode      ThemeMode @default(LIGHT)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model TenantTaxConfig {
+  id             String   @id @default(cuid())
+  tenantId       String   @unique
+  vatEnabled     Boolean  @default(true)
+  vatRatePercent Float    @default(7.0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model PaymentTerm {
+  id          String   @id @default(cuid())
+  tenantId    String
+  code        String
+  name        String
+  dueDays     Int
+  isActive    Boolean  @default(true)
+  customFields Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customers   Customer[]
+  quotations  Quotation[]
+
+  @@unique([tenantId, code])
+}
+
+model Customer {
+  id                String             @id @default(cuid())
+  tenantId          String
+  ownerId           String?
+  customerCode      String
+  name              String
+  defaultTermId     String
+  siteLat           Float?
+  siteLng           Float?
+  customFields      Json?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  paymentTerm       PaymentTerm        @relation(fields: [defaultTermId], references: [id], onDelete: Restrict)
+  addresses         CustomerAddress[]
+  contacts          CustomerContact[]
+  deals             Deal[]
+  visits            Visit[]
+  quotations        Quotation[]
+
+  @@unique([tenantId, customerCode])
+}
+
+model CustomerAddress {
+  id               String   @id @default(cuid())
+  customerId       String
+  addressLine1     String
+  city             String?
+  state            String?
+  country          String?
+  postalCode       String?
+  latitude         Float?
+  longitude        Float?
+  isDefaultBilling Boolean  @default(false)
+  isDefaultShipping Boolean @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  customer         Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  billingQuotations Quotation[] @relation("QuotationBillingAddress")
+  shippingQuotations Quotation[] @relation("QuotationShippingAddress")
+}
+
+model CustomerContact {
+  id           String   @id @default(cuid())
+  customerId   String
+  name         String
+  position     String
+  customFields Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  customer     Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+}
+
+model Item {
+  id           String   @id @default(cuid())
+  tenantId     String
+  itemCode     String
+  name         String
+  unitPrice    Float
+  customFields Json?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  quoteItems   QuotationItem[]
+
+  @@unique([tenantId, itemCode])
+}
+
+model CustomFieldDefinition {
+  id           String              @id @default(cuid())
+  tenantId     String
+  entityType   EntityType
+  fieldKey     String
+  label        String
+  dataType     CustomFieldDataType
+  isRequired   Boolean             @default(false)
+  isActive     Boolean             @default(true)
+  displayOrder Int                 @default(0)
+  optionsJson  Json?
+  placeholder  String?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  tenant       Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, entityType, fieldKey])
+}
+
+model DealStage {
+  id          String   @id @default(cuid())
+  tenantId    String
+  stageName   String
+  stageOrder  Int
+  isClosedWon Boolean  @default(false)
+  isClosedLost Boolean @default(false)
+  isDefault   Boolean  @default(false)
+  allowForwardMove Boolean @default(true)
+  allowBackwardMove Boolean @default(false)
+  allowStageSkip Boolean @default(false)
+  allowedSourceStageIds Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  deals       Deal[]
+
+  @@unique([tenantId, stageOrder])
+}
+
+model Deal {
+  id             String               @id @default(cuid())
+  tenantId       String
+  ownerId        String
+  dealNo         String
+  dealName       String
+  customerId     String
+  stageId        String
+  estimatedValue Float
+  followUpAt     DateTime
+  closedAt       DateTime?
+  status         DealStatus           @default(OPEN)
+  customFields   Json?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  tenant         Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  owner          User                 @relation("DealOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  customer       Customer             @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  stage          DealStage            @relation(fields: [stageId], references: [id], onDelete: Restrict)
+  progress       DealProgressUpdate[]
+  quotations     Quotation[]
+  visits         Visit[]
+}
+
+model DealProgressUpdate {
+  id           String   @id @default(cuid())
+  dealId       String
+  createdById  String
+  note         String
+  attachmentUrl String?
+  createdAt    DateTime @default(now())
+  deal         Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  createdBy    User     @relation(fields: [createdById], references: [id], onDelete: Restrict)
+}
+
+model Quotation {
+  id             String           @id @default(cuid())
+  tenantId       String
+  dealId         String
+  quotationNo    String
+  customerId     String
+  paymentTermId  String
+  billingAddressId String?
+  shippingAddressId String?
+  validTo        DateTime
+  status         QuotationStatus  @default(DRAFT)
+  subtotal       Float
+  vatRate        Float            @default(7.0)
+  vatAmount      Float
+  grandTotal     Float
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  tenant         Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  deal           Deal             @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  customer       Customer         @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  paymentTerm    PaymentTerm      @relation(fields: [paymentTermId], references: [id], onDelete: Restrict)
+  billingAddress CustomerAddress? @relation("QuotationBillingAddress", fields: [billingAddressId], references: [id], onDelete: SetNull)
+  shippingAddress CustomerAddress? @relation("QuotationShippingAddress", fields: [shippingAddressId], references: [id], onDelete: SetNull)
+  items          QuotationItem[]
+
+  @@unique([tenantId, quotationNo])
+}
+
+model TenantRoleChain {
+  id        String   @id @default(cuid())
+  tenantId  String
+  roleCode  String
+  roleName  String
+  rankOrder Int
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, roleCode])
+  @@index([tenantId, rankOrder])
+}
+
+model StripeWebhookDelivery {
+  id         String   @id @default(cuid())
+  eventId    String   @unique
+  eventType  String
+  tenantId   String?
+  receivedAt DateTime @default(now())
+}
+
+model QuotationItem {
+  id              String    @id @default(cuid())
+  quotationId     String
+  itemId          String
+  itemCode        String
+  unitPrice       Float
+  discountPercent Float     @default(0)
+  netPricePerUnit Float
+  quantity        Int
+  totalPrice      Float
+  quotation       Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  item            Item      @relation(fields: [itemId], references: [id], onDelete: Restrict)
+}
+
+model QuotationFormConfig {
+  id               String   @id @default(cuid())
+  tenantId         String   @unique
+  headerLayoutJson Json
+  itemLayoutJson   Json
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model Visit {
+  id            String      @id @default(cuid())
+  tenantId      String
+  repId         String
+  customerId    String
+  dealId        String?
+  visitType     VisitType
+  status        VisitStatus @default(PLANNED)
+  plannedAt     DateTime
+  objective     String?
+  checkInAt     DateTime?
+  checkInLat    Float?
+  checkInLng    Float?
+  checkInDistanceM Float?
+  checkInSelfie String?
+  checkOutAt    DateTime?
+  checkOutLat   Float?
+  checkOutLng   Float?
+  result        String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  rep           User        @relation("VisitRep", fields: [repId], references: [id], onDelete: Restrict)
+  customer      Customer    @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  deal          Deal?       @relation(fields: [dealId], references: [id], onDelete: SetNull)
+}
+
+model SalesKpiTarget {
+  id                  String   @id @default(cuid())
+  tenantId            String
+  userId              String
+  targetMonth         String
+  visitTargetCount    Int
+  newDealValueTarget  Float
+  revenueTarget       Float
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  tenant              Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId, targetMonth])
+}
+
+model IntegrationSource {
+  id             String      @id @default(cuid())
+  tenantId       String
+  sourceName     String
+  sourceType     SourceType
+  configJson     Json
+  status         SourceStatus @default(DISABLED)
+  lastSyncAt     DateTime?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+  tenant         Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  mappings       IntegrationFieldMapping[]
+  jobs           IntegrationSyncJob[]
+}
+
+model IntegrationFieldMapping {
+  id            String   @id @default(cuid())
+  sourceId      String
+  entityType    EntityType
+  sourceField   String
+  targetField   String
+  transformRule String?
+  isRequired    Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  source        IntegrationSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+}
+
+model IntegrationSyncJob {
+  id            String      @id @default(cuid())
+  tenantId      String
+  sourceId      String
+  runType       RunType
+  status        JobStatus
+  startedAt     DateTime    @default(now())
+  finishedAt    DateTime?
+  summaryJson   Json?
+  tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  source        IntegrationSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  errors        IntegrationSyncError[]
+}
+
+model IntegrationSyncError {
+  id           String   @id @default(cuid())
+  jobId        String
+  entityType   EntityType
+  rowRef       String
+  errorCode    String
+  errorMessage String
+  createdAt    DateTime @default(now())
+  job          IntegrationSyncJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+}
+
+model IntegrationExecutionLog {
+  id              String       @id @default(cuid())
+  tenantId        String
+  executedById    String?
+  platform        IntegrationPlatform
+  operationType   String
+  direction       Direction
+  triggerType     TriggerType
+  status          ExecutionStatus
+  requestRef      String?
+  responseSummary String?
+  errorCode       String?
+  errorMessage    String?
+  startedAt       DateTime      @default(now())
+  completedAt     DateTime?
+  payloadMasked   Json?
+  tenant          Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  executedBy      User?         @relation(fields: [executedById], references: [id], onDelete: SetNull)
+}
+
+model UserExternalAccount {
+  id             String   @id @default(cuid())
+  userId         String
+  provider       IntegrationPlatform
+  externalUserId String
+  status         AccountStatus @default(CONNECTED)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider])
+}
+
+model AiAnalysisRun {
+  id           String   @id @default(cuid())
+  tenantId     String
+  requestedBy  String
+  filtersJson  Json?
+  status       JobStatus
+  createdAt    DateTime @default(now())
+  completedAt  DateTime?
+  findings     AiAnalysisFinding[]
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model AiVisitRecommendationRun {
+  id              String                      @id @default(cuid())
+  tenantId        String
+  repId           String
+  dateFrom        DateTime
+  dateTo          DateTime
+  generatedAt     DateTime                    @default(now())
+  recommendations AiVisitRecommendation[]
+  tenant          Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  rep             User                        @relation("AiVisitRecommendationRunRep", fields: [repId], references: [id], onDelete: Cascade)
+}
+
+model AiVisitRecommendation {
+  id             String                           @id @default(cuid())
+  runId          String
+  sourceType     AiVisitRecommendationSourceType
+  customerId     String
+  dealId         String?
+  score          Float
+  reason         String
+  proposedDate   DateTime
+  status         AiVisitRecommendationStatus      @default(RECOMMENDED)
+  decisionAt     DateTime?
+  createdAt      DateTime                         @default(now())
+  run            AiVisitRecommendationRun         @relation(fields: [runId], references: [id], onDelete: Cascade)
+}
+
+model AiAnalysisFinding {
+  id              String   @id @default(cuid())
+  runId           String
+  findingType     String
+  title           String
+  description     String
+  confidenceScore Float
+  evidenceJson    Json?
+  run             AiAnalysisRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+}
+
+model VoiceNoteJob {
+  id             String   @id @default(cuid())
+  tenantId       String
+  entityType     EntityType
+  entityId       String
+  audioObjectKey String
+  status         JobStatus
+  requestedById  String
+  createdAt      DateTime @default(now())
+  completedAt    DateTime?
+  transcript     VoiceNoteTranscript?
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  requestedBy    User     @relation("VoiceRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+}
+
+model VoiceNoteTranscript {
+  id              String   @id @default(cuid())
+  jobId           String   @unique
+  transcriptText  String
+  summaryText     String
+  confidenceScore Float
+  confirmedById   String?
+  confirmedAt     DateTime?
+  rejectedAt      DateTime?
+  job             VoiceNoteJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  confirmedBy     User?        @relation("VoiceConfirmedBy", fields: [confirmedById], references: [id], onDelete: SetNull)
+}
+
+enum UserRole {
+  ADMIN
+  MANAGER
+  SUPERVISOR
+  REP
+}
+
+enum BillingProvider {
+  STRIPE
+}
+
+enum PricingModel {
+  FIXED_PER_USER
+}
+
+enum BillingCycle {
+  MONTHLY
+  YEARLY
+}
+
+enum InvoiceStatus {
+  DRAFT
+  FINALIZED
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+}
+
+enum ChannelType {
+  MS_TEAMS
+  EMAIL
+  SLACK
+  LINE
+}
+
+enum DealStatus {
+  OPEN
+  WON
+  LOST
+}
+
+enum QuotationStatus {
+  DRAFT
+  SENT
+  APPROVED
+  REJECTED
+  EXPIRED
+  CANCELED
+}
+
+enum VisitType {
+  PLANNED
+  UNPLANNED
+}
+
+enum VisitStatus {
+  PLANNED
+  CHECKED_IN
+  CHECKED_OUT
+}
+
+enum SourceType {
+  EXCEL
+  REST
+  WEBHOOK
+}
+
+enum SourceStatus {
+  DISABLED
+  ENABLED
+}
+
+enum RunType {
+  MANUAL
+  SCHEDULED
+  WEBHOOK
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  SUCCESS
+  FAILED
+}
+
+enum EntityType {
+  CUSTOMER
+  ITEM
+  PAYMENT_TERM
+  DEAL
+  VISIT
+}
+
+enum IntegrationPlatform {
+  MS365
+  GOOGLE
+  LINE
+  MS_TEAMS
+  EMAIL
+  SLACK
+  STRIPE
+  GENERIC
+}
+
+enum Direction {
+  INBOUND
+  OUTBOUND
+}
+
+enum TriggerType {
+  MANUAL
+  SCHEDULED
+  EVENT
+}
+
+enum ExecutionStatus {
+  SUCCESS
+  FAILURE
+}
+
+enum AccountStatus {
+  CONNECTED
+  DISCONNECTED
+}
+
+enum ThemeMode {
+  LIGHT
+  DARK
+}
+
+enum AiVisitRecommendationSourceType {
+  DEAL_FOLLOWUP
+  CUSTOMER_GAP_6M
+  CUSTOMER_GAP_12M
+  CUSTOMER_NEVER_SOLD
+}
+
+enum AiVisitRecommendationStatus {
+  RECOMMENDED
+  ACCEPTED
+  REJECTED
+}
+
+enum CustomFieldDataType {
+  TEXT
+  NUMBER
+  BOOLEAN
+  DATE
+  SELECT
+}
