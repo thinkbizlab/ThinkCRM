@@ -11,6 +11,7 @@ model Tenant {
   id                    String                   @id @default(cuid())
   name                  String
   slug                  String                   @unique
+  timezone              String                   @default("Asia/Bangkok")
   createdAt             DateTime                 @default(now())
   updatedAt             DateTime                 @updatedAt
   users                 User[]
@@ -32,6 +33,7 @@ model Tenant {
   teams                 Team[]
   branding              TenantBranding?
   taxConfig             TenantTaxConfig?
+  visitConfig           TenantVisitConfig?
   kpiTargets            SalesKpiTarget[]
   aiAnalysisRuns        AiAnalysisRun[]
   aiVisitRecommendationRuns AiVisitRecommendationRun[]
@@ -41,6 +43,9 @@ model Tenant {
   quotationFormConfig    QuotationFormConfig?
   entityChangelogs       EntityChangelog[]
   roleChainEntries       TenantRoleChain[]
+  customDomain           TenantCustomDomain?
+  cronJobConfigs         CronJobConfig[]
+  cronJobRuns            CronJobRun[]
 }
 
 model User {
@@ -54,6 +59,8 @@ model User {
   mustResetPassword   Boolean               @default(false)
   managerUserId       String?
   teamId              String?
+  notifPrefs          Json?
+  avatarUrl           String?
   externalAccounts    UserExternalAccount[]
   createdAt           DateTime              @default(now())
   updatedAt           DateTime              @updatedAt
@@ -61,6 +68,7 @@ model User {
   manager             User?                 @relation("UserManager", fields: [managerUserId], references: [id], onDelete: SetNull)
   team                Team?                 @relation(fields: [teamId], references: [id], onDelete: SetNull)
   reports             User[]                @relation("UserManager")
+  directedTeams       Team[]                @relation("TeamDirector")
   dealUpdates         DealProgressUpdate[]
   integrationLogs     IntegrationExecutionLog[]
   ownedDeals          Deal[]                @relation("DealOwner")
@@ -176,9 +184,11 @@ model Team {
   tenantId    String
   teamName    String
   isActive    Boolean                 @default(true)
+  directorId  String?
   createdAt   DateTime                @default(now())
   updatedAt   DateTime                @updatedAt
   tenant      Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  director    User?                   @relation("TeamDirector", fields: [directorId], references: [id], onDelete: SetNull)
   users       User[]
   channels    TeamNotificationChannel[]
 }
@@ -216,15 +226,17 @@ model TenantIntegrationCredential {
 }
 
 model TenantBranding {
-  id             String   @id @default(cuid())
-  tenantId       String   @unique
+  id             String    @id @default(cuid())
+  tenantId       String    @unique
+  appName        String?
   logoUrl        String?
-  primaryColor   String   @default("#2563eb")
-  secondaryColor String   @default("#0f172a")
+  faviconUrl     String?
+  primaryColor   String    @default("#2563eb")
+  secondaryColor String    @default("#0f172a")
   themeMode      ThemeMode @default(LIGHT)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
 
 model TenantTaxConfig {
@@ -235,6 +247,16 @@ model TenantTaxConfig {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
   tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+model TenantVisitConfig {
+  id                       String   @id @default(cuid())
+  tenantId                 String   @unique
+  checkInMaxDistanceM      Int      @default(1000)
+  minVisitDurationMinutes  Int      @default(15)
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+  tenant                   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
 
 model PaymentTerm {
@@ -260,6 +282,9 @@ model Customer {
   ownerId           String?
   customerCode      String
   name              String
+  externalRef       String?
+  customerType      CustomerType       @default(COMPANY)
+  taxId             String?
   defaultTermId     String
   siteLat           Float?
   siteLng           Float?
@@ -275,12 +300,16 @@ model Customer {
   quotations        Quotation[]
 
   @@unique([tenantId, customerCode])
+  @@unique([tenantId, taxId])
 }
 
 model CustomerAddress {
   id               String   @id @default(cuid())
   customerId       String
   addressLine1     String
+  subDistrict      String?
+  district         String?
+  province         String?
   city             String?
   state            String?
   country          String?
@@ -301,6 +330,10 @@ model CustomerContact {
   customerId   String
   name         String
   position     String
+  tel          String?
+  email        String?
+  lineId       String?
+  whatsapp     String?
   customFields Json?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -312,6 +345,7 @@ model Item {
   tenantId     String
   itemCode     String
   name         String
+  externalRef  String?
   unitPrice    Float
   customFields Json?
   createdAt    DateTime @default(now())
@@ -372,6 +406,7 @@ model Deal {
   followUpAt     DateTime
   closedAt       DateTime?
   status         DealStatus           @default(OPEN)
+  lostNote       String?
   customFields   Json?
   createdAt      DateTime             @default(now())
   updatedAt      DateTime             @updatedAt
@@ -389,7 +424,7 @@ model DealProgressUpdate {
   dealId       String
   createdById  String
   note         String
-  attachmentUrl String?
+  attachmentUrls Json?
   createdAt    DateTime @default(now())
   deal         Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
   createdBy    User     @relation(fields: [createdById], references: [id], onDelete: Restrict)
@@ -476,6 +511,9 @@ model Visit {
   repId         String
   customerId    String
   dealId        String?
+  visitNo       String      @default("")
+  siteLat       Float?
+  siteLng       Float?
   visitType     VisitType
   status        VisitStatus @default(PLANNED)
   plannedAt     DateTime
@@ -590,6 +628,7 @@ model UserExternalAccount {
   userId         String
   provider       IntegrationPlatform
   externalUserId String
+  metadata       Json?
   status         AccountStatus @default(CONNECTED)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -678,6 +717,7 @@ model VoiceNoteTranscript {
 
 enum UserRole {
   ADMIN
+  DIRECTOR
   MANAGER
   SUPERVISOR
   REP
@@ -771,17 +811,22 @@ enum EntityType {
   PAYMENT_TERM
   DEAL
   VISIT
+  QUOTATION
 }
 
 enum IntegrationPlatform {
   MS365
   GOOGLE
   LINE
+  LINE_LOGIN
   MS_TEAMS
   EMAIL
   SLACK
   STRIPE
   GENERIC
+  ANTHROPIC
+  GEMINI
+  OPENAI
 }
 
 enum Direction {
@@ -829,4 +874,68 @@ enum CustomFieldDataType {
   BOOLEAN
   DATE
   SELECT
+}
+
+enum CustomerType {
+  COMPANY
+  PERSONAL
+}
+
+model TenantCustomDomain {
+  id                String             @id @default(cuid())
+  tenantId          String             @unique
+  domain            String             @unique
+  verificationToken String
+  status            CustomDomainStatus @default(PENDING)
+  verifiedAt        DateTime?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+enum CustomDomainStatus {
+  PENDING
+  VERIFIED
+  FAILED
+}
+
+model CronJobConfig {
+  id          String          @id @default(cuid())
+  tenantId    String
+  jobKey      String
+  cronExpr    String
+  timezone    String          @default("Asia/Bangkok")
+  isEnabled   Boolean         @default(true)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  tenant      Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  runs        CronJobRun[]
+
+  @@unique([tenantId, jobKey])
+}
+
+model CronJobRun {
+  id          String          @id @default(cuid())
+  tenantId    String
+  jobKey      String
+  status      CronRunStatus
+  startedAt   DateTime        @default(now())
+  completedAt DateTime?
+  summary     String?
+  triggeredBy CronTriggerType @default(SCHEDULED)
+  tenant      Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  config      CronJobConfig?  @relation(fields: [tenantId, jobKey], references: [tenantId, jobKey])
+
+  @@index([tenantId, jobKey, startedAt])
+}
+
+enum CronRunStatus {
+  RUNNING
+  SUCCESS
+  FAILURE
+}
+
+enum CronTriggerType {
+  SCHEDULED
+  MANUAL
 }

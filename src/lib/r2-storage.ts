@@ -32,31 +32,38 @@ function normalizeObjectKey(rawObjectKey: string): string {
   return withoutLeadingSlash;
 }
 
-function assertTenantScopedObjectKey(tenantId: string, objectKey: string): string {
-  const expectedPrefix = `tenants/${tenantId}/`;
-  if (objectKey.startsWith("tenants/") && !objectKey.startsWith(expectedPrefix)) {
-    throw new Error("Cross-tenant object access is not allowed.");
-  }
-  if (objectKey.startsWith(expectedPrefix)) {
-    return objectKey;
-  }
-  return `${expectedPrefix}${objectKey}`;
-}
-
-function parseObjectKeyInput(tenantId: string, rawInput: string): string {
+/**
+ * Ensures the object key is scoped to the given tenant slug.
+ * - r2:// refs must already start with "{tenantSlug}/" (cross-tenant protection).
+ * - Raw keys get the "{tenantSlug}/" prefix added automatically.
+ */
+function parseObjectKeyInput(tenantSlug: string, rawInput: string): string {
+  const slugPrefix = `${tenantSlug}/`;
   const trimmed = rawInput.trim();
+
   if (trimmed.startsWith("r2://")) {
     const parsed = new URL(trimmed);
     if (parsed.hostname !== config.R2_BUCKET) {
       throw new Error("object reference bucket mismatch.");
     }
     const keyFromRef = normalizeObjectKey(parsed.pathname.replace(/^\/+/, ""));
-    return assertTenantScopedObjectKey(tenantId, keyFromRef);
+    if (!keyFromRef.startsWith(slugPrefix)) {
+      throw new Error("Cross-tenant object access is not allowed.");
+    }
+    return keyFromRef;
   }
 
   const normalized = normalizeObjectKey(trimmed);
-  return assertTenantScopedObjectKey(tenantId, normalized);
+  if (normalized.startsWith(slugPrefix)) {
+    return normalized;
+  }
+  return `${slugPrefix}${normalized}`;
 }
+
+export const isR2Configured =
+  config.R2_ACCOUNT_ID !== "local-account" &&
+  config.R2_ACCESS_KEY_ID !== "local-access-key" &&
+  config.R2_SECRET_ACCESS_KEY !== "local-secret-key";
 
 const r2Client = new S3Client({
   region: "auto",
@@ -71,17 +78,29 @@ export function buildR2ObjectRef(objectKey: string): string {
   return `r2://${config.R2_BUCKET}/${objectKey}`;
 }
 
-export function normalizeTenantObjectKey(tenantId: string, objectKeyOrRef: string): string {
-  return parseObjectKeyInput(tenantId, objectKeyOrRef);
+/**
+ * Returns a direct public HTTPS URL for an object key when R2_PUBLIC_URL is configured.
+ * Returns null if public URL is not configured (caller should fall back to presigned URL).
+ */
+export function buildR2PublicUrl(objectKeyOrRef: string): string | null {
+  if (!config.R2_PUBLIC_URL) return null;
+  const key = objectKeyOrRef.startsWith("r2://")
+    ? objectKeyOrRef.slice(`r2://${config.R2_BUCKET}/`.length)
+    : objectKeyOrRef.replace(/^\/+/, "");
+  return `${config.R2_PUBLIC_URL.replace(/\/$/, "")}/${key}`;
+}
+
+export function normalizeTenantObjectKey(tenantSlug: string, objectKeyOrRef: string): string {
+  return parseObjectKeyInput(tenantSlug, objectKeyOrRef);
 }
 
 export async function createR2PresignedUpload(input: {
-  tenantId: string;
+  tenantSlug: string;
   objectKeyOrRef: string;
   contentType?: string;
   expiresInSeconds?: number;
 }) {
-  const objectKey = parseObjectKeyInput(input.tenantId, input.objectKeyOrRef);
+  const objectKey = parseObjectKeyInput(input.tenantSlug, input.objectKeyOrRef);
   const command = new PutObjectCommand({
     Bucket: config.R2_BUCKET,
     Key: objectKey,
@@ -100,11 +119,11 @@ export async function createR2PresignedUpload(input: {
 }
 
 export async function createR2PresignedDownload(input: {
-  tenantId: string;
+  tenantSlug: string;
   objectKeyOrRef: string;
   expiresInSeconds?: number;
 }) {
-  const objectKey = parseObjectKeyInput(input.tenantId, input.objectKeyOrRef);
+  const objectKey = parseObjectKeyInput(input.tenantSlug, input.objectKeyOrRef);
   const command = new GetObjectCommand({
     Bucket: config.R2_BUCKET,
     Key: objectKey
@@ -121,12 +140,21 @@ export async function createR2PresignedDownload(input: {
 }
 
 export async function uploadBufferToR2(input: {
-  tenantId: string;
+  tenantSlug: string;
   objectKeyOrRef: string;
   contentType: string;
   data: Buffer;
 }) {
-  const objectKey = parseObjectKeyInput(input.tenantId, input.objectKeyOrRef);
+  const objectKey = parseObjectKeyInput(input.tenantSlug, input.objectKeyOrRef);
+
+  if (!isR2Configured) {
+    // R2 not configured (dev/local) — skip actual upload, return a placeholder ref.
+    return {
+      objectKey,
+      objectRef: `dev://${objectKey}`
+    };
+  }
+
   try {
     await r2Client.send(
       new PutObjectCommand({

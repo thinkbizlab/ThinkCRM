@@ -6,6 +6,7 @@ const roleRank: Record<UserRole, number> = {
   REP: 1,
   SUPERVISOR: 2,
   MANAGER: 3,
+  DIRECTOR: 3,
   ADMIN: 4
 };
 

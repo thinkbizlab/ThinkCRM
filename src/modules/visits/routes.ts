@@ -5,13 +5,15 @@ import {
   VisitType,
   type Prisma
 } from "../../lib/prisma-generated.js";
+import { ChannelType, IntegrationPlatform, SourceStatus } from "@prisma/client";
 import type { FastifyPluginAsync } from "fastify";
+import { config } from "../../config.js";
 import { z } from "zod";
 import { listVisibleUserIds, requireTenantId, requireUserId } from "../../lib/http.js";
 import { writeEntityChangelog } from "../../lib/changelog.js";
 import { prisma } from "../../lib/prisma.js";
 
-const ONSITE_MAX_DISTANCE_METERS = 200;
+const DEFAULT_CHECKIN_MAX_DISTANCE_M = 1_000; // fallback when tenant has no visit config
 const EARTH_RADIUS_METERS = 6371000;
 
 type VisitWithCustomerRep = Prisma.VisitGetPayload<{
@@ -33,6 +35,7 @@ type DealTodoWithRelations = Prisma.DealGetPayload<{
   include: {
     customer: { select: { id: true; name: true } };
     owner: { select: { id: true; fullName: true } };
+    stage: { select: { id: true; stageName: true } };
   };
 }>;
 
@@ -40,14 +43,18 @@ const plannedVisitCreateSchema = z.object({
   customerId: z.string().min(1),
   dealId: z.string().min(1).optional(),
   plannedAt: z.string().datetime(),
-  objective: z.string().trim().min(1).optional()
+  objective: z.string().trim().min(1),
+  siteLat: z.number().min(-90).max(90).optional(),
+  siteLng: z.number().min(-180).max(180).optional()
 }).strict();
 
 const unplannedVisitCreateSchema = z.object({
   customerId: z.string().min(1),
   dealId: z.string().min(1).optional(),
   plannedAt: z.string().datetime().optional(),
-  objective: z.string().trim().min(1).optional()
+  objective: z.string().trim().min(1).optional(),
+  siteLat: z.number().min(-90).max(90).optional(),
+  siteLng: z.number().min(-180).max(180).optional()
 }).strict();
 
 const checkInSchema = z.object({
@@ -62,18 +69,25 @@ const checkOutSchema = z.object({
   result: z.string().trim().min(1)
 }).strict();
 
+const commaArray = (inner: z.ZodTypeAny) =>
+  z.preprocess(
+    (v) => (typeof v === "string" ? v.split(",").filter(Boolean) : Array.isArray(v) ? v : []),
+    z.array(inner).default([])
+  );
+
 const calendarQuerySchema = z
   .object({
     view: z.enum(["year", "month", "day"]).optional().default("month"),
     anchorDate: z.string().datetime().optional(),
     dateFrom: z.string().datetime().optional(),
     dateTo: z.string().datetime().optional(),
-    eventType: z.enum(["all", "visit", "deal"]).optional().default("all"),
+    eventTypes: commaArray(z.enum(["visit", "deal"])),
     query: z.string().trim().optional(),
-    ownerId: z.string().trim().min(1).optional(),
+    ownerIds: commaArray(z.string().trim().min(1)),
     customerId: z.string().trim().min(1).optional(),
-    visitStatus: z.nativeEnum(VisitStatus).optional(),
-    dealStageId: z.string().trim().min(1).optional()
+    visitStatuses: commaArray(z.nativeEnum(VisitStatus)),
+    dealStageIds: commaArray(z.string().trim().min(1)),
+    dealStatuses: commaArray(z.enum(["OPEN", "WON", "LOST"]))
   })
   .strict();
 
@@ -88,7 +102,7 @@ const todoEventsQuerySchema = z
   })
   .strict();
 
-type TodoBucketKey = "today" | "tomorrow" | "next_week" | "next_month";
+type TodoBucketKey = "overdue" | "today" | "tomorrow" | "next_week" | "next_month";
 
 type TodoEventAction = {
   type: "CHECK_IN" | "CHECK_OUT" | "OPEN_DEAL";
@@ -158,41 +172,6 @@ function calculateDistanceMeters(
   return 2 * EARTH_RADIUS_METERS * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function resolveSiteCoordinates(
-  addresses: Array<{ latitude: number | null; longitude: number | null; isDefaultShipping: boolean; isDefaultBilling: boolean }>
-): { latitude: number; longitude: number } | null {
-  const pickable = addresses.filter((address) => address.latitude !== null && address.longitude !== null);
-  if (pickable.length === 0) {
-    return null;
-  }
-
-  const defaultShipping = pickable.find((address) => address.isDefaultShipping);
-  if (defaultShipping) {
-    return {
-      latitude: defaultShipping.latitude as number,
-      longitude: defaultShipping.longitude as number
-    };
-  }
-
-  const defaultBilling = pickable.find((address) => address.isDefaultBilling);
-  if (defaultBilling) {
-    return {
-      latitude: defaultBilling.latitude as number,
-      longitude: defaultBilling.longitude as number
-    };
-  }
-
-  const firstPick = pickable[0];
-  if (!firstPick) {
-    return null;
-  }
-
-  return {
-    latitude: firstPick.latitude as number,
-    longitude: firstPick.longitude as number
-  };
-}
-
 function startOfMonth(value: Date): Date {
   return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), 1, 0, 0, 0, 0));
 }
@@ -207,6 +186,8 @@ function addDays(value: Date, days: number): Date {
 
 function resolveTodoBucket(at: Date, now: Date): TodoBucketKey {
   const todayStart = startOfUtcDay(now);
+  if (at < todayStart) return "overdue";
+
   const tomorrowStart = addDays(todayStart, 1);
   const dayAfterTomorrowStart = addDays(todayStart, 2);
   const nextWeekStart = addDays(todayStart, 8);
@@ -215,10 +196,7 @@ function resolveTodoBucket(at: Date, now: Date): TodoBucketKey {
     return at < tomorrowStart ? "today" : "tomorrow";
   }
 
-  if (at < nextWeekStart) {
-    return "next_week";
-  }
-
+  if (at < nextWeekStart) return "next_week";
   return "next_month";
 }
 
@@ -266,6 +244,8 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
     plannedAt: Date;
     visitType: VisitType;
     changedById: string;
+    siteLat?: number;
+    siteLng?: number;
   }) {
     return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const customer = await tx.customer.findFirst({
@@ -290,15 +270,20 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
         }
       }
 
+      const visitCount = await tx.visit.count({ where: { tenantId: input.tenantId } });
+      const visitNo = `V-${String(visitCount + 1).padStart(6, "0")}`;
       const created = await tx.visit.create({
         data: {
           tenantId: input.tenantId,
           repId: input.repId,
           customerId: input.customerId,
           dealId: input.dealId,
+          visitNo,
           plannedAt: input.plannedAt,
           objective: input.objective,
-          visitType: input.visitType
+          visitType: input.visitType,
+          siteLat: input.siteLat,
+          siteLng: input.siteLng
         }
       });
       await writeEntityChangelog({
@@ -329,7 +314,9 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
       plannedAt: new Date(parsed.data.plannedAt),
       objective: parsed.data.objective,
       visitType: VisitType.PLANNED,
-      changedById: repId
+      changedById: repId,
+      siteLat: parsed.data.siteLat,
+      siteLng: parsed.data.siteLng
     });
     return reply.code(201).send(created);
   });
@@ -349,7 +336,9 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
       plannedAt: parsed.data.plannedAt ? new Date(parsed.data.plannedAt) : new Date(),
       objective: parsed.data.objective,
       visitType: VisitType.UNPLANNED,
-      changedById: repId
+      changedById: repId,
+      siteLat: parsed.data.siteLat,
+      siteLng: parsed.data.siteLng
     });
     return reply.code(201).send(created);
   });
@@ -358,15 +347,40 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
     const tenantId = requireTenantId(request);
     const visibleUserIds = await listVisibleUserIds(request);
     const visibleUserIdList = [...visibleUserIds];
-    const query = request.query as { status?: VisitStatus; repId?: string };
-    if (query.repId && !visibleUserIds.has(query.repId)) {
-      throw app.httpErrors.forbidden("Requested rep is outside hierarchy scope.");
+    const query = request.query as {
+      status?: VisitStatus;
+      repId?: string;
+      repIds?: string;
+      dateFrom?: string;
+      dateTo?: string;
+      customerId?: string;
+      dealId?: string;
+    };
+
+    // Multi-rep support: repIds=id1,id2 takes precedence over legacy repId
+    const repIdList: string[] = query.repIds
+      ? query.repIds.split(",").filter(Boolean)
+      : query.repId
+        ? [query.repId]
+        : [];
+
+    for (const id of repIdList) {
+      if (!visibleUserIds.has(id)) {
+        throw app.httpErrors.forbidden("Requested rep is outside hierarchy scope.");
+      }
     }
+
     return prisma.visit.findMany({
       where: {
         tenantId,
         status: query.status,
-        repId: query.repId ?? { in: visibleUserIdList }
+        repId: repIdList.length > 0 ? { in: repIdList } : { in: visibleUserIdList },
+        plannedAt: {
+          ...(query.dateFrom ? { gte: new Date(query.dateFrom) } : {}),
+          ...(query.dateTo   ? { lte: new Date(query.dateTo)   } : {})
+        },
+        ...(query.customerId ? { customerId: query.customerId } : {}),
+        ...(query.dealId     ? { dealId: query.dealId }         : {})
       },
       include: { customer: true, deal: true, rep: true },
       orderBy: { plannedAt: "asc" }
@@ -380,19 +394,41 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
     const visit = await prisma.visit.findFirst({
       where: { id: params.id, tenantId, repId: { in: [...visibleUserIds] } },
       include: {
-        customer: true,
-        rep: { select: { id: true, fullName: true, email: true } },
-        deal: {
+        customer: {
           include: {
-            stage: true
+            addresses: {
+              select: {
+                addressLine1: true,
+                district: true,
+                province: true,
+                country: true,
+                isDefaultShipping: true,
+                isDefaultBilling: true
+              },
+              orderBy: [{ isDefaultShipping: "desc" }, { isDefaultBilling: "desc" }]
+            }
           }
-        }
+        },
+        rep: { select: { id: true, fullName: true, email: true, avatarUrl: true } },
+        deal: { include: { stage: true } }
       }
     });
     if (!visit) {
       throw app.httpErrors.notFound("Visit not found.");
     }
-    return visit;
+
+    const voiceNotes = await prisma.voiceNoteJob.findMany({
+      where: {
+        tenantId,
+        entityType: "VISIT",
+        entityId: params.id,
+        transcript: { confirmedAt: { not: null } }
+      },
+      include: { transcript: { select: { summaryText: true, confirmedAt: true } } },
+      orderBy: { createdAt: "desc" }
+    });
+
+    return { ...visit, voiceNotes };
   });
 
   app.get("/visits/:id/preparation-suggestions", async (request) => {
@@ -434,23 +470,36 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.badRequest(parsed.error.message);
     }
 
-    return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      const visit = await tx.visit.findFirst({
-        where: { id: params.id, tenantId, repId },
-        include: {
-          customer: {
-            include: {
-              addresses: {
-                select: {
-                  latitude: true,
-                  longitude: true,
-                  isDefaultShipping: true,
-                  isDefaultBilling: true
-                }
-              }
-            }
-          }
+    // Upload selfie to R2 before the transaction (avoids holding a TX open during I/O).
+    let selfieStorageRef = parsed.data.selfieUrl;
+    if (parsed.data.selfieUrl.startsWith("data:image/")) {
+      try {
+        const commaIdx = parsed.data.selfieUrl.indexOf(",");
+        const header = parsed.data.selfieUrl.slice(0, commaIdx);
+        const base64Data = parsed.data.selfieUrl.slice(commaIdx + 1);
+        const mimeMatch = header.match(/data:(image\/[a-zA-Z+]+);base64/);
+        const contentType = mimeMatch?.[1] ?? "image/jpeg";
+        const ext = contentType.split("/")[1]?.replace("jpeg", "jpg") ?? "jpg";
+        const imageBuffer = Buffer.from(base64Data, "base64");
+        const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { slug: true } });
+        if (tenant?.slug) {
+          const { uploadBufferToR2 } = await import("../../lib/r2-storage.js");
+          const stored = await uploadBufferToR2({
+            tenantSlug: tenant.slug,
+            objectKeyOrRef: `visits/${params.id}/selfie-${Date.now()}.${ext}`,
+            contentType,
+            data: imageBuffer
+          });
+          selfieStorageRef = stored.objectRef;
         }
+      } catch (err) {
+        app.log.error({ err }, "selfie R2 upload failed — storing raw ref");
+      }
+    }
+
+    const checkedIn = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const visit = await tx.visit.findFirst({
+        where: { id: params.id, tenantId, repId }
       });
       if (!visit) {
         throw app.httpErrors.notFound("Visit not found.");
@@ -478,23 +527,27 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
         throw app.httpErrors.conflict("Cannot check in while another visit is pending checkout.");
       }
 
-      const siteCoordinates = resolveSiteCoordinates(visit.customer.addresses);
-      if (!siteCoordinates) {
-        throw app.httpErrors.badRequest(
-          "Customer site coordinates are not configured. Please set latitude/longitude on customer address."
-        );
-      }
+      // Only validate distance when the visit has a planned location.
+      // If no location was set (open meeting, coffee shop, etc.) check-in is unrestricted.
+      let distanceMeters: number | null = null;
+      if (visit.siteLat !== null && visit.siteLng !== null) {
+        const visitConfig = await tx.tenantVisitConfig.findUnique({
+          where: { tenantId },
+          select: { checkInMaxDistanceM: true }
+        });
+        const maxDistanceM = visitConfig?.checkInMaxDistanceM ?? DEFAULT_CHECKIN_MAX_DISTANCE_M;
 
-      const distanceMeters = calculateDistanceMeters(
-        parsed.data.lat,
-        parsed.data.lng,
-        siteCoordinates.latitude,
-        siteCoordinates.longitude
-      );
-      if (distanceMeters > ONSITE_MAX_DISTANCE_METERS) {
-        throw app.httpErrors.badRequest(
-          `Check-in is outside onsite range (${Math.round(distanceMeters)}m > ${ONSITE_MAX_DISTANCE_METERS}m).`
+        distanceMeters = calculateDistanceMeters(
+          parsed.data.lat,
+          parsed.data.lng,
+          visit.siteLat,
+          visit.siteLng
         );
+        if (distanceMeters > maxDistanceM) {
+          throw app.httpErrors.badRequest(
+            `Check-in is outside onsite range (${Math.round(distanceMeters)}m > ${maxDistanceM}m).`
+          );
+        }
       }
 
       const transitionResult = await tx.visit.updateMany({
@@ -505,7 +558,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
           checkInLat: parsed.data.lat,
           checkInLng: parsed.data.lng,
           checkInDistanceM: distanceMeters,
-          checkInSelfie: parsed.data.selfieUrl
+          checkInSelfie: selfieStorageRef
         }
       });
 
@@ -529,6 +582,163 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
       });
       return updated;
     });
+
+    // After transaction: send group notifications (LINE + MS Teams + Email) for check-in.
+    const notifWarnings: string[] = [];
+    try {
+      const [rep, lineCredential, emailCredential, branding] = await Promise.all([
+        prisma.user.findUnique({
+          where: { id: repId },
+          select: { teamId: true, fullName: true }
+        }),
+        prisma.tenantIntegrationCredential.findUnique({
+          where: { tenantId_platform: { tenantId, platform: IntegrationPlatform.LINE } },
+          select: { apiKeyRef: true, status: true }
+        }),
+        prisma.tenantIntegrationCredential.findUnique({
+          where: { tenantId_platform: { tenantId, platform: IntegrationPlatform.EMAIL } },
+          select: { clientIdRef: true, clientSecretRef: true, apiKeyRef: true, webhookTokenRef: true, status: true }
+        }),
+        prisma.tenantBranding.findUnique({
+          where: { tenantId },
+          select: { appName: true }
+        })
+      ]);
+
+      if (rep?.teamId != null) {
+        const allChannels = await prisma.teamNotificationChannel.findMany({
+          where: { tenantId, teamId: rep.teamId, isEnabled: true,
+            channelType: { in: [ChannelType.LINE, ChannelType.MS_TEAMS, ChannelType.EMAIL] } },
+          select: { channelType: true, channelTarget: true }
+        });
+
+        const lineChannels  = allChannels.filter(c => c.channelType === ChannelType.LINE);
+        const teamsChannels = allChannels.filter(c => c.channelType === ChannelType.MS_TEAMS);
+        const emailChannels = allChannels.filter(c => c.channelType === ChannelType.EMAIL);
+
+        if (lineChannels.length > 0 || teamsChannels.length > 0 || emailChannels.length > 0) {
+          const visitWithCustomer = await prisma.visit.findUnique({
+            where: { id: checkedIn.id },
+            select: { customer: { select: { name: true } } }
+          });
+
+          // Resolve selfie: get a public HTTPS URL LINE can fetch
+          let selfieHttpUrl: string | null = null;
+          const rawSelfie = checkedIn.checkInSelfie;
+          if (rawSelfie?.startsWith("r2://")) {
+            const { buildR2PublicUrl, createR2PresignedDownload } = await import("../../lib/r2-storage.js");
+            selfieHttpUrl = buildR2PublicUrl(rawSelfie);
+            if (!selfieHttpUrl) {
+              try {
+                const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { slug: true } });
+                if (tenant?.slug) {
+                  const dl = await createR2PresignedDownload({ tenantSlug: tenant.slug, objectKeyOrRef: rawSelfie, expiresInSeconds: 300 });
+                  selfieHttpUrl = dl.downloadUrl;
+                }
+              } catch { /* skip image */ }
+            }
+          } else if (rawSelfie?.startsWith("https://")) {
+            selfieHttpUrl = rawSelfie;
+          }
+
+          const { sendLinePush, buildCheckInMessages } = await import("../../lib/line-notify.js");
+          const msgs = buildCheckInMessages({
+            appName: branding?.appName || "CRM",
+            visitNo: checkedIn.visitNo ?? "",
+            repName: rep.fullName || "Sales Rep",
+            customerName: visitWithCustomer?.customer?.name || "—",
+            checkInAt: checkedIn.checkInAt ?? new Date(),
+            objective: checkedIn.objective ?? null,
+            lat: checkedIn.checkInLat ?? parsed.data.lat,
+            lng: checkedIn.checkInLng ?? parsed.data.lng,
+            selfieUrl: selfieHttpUrl
+          });
+
+          if (lineChannels.length > 0) {
+            if (lineCredential?.status !== SourceStatus.ENABLED) {
+              // LINE integration disabled — skip silently
+            } else if (!lineCredential.apiKeyRef) {
+              app.log.warn("[LINE check-in] Integration enabled but no access token configured.");
+              notifWarnings.push("LINE");
+            } else {
+              const sends = await Promise.allSettled(
+                lineChannels.map(ch => sendLinePush(lineCredential.apiKeyRef!, ch.channelTarget, msgs))
+              );
+              for (const s of sends) {
+                if (s.status === "rejected") app.log.warn({ err: s.reason }, "[LINE check-in] push rejected");
+                else if (!s.value.ok) app.log.warn(`[LINE check-in] push failed: ${s.value.message}`);
+              }
+              if (sends.some(s => s.status === "rejected" || (s.status === "fulfilled" && !s.value.ok))) notifWarnings.push("LINE");
+            }
+          }
+
+          if (teamsChannels.length > 0) {
+            const { sendTeamsCard } = await import("../../lib/teams-notify.js");
+            const { formatThaiDateTime, googleMapsLink } = await import("../../lib/line-notify.js");
+            const appName = branding?.appName || "CRM";
+            const checkInAt = checkedIn.checkInAt ?? new Date();
+            const facts = [
+              { title: "Visit ID",    value: checkedIn.visitNo ?? "—" },
+              { title: "Sales Rep",   value: rep.fullName || "—" },
+              { title: "Customer",    value: visitWithCustomer?.customer?.name || "—" },
+              { title: "Check-In",    value: formatThaiDateTime(checkInAt) },
+              { title: "Objective",   value: checkedIn.objective?.trim() || "—" },
+              { title: "Location",    value: `[Open in Maps](${googleMapsLink(checkedIn.checkInLat ?? parsed.data.lat, checkedIn.checkInLng ?? parsed.data.lng)})` }
+            ];
+            const sends = await Promise.allSettled(
+              teamsChannels.map(ch => sendTeamsCard(ch.channelTarget, {
+                title: "📍 Check-In Notification",
+                accentColor: "accent",
+                facts,
+                footer: `[${appName}]`
+              }))
+            );
+            if (sends.some(s => s.status === "rejected" || (s.status === "fulfilled" && !s.value.ok))) notifWarnings.push("MS_TEAMS");
+          }
+
+          if (emailChannels.length > 0) {
+            if (emailCredential?.status !== SourceStatus.ENABLED) {
+              // Email integration disabled — skip silently
+            } else if (!emailCredential.clientIdRef || !emailCredential.apiKeyRef || !emailCredential.webhookTokenRef) {
+              notifWarnings.push("EMAIL");
+            } else {
+              const { sendEmailCard } = await import("../../lib/email-notify.js");
+              const { formatThaiDateTime, googleMapsLink } = await import("../../lib/line-notify.js");
+              const appName = branding?.appName || "CRM";
+              const checkInAt = checkedIn.checkInAt ?? new Date();
+              const emailConfig = {
+                host: emailCredential.clientIdRef,
+                port: parseInt(emailCredential.clientSecretRef ?? "587", 10),
+                fromAddress: emailCredential.webhookTokenRef,
+                password: emailCredential.apiKeyRef
+              };
+              const facts = [
+                { label: "Visit ID",  value: checkedIn.visitNo ?? "—" },
+                { label: "Sales Rep", value: rep.fullName || "—" },
+                { label: "Customer",  value: visitWithCustomer?.customer?.name || "—" },
+                { label: "Check-In",  value: formatThaiDateTime(checkInAt) },
+                { label: "Objective", value: checkedIn.objective?.trim() || "—" },
+                { label: "Location",  value: googleMapsLink(checkedIn.checkInLat ?? parsed.data.lat, checkedIn.checkInLng ?? parsed.data.lng) }
+              ];
+              const sends = await Promise.allSettled(
+                emailChannels.map(ch => sendEmailCard(emailConfig, ch.channelTarget, {
+                  subject: `📍 Check-In Notification — ${visitWithCustomer?.customer?.name || "Visit"}`,
+                  title: "📍 Check-In Notification",
+                  facts,
+                  detailUrl: config.APP_URL ? `${config.APP_URL}/visits` : undefined,
+                  footer: `[${appName}]`
+                }))
+              );
+              if (sends.some(s => s.status === "rejected" || (s.status === "fulfilled" && !s.value.ok))) notifWarnings.push("EMAIL");
+            }
+          }
+        }
+      }
+    } catch (err) {
+      app.log.error({ err }, "check-in notification failed");
+    }
+
+    return { visit: checkedIn, notifWarnings };
   });
 
   app.post("/visits/:id/checkout", async (request) => {
@@ -540,7 +750,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.badRequest(parsed.error.message);
     }
 
-    return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    const updated = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const visit = await tx.visit.findFirst({
         where: { id: params.id, tenantId, repId }
       });
@@ -572,22 +782,218 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
         throw app.httpErrors.conflict("Visit state changed during checkout. Refresh and retry.");
       }
 
-      const updated = await tx.visit.findUniqueOrThrow({
+      const result = await tx.visit.findUniqueOrThrow({
         where: { id: params.id }
       });
       await writeEntityChangelog({
         db: tx,
         tenantId,
         entityType: EntityType.VISIT,
-        entityId: updated.id,
+        entityId: result.id,
         action: "UPDATE",
         changedById: repId,
         before: beforeState,
-        after: updated,
+        after: result,
         context: { workflow: "CHECK_OUT" }
       });
-      return updated;
+      return result;
     });
+
+    // After transaction: send group notifications (LINE + MS Teams + Email) for checkout.
+    const notifWarnings: string[] = [];
+    try {
+      const [rep, lineCredential, emailCredential, branding] = await Promise.all([
+        prisma.user.findUnique({
+          where: { id: repId },
+          select: { teamId: true, fullName: true }
+        }),
+        prisma.tenantIntegrationCredential.findUnique({
+          where: { tenantId_platform: { tenantId, platform: IntegrationPlatform.LINE } },
+          select: { apiKeyRef: true, status: true }
+        }),
+        prisma.tenantIntegrationCredential.findUnique({
+          where: { tenantId_platform: { tenantId, platform: IntegrationPlatform.EMAIL } },
+          select: { clientIdRef: true, clientSecretRef: true, apiKeyRef: true, webhookTokenRef: true, status: true }
+        }),
+        prisma.tenantBranding.findUnique({
+          where: { tenantId },
+          select: { appName: true }
+        })
+      ]);
+
+      if (rep?.teamId != null) {
+        const allChannels = await prisma.teamNotificationChannel.findMany({
+          where: { tenantId, teamId: rep.teamId, isEnabled: true,
+            channelType: { in: [ChannelType.LINE, ChannelType.MS_TEAMS, ChannelType.EMAIL] } },
+          select: { channelType: true, channelTarget: true }
+        });
+
+        const lineChannels  = allChannels.filter(c => c.channelType === ChannelType.LINE);
+        const teamsChannels = allChannels.filter(c => c.channelType === ChannelType.MS_TEAMS);
+        const emailChannels = allChannels.filter(c => c.channelType === ChannelType.EMAIL);
+
+        if (lineChannels.length > 0 || teamsChannels.length > 0 || emailChannels.length > 0) {
+          const visitWithCustomer = await prisma.visit.findUnique({
+            where: { id: updated.id },
+            select: { customer: { select: { name: true } } }
+          });
+          const { sendLinePush, buildCheckOutMessages } = await import("../../lib/line-notify.js");
+          const msgs = buildCheckOutMessages({
+            appName: branding?.appName || "CRM",
+            visitNo: updated.visitNo ?? "",
+            repName: rep.fullName || "Sales Rep",
+            customerName: visitWithCustomer?.customer?.name || "—",
+            checkInAt: updated.checkInAt,
+            checkOutAt: updated.checkOutAt ?? new Date(),
+            result: updated.result,
+            lat: updated.checkOutLat ?? parsed.data.lat,
+            lng: updated.checkOutLng ?? parsed.data.lng
+          });
+          if (lineChannels.length > 0) {
+            if (lineCredential?.status !== SourceStatus.ENABLED) {
+              // LINE integration disabled — skip silently
+            } else if (!lineCredential.apiKeyRef) {
+              app.log.warn("[LINE checkout] Integration enabled but no access token configured.");
+              notifWarnings.push("LINE");
+            } else {
+              const sends = await Promise.allSettled(
+                lineChannels.map(ch => sendLinePush(lineCredential.apiKeyRef!, ch.channelTarget, msgs))
+              );
+              for (const s of sends) {
+                if (s.status === "rejected") app.log.warn({ err: s.reason }, "[LINE checkout] push rejected");
+                else if (!s.value.ok) app.log.warn(`[LINE checkout] push failed: ${s.value.message}`);
+              }
+              if (sends.some(s => s.status === "rejected" || (s.status === "fulfilled" && !s.value.ok))) notifWarnings.push("LINE");
+            }
+          }
+
+          if (teamsChannels.length > 0) {
+            const { sendTeamsCard } = await import("../../lib/teams-notify.js");
+            const { formatThaiDateTime, googleMapsLink, formatDuration } = await import("../../lib/line-notify.js");
+            const appName = branding?.appName || "CRM";
+            const checkOutAt = updated.checkOutAt ?? new Date();
+            const duration = updated.checkInAt ? formatDuration(updated.checkInAt, checkOutAt) : "—";
+            const facts = [
+              { title: "Visit ID",    value: updated.visitNo ?? "—" },
+              { title: "Sales Rep",   value: rep.fullName || "—" },
+              { title: "Customer",    value: visitWithCustomer?.customer?.name || "—" },
+              { title: "Check-Out",   value: formatThaiDateTime(checkOutAt) },
+              { title: "Duration",    value: duration },
+              { title: "Result",      value: updated.result?.trim() || "—" },
+              { title: "Location",    value: `[Open in Maps](${googleMapsLink(updated.checkOutLat ?? parsed.data.lat, updated.checkOutLng ?? parsed.data.lng)})` }
+            ];
+            const sends = await Promise.allSettled(
+              teamsChannels.map(ch => sendTeamsCard(ch.channelTarget, {
+                title: "✅ Check-Out Notification",
+                accentColor: "good",
+                facts,
+                footer: `[${appName}]`
+              }))
+            );
+            if (sends.some(s => s.status === "rejected" || (s.status === "fulfilled" && !s.value.ok))) notifWarnings.push("MS_TEAMS");
+          }
+
+          if (emailChannels.length > 0) {
+            if (emailCredential?.status !== SourceStatus.ENABLED) {
+              // Email integration disabled — skip silently
+            } else if (!emailCredential.clientIdRef || !emailCredential.apiKeyRef || !emailCredential.webhookTokenRef) {
+              notifWarnings.push("EMAIL");
+            } else {
+              const { sendEmailCard } = await import("../../lib/email-notify.js");
+              const { formatThaiDateTime, googleMapsLink, formatDuration } = await import("../../lib/line-notify.js");
+              const appName = branding?.appName || "CRM";
+              const checkOutAt = updated.checkOutAt ?? new Date();
+              const duration = updated.checkInAt ? formatDuration(updated.checkInAt, checkOutAt) : "—";
+              const emailConfig = {
+                host: emailCredential.clientIdRef,
+                port: parseInt(emailCredential.clientSecretRef ?? "587", 10),
+                fromAddress: emailCredential.webhookTokenRef,
+                password: emailCredential.apiKeyRef
+              };
+              const facts = [
+                { label: "Visit ID",  value: updated.visitNo ?? "—" },
+                { label: "Sales Rep", value: rep.fullName || "—" },
+                { label: "Customer",  value: visitWithCustomer?.customer?.name || "—" },
+                { label: "Check-Out", value: formatThaiDateTime(checkOutAt) },
+                { label: "Duration",  value: duration },
+                { label: "Result",    value: updated.result?.trim() || "—" },
+                { label: "Location",  value: googleMapsLink(updated.checkOutLat ?? parsed.data.lat, updated.checkOutLng ?? parsed.data.lng) }
+              ];
+              const sends = await Promise.allSettled(
+                emailChannels.map(ch => sendEmailCard(emailConfig, ch.channelTarget, {
+                  subject: `✅ Check-Out Notification — ${visitWithCustomer?.customer?.name || "Visit"}`,
+                  title: "✅ Check-Out Notification",
+                  facts,
+                  detailUrl: config.APP_URL ? `${config.APP_URL}/visits` : undefined,
+                  footer: `[${appName}]`
+                }))
+              );
+              if (sends.some(s => s.status === "rejected" || (s.status === "fulfilled" && !s.value.ok))) notifWarnings.push("EMAIL");
+            }
+          }
+        }
+      }
+    } catch (err) {
+      app.log.error({ err }, "checkout notification failed");
+    }
+
+    return { visit: updated, notifWarnings };
+  });
+
+  const visitUpdateSchema = z
+    .object({
+      plannedAt: z.string().datetime().optional(),
+      objective: z.string().trim().min(1).optional(),
+      siteLat: z.number().min(-90).max(90).nullable().optional(),
+      siteLng: z.number().min(-180).max(180).nullable().optional()
+    })
+    .strict()
+    .refine((data) => Object.keys(data).length > 0, "At least one field is required.");
+
+  app.patch("/visits/:id", async (request) => {
+    const tenantId = requireTenantId(request);
+    const repId = requireUserId(request);
+    const params = request.params as { id: string };
+    const parsed = visitUpdateSchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw app.httpErrors.badRequest(parsed.error.message);
+    }
+
+    const visit = await prisma.visit.findFirst({
+      where: { id: params.id, tenantId, repId }
+    });
+    if (!visit) {
+      throw app.httpErrors.notFound("Visit not found.");
+    }
+    if (visit.status !== VisitStatus.PLANNED) {
+      throw app.httpErrors.badRequest("Only planned visits can be edited.");
+    }
+
+    const beforeState = { plannedAt: visit.plannedAt, objective: visit.objective, siteLat: visit.siteLat, siteLng: visit.siteLng };
+
+    const updated = await prisma.visit.update({
+      where: { id: params.id },
+      data: {
+        ...(parsed.data.plannedAt !== undefined && { plannedAt: new Date(parsed.data.plannedAt) }),
+        ...(parsed.data.objective !== undefined && { objective: parsed.data.objective }),
+        ...(parsed.data.siteLat !== undefined && { siteLat: parsed.data.siteLat }),
+        ...(parsed.data.siteLng !== undefined && { siteLng: parsed.data.siteLng })
+      }
+    });
+
+    await writeEntityChangelog({
+      db: prisma,
+      tenantId,
+      entityType: EntityType.VISIT,
+      entityId: updated.id,
+      action: "UPDATE",
+      changedById: repId,
+      before: beforeState,
+      after: { plannedAt: updated.plannedAt, objective: updated.objective, siteLat: updated.siteLat, siteLng: updated.siteLng },
+      context: { workflow: "EDIT" }
+    });
+
+    return updated;
   });
 
   app.get("/calendar/events", async (request) => {
@@ -600,9 +1006,27 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const query = parsed.data;
-    if (query.ownerId && !visibleUserIds.has(query.ownerId)) {
+    const ownerIds      = query.ownerIds      as string[];
+    const visitStatuses = query.visitStatuses as VisitStatus[];
+    const dealStageIds  = query.dealStageIds  as string[];
+    const dealStatuses  = query.dealStatuses  as DealStatus[];
+    const eventTypes    = query.eventTypes    as string[];
+
+    // Resolve owner filter — empty means all visible users
+    const allowedOwnerIds = ownerIds.length
+      ? ownerIds.filter((id) => visibleUserIds.has(id))
+      : visibleUserIdList;
+    if (ownerIds.length && allowedOwnerIds.length === 0) {
       throw app.httpErrors.forbidden("Requested owner is outside hierarchy scope.");
     }
+    const ownerFilter: string | { in: string[] } = allowedOwnerIds.length === 1
+      ? allowedOwnerIds[0]!
+      : { in: allowedOwnerIds };
+
+    // Decide which event types to include (empty = both)
+    const includeVisits = eventTypes.length === 0 || eventTypes.includes("visit");
+    const includeDeals  = eventTypes.length === 0 || eventTypes.includes("deal");
+
     const { dateFrom, dateTo, anchorDate } = resolveCalendarDateRange({
       view: query.view,
       anchorDate: query.anchorDate,
@@ -611,57 +1035,43 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
     });
     const now = new Date();
 
-    const visitPromise =
-      query.eventType === "deal"
-        ? Promise.resolve([] as VisitWithCustomerRep[])
-        : prisma.visit.findMany({
-            where: {
-              tenantId,
-              plannedAt: { gte: dateFrom, lt: dateTo },
-              repId: query.ownerId ?? { in: visibleUserIdList },
-              customerId: query.customerId,
-              status: query.visitStatus
-            },
-            include: {
-              customer: {
-                select: { id: true, name: true }
-              },
-              rep: {
-                select: { id: true, fullName: true }
-              }
-            },
-            orderBy: { plannedAt: "asc" }
-          });
+    const visitPromise = !includeVisits
+      ? Promise.resolve([] as VisitWithCustomerRep[])
+      : prisma.visit.findMany({
+          where: {
+            tenantId,
+            plannedAt: { gte: dateFrom, lt: dateTo },
+            repId: ownerFilter,
+            customerId: query.customerId,
+            ...(visitStatuses.length ? { status: { in: visitStatuses } } : {})
+          },
+          include: {
+            customer: { select: { id: true, name: true } },
+            rep: { select: { id: true, fullName: true } }
+          },
+          orderBy: { plannedAt: "asc" }
+        });
 
-    const dealPromise =
-      query.eventType === "visit"
-        ? Promise.resolve([] as DealCalendarWithRelations[])
-        : prisma.deal.findMany({
-            where: {
-              tenantId,
-              followUpAt: { gte: dateFrom, lt: dateTo },
-              ownerId: query.ownerId ?? { in: visibleUserIdList },
-              customerId: query.customerId,
-              stageId: query.dealStageId
-            },
-            include: {
-              customer: {
-                select: { id: true, name: true }
-              },
-              owner: {
-                select: { id: true, fullName: true }
-              },
-              stage: {
-                select: { id: true, stageName: true }
-              }
-            },
-            orderBy: { followUpAt: "asc" }
-          });
+    const dealPromise = !includeDeals
+      ? Promise.resolve([] as DealCalendarWithRelations[])
+      : prisma.deal.findMany({
+          where: {
+            tenantId,
+            followUpAt: { gte: dateFrom, lt: dateTo },
+            ownerId: ownerFilter,
+            customerId: query.customerId,
+            ...(dealStageIds.length ? { stageId: { in: dealStageIds } } : {}),
+            ...(dealStatuses.length ? { status: { in: dealStatuses } } : {})
+          },
+          include: {
+            customer: { select: { id: true, name: true } },
+            owner: { select: { id: true, fullName: true } },
+            stage: { select: { id: true, stageName: true } }
+          },
+          orderBy: { followUpAt: "asc" }
+        });
 
-    const [visits, deals]: [VisitWithCustomerRep[], DealCalendarWithRelations[]] = await Promise.all([
-      visitPromise,
-      dealPromise
-    ]);
+    const [visits, deals] = await Promise.all([visitPromise, dealPromise]) as [VisitWithCustomerRep[], DealCalendarWithRelations[]];
     const queryText = query.query?.toLowerCase();
 
     const visitEvents = visits
@@ -699,8 +1109,10 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
 
     const dealEvents = deals
       .map((deal) => {
+        const isClosed = deal.status === DealStatus.WON || deal.status === DealStatus.LOST;
         const isRed =
-          deal.followUpAt < now || (deal.closedAt && deal.followUpAt > deal.closedAt) || (deal.closedAt && deal.closedAt < now);
+          !isClosed &&
+          (deal.followUpAt < now || (deal.closedAt && deal.followUpAt > deal.closedAt) || (deal.closedAt && deal.closedAt < now));
 
         return {
           id: `deal:${deal.id}`,
@@ -734,11 +1146,11 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
       dateFrom: dateFrom.toISOString(),
       dateTo: dateTo.toISOString(),
       filters: {
-        eventType: query.eventType,
-        ownerId: query.ownerId ?? null,
+        eventTypes,
+        ownerIds,
         customerId: query.customerId ?? null,
-        visitStatus: query.visitStatus ?? null,
-        dealStageId: query.dealStageId ?? null,
+        visitStatuses,
+        dealStageIds,
         query: query.query ?? ""
       },
       legend: {
@@ -787,7 +1199,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
               status: { in: [VisitStatus.PLANNED, VisitStatus.CHECKED_IN] },
               OR: [
                 { status: VisitStatus.CHECKED_IN },
-                { plannedAt: { gte: startToday, lt: endNextMonth } }
+                { plannedAt: { lt: endNextMonth } }
               ],
               customerId: query.customerId
             },
@@ -808,16 +1220,13 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
               tenantId,
               ownerId: userId,
               status: DealStatus.OPEN,
-              followUpAt: { gte: startToday, lt: endNextMonth },
+              followUpAt: { lt: endNextMonth },
               customerId: query.customerId
             },
             include: {
-              customer: {
-                select: { id: true, name: true }
-              },
-              owner: {
-                select: { id: true, fullName: true }
-              }
+              customer: { select: { id: true, name: true } },
+              owner: { select: { id: true, fullName: true } },
+              stage: { select: { id: true, stageName: true } }
             },
             orderBy: { followUpAt: "asc" }
           })
@@ -836,6 +1245,8 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
         priority: isPinned || visit.plannedAt < now ? "high" : "normal",
         customer: { id: visit.customer.id, name: visit.customer.name },
         owner: { id: visit.rep.id, name: visit.rep.fullName },
+        visitNo: visit.visitNo || null,
+        objective: visit.objective || null,
         nextAction: isPinned
           ? {
               type: "CHECK_OUT",
@@ -864,6 +1275,11 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
       priority: deal.followUpAt < now ? "high" : "normal",
       customer: { id: deal.customer.id, name: deal.customer.name },
       owner: { id: deal.owner.id, name: deal.owner.fullName },
+      dealName: deal.dealName,
+      dealNo: deal.dealNo,
+      closedAt: deal.closedAt?.toISOString() ?? null,
+      stage: { id: deal.stage.id, name: deal.stage.stageName },
+      estimatedValue: deal.estimatedValue,
       nextAction: {
         type: "OPEN_DEAL",
         label: "Open deal",
@@ -896,6 +1312,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
       .map(({ isPinned: _, ...event }) => event);
 
     const grouped: Record<TodoBucketKey, TodoEvent[]> = {
+      overdue: [],
       today: [],
       tomorrow: [],
       next_week: [],
@@ -903,29 +1320,32 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
     };
 
     for (const event of events) {
-      if (event.isPinned) {
-        continue;
-      }
+      if (event.isPinned) continue;
       const { isPinned: _, ...normalized } = event;
       grouped[event.bucket].push(normalized);
     }
 
     if (query.bucket !== "all") {
       if (query.bucket === "pinned") {
+        grouped.overdue = [];
         grouped.today = [];
         grouped.tomorrow = [];
         grouped.next_week = [];
         grouped.next_month = [];
       } else {
         for (const key of Object.keys(grouped) as TodoBucketKey[]) {
-          if (key !== query.bucket) {
-            grouped[key] = [];
-          }
+          if (key !== query.bucket) grouped[key] = [];
         }
       }
     }
 
-    const allBucketEvents = [...grouped.today, ...grouped.tomorrow, ...grouped.next_week, ...grouped.next_month];
+    const allBucketEvents = [
+      ...grouped.overdue,
+      ...grouped.today,
+      ...grouped.tomorrow,
+      ...grouped.next_week,
+      ...grouped.next_month
+    ];
     return {
       generatedAt: now.toISOString(),
       pinned: {
@@ -934,6 +1354,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
       buckets: grouped,
       counts: {
         pinned: query.bucket === "pinned" || query.bucket === "all" ? pinned.length : 0,
+        overdue: grouped.overdue.length,
         today: grouped.today.length,
         tomorrow: grouped.tomorrow.length,
         next_week: grouped.next_week.length,

@@ -11,7 +11,10 @@ import {
 } from "@prisma/client";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
+import { deflateSync } from "node:zlib";
+import { writeFile, mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import {
   assertTenantPathAccess,
   listVisibleUserIds,
@@ -21,26 +24,32 @@ import {
   requireTenantId,
   requireUserId
 } from "../../lib/http.js";
+import { JOB_DEFS, rescheduleJob, runJobNow } from "../../lib/scheduler.js";
 import { prisma } from "../../lib/prisma.js";
 import {
   createR2PresignedDownload,
   createR2PresignedUpload,
-  uploadBufferToR2
+  uploadBufferToR2,
+  isR2Configured
 } from "../../lib/r2-storage.js";
 
+const r2UrlOrPathSchema = z
+  .union([z.string().trim(), z.literal("")])
+  .optional()
+  .transform((value) => (value === "" ? undefined : value))
+  .refine(
+    (value) =>
+      value === undefined ||
+      value.startsWith("/uploads/") ||
+      value.startsWith("r2://") ||
+      z.url().safeParse(value).success,
+    "Must be an absolute URL, r2:// reference, or an /uploads/ path."
+  );
+
 const brandingSchema = z.object({
-  logoUrl: z
-    .union([z.string().trim(), z.literal("")])
-    .optional()
-    .transform((value) => (value === "" ? undefined : value))
-    .refine(
-      (value) =>
-        value === undefined ||
-        value.startsWith("/uploads/") ||
-        value.startsWith("r2://") ||
-        z.url().safeParse(value).success,
-      "logoUrl must be an absolute URL, r2:// reference, or an /uploads/ path."
-    ),
+  appName: z.string().trim().max(64).optional(),
+  logoUrl: r2UrlOrPathSchema,
+  faviconUrl: r2UrlOrPathSchema,
   primaryColor: z
     .string()
     .trim()
@@ -125,7 +134,9 @@ const profileIntegrationConnectSchema = z.object({
 const profileIntegrationProviders = [
   IntegrationPlatform.MS365,
   IntegrationPlatform.GOOGLE,
-  IntegrationPlatform.LINE
+  IntegrationPlatform.LINE,
+  IntegrationPlatform.SLACK,
+  IntegrationPlatform.MS_TEAMS
 ] as const;
 
 type ProfileIntegrationProvider = (typeof profileIntegrationProviders)[number];
@@ -135,13 +146,24 @@ const providerAliasMap: Record<string, ProfileIntegrationProvider> = {
   microsoft365: IntegrationPlatform.MS365,
   google: IntegrationPlatform.GOOGLE,
   google_calendar: IntegrationPlatform.GOOGLE,
-  line: IntegrationPlatform.LINE
+  line: IntegrationPlatform.LINE,
+  slack: IntegrationPlatform.SLACK,
+  teams: IntegrationPlatform.MS_TEAMS,
+  ms_teams: IntegrationPlatform.MS_TEAMS,
+  msteams: IntegrationPlatform.MS_TEAMS,
+  microsoft_teams: IntegrationPlatform.MS_TEAMS
 };
 
 function resolveProfileProvider(rawProvider: string): ProfileIntegrationProvider | null {
   const normalized = rawProvider.trim().toLowerCase();
   return providerAliasMap[normalized] ?? null;
 }
+
+const notifProviders = new Set<ProfileIntegrationProvider>([
+  IntegrationPlatform.LINE,
+  IntegrationPlatform.SLACK,
+  IntegrationPlatform.MS_TEAMS
+]);
 
 function buildProfileIntegrationCapabilities(provider: ProfileIntegrationProvider): {
   calendarSyncEnabled: boolean;
@@ -150,20 +172,20 @@ function buildProfileIntegrationCapabilities(provider: ProfileIntegrationProvide
   return {
     calendarSyncEnabled:
       provider === IntegrationPlatform.MS365 || provider === IntegrationPlatform.GOOGLE,
-    notificationsEnabled: provider === IntegrationPlatform.LINE
+    notificationsEnabled: notifProviders.has(provider)
   };
 }
 
 function buildConnectOperationType(provider: ProfileIntegrationProvider): string {
-  if (provider === IntegrationPlatform.LINE) {
-    return "LINE_BIND_CONNECT";
+  if (notifProviders.has(provider)) {
+    return `${provider}_BIND_CONNECT`;
   }
   return "CALENDAR_BIND_CONNECT";
 }
 
 function buildSyncOperationType(provider: ProfileIntegrationProvider): string {
-  if (provider === IntegrationPlatform.LINE) {
-    return "LINE_NOTIFICATION_SYNC";
+  if (notifProviders.has(provider)) {
+    return `${provider}_NOTIFICATION_SYNC`;
   }
   return "CALENDAR_SYNC";
 }
@@ -172,10 +194,20 @@ const tenantIntegrationPlatforms = [
   IntegrationPlatform.MS365,
   IntegrationPlatform.GOOGLE,
   IntegrationPlatform.LINE,
+  IntegrationPlatform.LINE_LOGIN,
   IntegrationPlatform.MS_TEAMS,
   IntegrationPlatform.SLACK,
-  IntegrationPlatform.EMAIL
+  IntegrationPlatform.EMAIL,
+  IntegrationPlatform.ANTHROPIC,
+  IntegrationPlatform.GEMINI,
+  IntegrationPlatform.OPENAI
 ] as const;
+
+const AI_PLATFORMS = new Set<IntegrationPlatform>([
+  IntegrationPlatform.ANTHROPIC,
+  IntegrationPlatform.GEMINI,
+  IntegrationPlatform.OPENAI
+]);
 
 type TenantIntegrationPlatform = (typeof tenantIntegrationPlatforms)[number];
 const MAX_LOGO_BYTES = 5 * 1024 * 1024;
@@ -185,11 +217,28 @@ const logoMimeToExt = new Map<string, string>([
   ["image/webp", ".webp"],
   ["image/svg+xml", ".svg"]
 ]);
+// Folder each entity type maps to inside the tenant's R2 prefix.
+const ENTITY_FOLDER: Record<string, string> = {
+  VISIT:        "visits",
+  DEAL:         "deals",
+  CUSTOMER:     "customers",
+  QUOTATION:    "quotations",
+  ITEM:         "items",
+  PAYMENT_TERM: "payment-terms"
+};
+
 const storagePresignUploadSchema = z.object({
-  objectKey: z.string().trim().min(1),
+  entityType: z.string().trim().toUpperCase().optional(),
+  entityId:   z.string().trim().min(1).optional(),
+  filename:   z.string().trim().min(1).max(255).optional(),
+  // Legacy: caller may still supply a full objectKey directly (no entityType required)
+  objectKey:  z.string().trim().min(1).optional(),
   contentType: z.string().trim().min(1).max(200).optional(),
   expiresInSeconds: z.coerce.number().int().min(60).max(3600).optional()
-});
+}).refine(
+  (d) => d.objectKey || d.entityType,
+  { message: "Provide either objectKey (legacy) or entityType." }
+);
 const storagePresignDownloadSchema = z.object({
   objectKey: z.string().trim().min(1),
   expiresInSeconds: z.coerce.number().int().min(60).max(3600).optional()
@@ -224,7 +273,7 @@ const tenantIntegrationEnableSchema = z.object({
 });
 
 const userManagerAssignSchema = z.object({
-  managerUserId: z.string().cuid().nullable()
+  managerUserId: z.preprocess(v => (v === "" ? null : v), z.string().min(1).nullable())
 });
 
 const changelogQuerySchema = z.object({
@@ -293,6 +342,169 @@ function mapTenantCredential(
   };
 }
 
+// ── Platform connection tests ─────────────────────────────────────────────────
+
+type CredentialRecord = {
+  clientIdRef: string | null;
+  clientSecretRef: string | null;
+  apiKeyRef: string | null;
+  webhookTokenRef: string | null;
+};
+
+async function runPlatformConnectionTest(
+  platform: TenantIntegrationPlatform,
+  cred: CredentialRecord
+): Promise<{ testStatus: ExecutionStatus; testResult: string }> {
+  const ok  = (msg: string) => ({ testStatus: ExecutionStatus.SUCCESS, testResult: msg });
+  const err = (msg: string) => ({ testStatus: ExecutionStatus.FAILURE, testResult: msg });
+
+  switch (platform) {
+
+    case IntegrationPlatform.MS365: {
+      if (!cred.clientIdRef || !cred.clientSecretRef) return err("Client ID and Client Secret are required.");
+      const tenantId = cred.webhookTokenRef ?? "common";
+      const res = await fetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ grant_type: "client_credentials", client_id: cred.clientIdRef,
+          client_secret: cred.clientSecretRef, scope: "https://graph.microsoft.com/.default" })
+      });
+      const tok = await res.json() as { access_token?: string; error_description?: string };
+      return tok.access_token ? ok("Microsoft 365 credentials verified — Graph API token acquired.") : err(tok.error_description ?? "Token request failed.");
+    }
+
+    case IntegrationPlatform.MS_TEAMS: {
+      if (!cred.clientIdRef || !cred.clientSecretRef || !cred.webhookTokenRef)
+        return err("App (Client) ID, Client Secret, and Tenant ID are all required.");
+      // Step 1: acquire Bot Framework token
+      const tokenRes = await fetch(`https://login.microsoftonline.com/${cred.webhookTokenRef}/oauth2/v2.0/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ grant_type: "client_credentials", client_id: cred.clientIdRef,
+          client_secret: cred.clientSecretRef, scope: "https://api.botframework.com/.default" })
+      });
+      const tok = await tokenRes.json() as { access_token?: string; error_description?: string };
+      if (!tok.access_token) return err(tok.error_description ?? "Token request failed — check App ID, Client Secret, and Tenant ID.");
+      // Step 2: verify the App ID is recognized by the Bot Framework connector (catches mismatched App ID)
+      for (const serviceUrl of ["https://smba.trafficmanager.net/ap/", "https://smba.trafficmanager.net/apis/"]) {
+        const probeRes = await fetch(`${serviceUrl}v3/conversations`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${tok.access_token}` },
+          body: JSON.stringify({ bot: { id: cred.clientIdRef, name: "test" }, members: [{ id: "test" }], isGroup: false })
+        });
+        if (probeRes.status !== 401) {
+          // Any non-401 (even 400 bad request) means the connector accepted the JWT
+          return ok(`Bot Framework credentials verified — App ID recognized by connector (${probeRes.status}).`);
+        }
+        const body = await probeRes.json().catch(() => ({})) as { error?: { message?: string } };
+        if (body.error?.message && !body.error.message.includes("Invalid JWT")) {
+          // Different error = JWT accepted, just a bad payload
+          return ok(`Bot Framework credentials verified — App ID recognized by connector.`);
+        }
+      }
+      return err("Token acquired but Bot Framework connector rejected the App ID with 401 Invalid JWT. Ensure the App ID matches exactly what is shown in Azure Portal → Azure Bot → Configuration → Microsoft App ID.");
+    }
+
+    case IntegrationPlatform.LINE: {
+      if (!cred.apiKeyRef) return err("Channel Access Token (API Key) is required.");
+      const res = await fetch("https://api.line.me/v2/bot/info", {
+        headers: { Authorization: `Bearer ${cred.apiKeyRef}` }
+      });
+      if (res.ok) {
+        const info = await res.json() as { displayName?: string };
+        return ok(`LINE bot connected — "${info.displayName ?? "unknown bot"}".`);
+      }
+      return err(`LINE API error ${res.status} — check the Channel Access Token.`);
+    }
+
+    case IntegrationPlatform.LINE_LOGIN: {
+      if (!cred.clientIdRef || !cred.clientSecretRef) return err("Channel ID and Channel Secret are required.");
+      // Verify the channel exists by calling LINE's token endpoint (will fail gracefully with wrong creds)
+      const res = await fetch("https://api.line.me/oauth2/v2.1/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ grant_type: "authorization_code", code: "test",
+          redirect_uri: "https://example.com", client_id: cred.clientIdRef, client_secret: cred.clientSecretRef })
+      });
+      // 400 "invalid_grant" means credentials are valid but the code is fake — that's expected
+      // 401 / error about client means credentials are wrong
+      const body = await res.json() as { error?: string; error_description?: string };
+      if (res.status === 400 && body.error === "invalid_grant") {
+        return ok("LINE Login credentials verified — Channel ID and Secret are valid.");
+      }
+      if (res.status === 401 || body.error === "invalid_client") {
+        return err("Invalid Channel ID or Channel Secret.");
+      }
+      return ok("LINE Login credentials accepted.");
+    }
+
+    case IntegrationPlatform.SLACK: {
+      if (!cred.apiKeyRef) return err("Bot Token is required.");
+      const res = await fetch("https://slack.com/api/auth.test", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${cred.apiKeyRef}`, "Content-Type": "application/json" }
+      });
+      const body = await res.json() as { ok: boolean; error?: string; team?: string; user?: string };
+      return body.ok ? ok(`Slack connected — workspace: "${body.team}", bot: "${body.user}".`) : err(`Slack error: ${body.error ?? "auth.test failed"}`);
+    }
+
+    case IntegrationPlatform.EMAIL: {
+      if (!cred.clientIdRef || !cred.apiKeyRef || !cred.webhookTokenRef) return err("SMTP Host, Password, and From Address are required.");
+      const port = parseInt(cred.clientSecretRef ?? "587", 10);
+      const nodemailer = await import("nodemailer");
+      const transporter = nodemailer.createTransport({
+        host: cred.clientIdRef, port, secure: port === 465,
+        auth: { user: cred.webhookTokenRef, pass: cred.apiKeyRef }
+      });
+      try {
+        await transporter.verify();
+        return ok(`SMTP connection verified — ${cred.clientIdRef}:${port}`);
+      } catch (e) {
+        return err(`SMTP error: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+
+    case IntegrationPlatform.ANTHROPIC: {
+      if (!cred.apiKeyRef) return err("API Key is required.");
+      const res = await fetch("https://api.anthropic.com/v1/models", {
+        headers: { "x-api-key": cred.apiKeyRef, "anthropic-version": "2023-06-01" }
+      });
+      if (res.ok) return ok("Anthropic API key verified.");
+      const body = await res.json() as { error?: { message?: string } };
+      return err(body.error?.message ?? `Anthropic API error ${res.status}`);
+    }
+
+    case IntegrationPlatform.OPENAI: {
+      if (!cred.apiKeyRef) return err("API Key is required.");
+      const res = await fetch("https://api.openai.com/v1/models", {
+        headers: { Authorization: `Bearer ${cred.apiKeyRef}` }
+      });
+      if (res.ok) return ok("OpenAI API key verified.");
+      const body = await res.json() as { error?: { message?: string } };
+      return err(body.error?.message ?? `OpenAI API error ${res.status}`);
+    }
+
+    case IntegrationPlatform.GEMINI: {
+      if (!cred.apiKeyRef) return err("API Key is required.");
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(cred.apiKeyRef)}`);
+      if (res.ok) return ok("Google Gemini API key verified.");
+      const body = await res.json() as { error?: { message?: string } };
+      return err(body.error?.message ?? `Gemini API error ${res.status}`);
+    }
+
+    case IntegrationPlatform.GOOGLE: {
+      // Google OAuth cannot be tested with client_credentials — no server-to-server flow available.
+      if (!cred.clientIdRef || !cred.clientSecretRef) return err("Client ID and Client Secret are required.");
+      return ok("Google OAuth credentials saved. They will be verified on first user login (OAuth requires a user flow).");
+    }
+
+    default: {
+      const hasAny = Boolean(cred.clientIdRef || cred.clientSecretRef || cred.apiKeyRef || cred.webhookTokenRef);
+      return hasAny ? ok("Credentials saved.") : err("No credentials found.");
+    }
+  }
+}
+
 async function ensureRepBelongsToTenant(
   tenantId: string,
   userId: string,
@@ -340,6 +552,61 @@ async function ensureTeamBelongsToTenant(
     throw app.httpErrors.notFound("Team not found in tenant.");
   }
   return team;
+}
+
+// ── Teams App ID helper ────────────────────────────────────────────────────────
+/** Derives a stable, deterministic UUID from the bot App ID so the catalog externalId never changes. */
+function stableTeamsAppId(botAppId: string): string {
+  const h = createHash("sha256").update("thinkcrm-teams-app:" + botAppId).digest("hex");
+  return `${h.slice(0,8)}-${h.slice(8,12)}-4${h.slice(13,16)}-${(["8","9","a","b"] as const)[parseInt(h[16]!, 16) & 3]}${h.slice(17,20)}-${h.slice(20,32)}`;
+}
+
+// ── PNG helper ────────────────────────────────────────────────────────────────
+// Generates a minimal valid solid-colour PNG without external dependencies.
+
+function crc32(buf: Buffer): number {
+  const table = (() => {
+    const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      t[n] = c;
+    }
+    return t;
+  })();
+  let crc = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) crc = (table[(crc ^ buf[i]!) & 0xff]!) ^ (crc >>> 8);
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type: string, data: Buffer): Buffer {
+  const len = Buffer.allocUnsafe(4); len.writeUInt32BE(data.length);
+  const typeBytes = Buffer.from(type, "ascii");
+  const crcVal = Buffer.allocUnsafe(4);
+  crcVal.writeUInt32BE(crc32(Buffer.concat([typeBytes, data])));
+  return Buffer.concat([len, typeBytes, data, crcVal]);
+}
+
+function createSolidPng(width: number, height: number, r: number, g: number, b: number): Buffer {
+  const sig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+  const ihdrData = Buffer.allocUnsafe(13);
+  ihdrData.writeUInt32BE(width, 0);
+  ihdrData.writeUInt32BE(height, 4);
+  ihdrData[8] = 8; ihdrData[9] = 2; ihdrData[10] = 0; ihdrData[11] = 0; ihdrData[12] = 0;
+
+  const row = Buffer.allocUnsafe(1 + width * 3);
+  row[0] = 0; // filter: None
+  for (let x = 0; x < width; x++) { row[1 + x * 3] = r; row[2 + x * 3] = g; row[3 + x * 3] = b; }
+  const raw = Buffer.concat(Array.from({ length: height }, () => row));
+  const compressed = deflateSync(raw);
+
+  return Buffer.concat([
+    sig,
+    pngChunk("IHDR", ihdrData),
+    pngChunk("IDAT", compressed),
+    pngChunk("IEND", Buffer.alloc(0))
+  ]);
 }
 
 export const settingsRoutes: FastifyPluginAsync = async (app) => {
@@ -479,9 +746,25 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
 
   app.get("/tenants/:id/branding", async (request) => {
     const params = request.params as { id: string };
-    requireRoleAtLeast(request, UserRole.MANAGER);
     assertTenantPathAccess(request, params.id);
-    return prisma.tenantBranding.findUnique({ where: { tenantId: params.id } });
+    const branding = await prisma.tenantBranding.findUnique({ where: { tenantId: params.id } });
+    if (!branding) return branding;
+    const tenant = await prisma.tenant.findUnique({ where: { id: params.id }, select: { slug: true } });
+    if (!tenant) return branding;
+    const resolved = { ...branding } as typeof branding & { logoUrl?: string | null; faviconUrl?: string | null };
+    if (resolved.logoUrl?.startsWith("r2://")) {
+      try {
+        const dl = await createR2PresignedDownload({ tenantSlug: tenant.slug, objectKeyOrRef: resolved.logoUrl });
+        resolved.logoUrl = dl.downloadUrl;
+      } catch { /* leave as-is */ }
+    }
+    if (resolved.faviconUrl?.startsWith("r2://")) {
+      try {
+        const dl = await createR2PresignedDownload({ tenantSlug: tenant.slug, objectKeyOrRef: resolved.faviconUrl });
+        resolved.faviconUrl = dl.downloadUrl;
+      } catch { /* leave as-is */ }
+    }
+    return resolved;
   });
 
   app.put("/tenants/:id/branding", async (request) => {
@@ -519,20 +802,36 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.badRequest("Logo exceeds 5MB limit.");
     }
 
-    const objectKey = `branding/logos/${Date.now()}-${randomUUID()}${ext}`;
-    let uploaded: { objectKey: string; objectRef: string };
-    try {
-      uploaded = await uploadBufferToR2({
-        tenantId: params.id,
-        objectKeyOrRef: objectKey,
-        contentType: file.mimetype,
-        data: logoBuffer
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown upload failure.";
-      throw app.httpErrors.badGateway(message);
+    const tenant = await prisma.tenant.findUnique({ where: { id: params.id }, select: { slug: true } });
+    if (!tenant) throw app.httpErrors.notFound("Tenant not found.");
+
+    let logoUrl: string;
+    let logoDownloadUrl: string;
+    if (isR2Configured) {
+      const objectKey = `branding/logos/${Date.now()}-${randomUUID()}${ext}`;
+      let uploaded: { objectKey: string; objectRef: string };
+      try {
+        uploaded = await uploadBufferToR2({
+          tenantSlug: tenant.slug,
+          objectKeyOrRef: objectKey,
+          contentType: file.mimetype,
+          data: logoBuffer
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown upload failure.";
+        throw app.httpErrors.badGateway(message);
+      }
+      logoUrl = uploaded.objectRef;
+      const logoDownload = await createR2PresignedDownload({ tenantSlug: tenant.slug, objectKeyOrRef: uploaded.objectKey });
+      logoDownloadUrl = logoDownload.downloadUrl;
+    } else {
+      const filename = `${Date.now()}-${randomUUID()}${ext}`;
+      const uploadsDir = join(process.cwd(), "uploads");
+      await mkdir(uploadsDir, { recursive: true });
+      await writeFile(join(uploadsDir, filename), logoBuffer);
+      logoUrl = `/uploads/${filename}`;
+      logoDownloadUrl = logoUrl;
     }
-    const logoUrl = uploaded.objectRef;
     const branding = await prisma.tenantBranding.upsert({
       where: { tenantId: params.id },
       update: { logoUrl },
@@ -544,14 +843,78 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
         themeMode: "LIGHT"
       }
     });
-    const logoDownload = await createR2PresignedDownload({
-      tenantId: params.id,
-      objectKeyOrRef: uploaded.objectKey
-    });
     return reply.code(201).send({
       message: "Logo uploaded",
       logoUrl,
-      logoDownloadUrl: logoDownload.downloadUrl,
+      logoDownloadUrl,
+      branding
+    });
+  });
+
+  app.post("/tenants/:id/branding/favicon", async (request, reply) => {
+    const params = request.params as { id: string };
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    assertTenantPathAccess(request, params.id);
+
+    const file = await request.file();
+    if (!file) {
+      throw app.httpErrors.badRequest("Favicon file is required.");
+    }
+    const ext = logoMimeToExt.get(file.mimetype);
+    if (!ext) {
+      throw app.httpErrors.badRequest("Unsupported favicon file type. Use png, jpg, webp, or svg.");
+    }
+
+    const faviconBuffer = await file.toBuffer();
+    if (faviconBuffer.length > MAX_LOGO_BYTES) {
+      throw app.httpErrors.badRequest("Favicon exceeds 5MB limit.");
+    }
+
+    const tenantForFavicon = await prisma.tenant.findUnique({ where: { id: params.id }, select: { slug: true } });
+    if (!tenantForFavicon) throw app.httpErrors.notFound("Tenant not found.");
+
+    let faviconUrl: string;
+    let faviconDownloadUrl: string;
+    if (isR2Configured) {
+      const objectKey = `branding/favicons/${Date.now()}-${randomUUID()}${ext}`;
+      let uploaded: { objectKey: string; objectRef: string };
+      try {
+        uploaded = await uploadBufferToR2({
+          tenantSlug: tenantForFavicon.slug,
+          objectKeyOrRef: objectKey,
+          contentType: file.mimetype,
+          data: faviconBuffer
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown upload failure.";
+        throw app.httpErrors.badGateway(message);
+      }
+      faviconUrl = uploaded.objectRef;
+      const faviconDownload = await createR2PresignedDownload({ tenantSlug: tenantForFavicon.slug, objectKeyOrRef: uploaded.objectKey });
+      faviconDownloadUrl = faviconDownload.downloadUrl;
+    } else {
+      const filename = `${Date.now()}-${randomUUID()}${ext}`;
+      const uploadsDir = join(process.cwd(), "uploads");
+      await mkdir(uploadsDir, { recursive: true });
+      await writeFile(join(uploadsDir, filename), faviconBuffer);
+      faviconUrl = `/uploads/${filename}`;
+      faviconDownloadUrl = faviconUrl;
+    }
+    const branding = await prisma.tenantBranding.upsert({
+      where: { tenantId: params.id },
+      update: { faviconUrl },
+      create: {
+        tenantId: params.id,
+        faviconUrl,
+        primaryColor: "#2563eb",
+        secondaryColor: "#0f172a",
+        themeMode: "LIGHT"
+      }
+    });
+    return reply.code(201).send({
+      message: "Favicon uploaded",
+      faviconUrl,
+      faviconDownloadUrl,
       branding
     });
   });
@@ -572,6 +935,30 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       where: { tenantId: params.id },
       update: body,
       create: { tenantId: params.id, ...body }
+    });
+  });
+
+  app.get("/tenants/:id/visit-config", async (request) => {
+    const params = request.params as { id: string };
+    requireRoleAtLeast(request, UserRole.MANAGER);
+    assertTenantPathAccess(request, params.id);
+    return prisma.tenantVisitConfig.findUnique({ where: { tenantId: params.id } });
+  });
+
+  app.put("/tenants/:id/visit-config", async (request) => {
+    const params = request.params as { id: string };
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    assertTenantPathAccess(request, params.id);
+    const body = request.body as { checkInMaxDistanceM: number; minVisitDurationMinutes: number };
+    const parsed = z.object({
+      checkInMaxDistanceM: z.number().int().min(100).max(100_000),
+      minVisitDurationMinutes: z.number().int().min(1).max(480)
+    }).safeParse(body);
+    if (!parsed.success) throw app.httpErrors.badRequest(parsed.error.message);
+    return prisma.tenantVisitConfig.upsert({
+      where: { tenantId: params.id },
+      update: parsed.data,
+      create: { tenantId: params.id, ...parsed.data }
     });
   });
 
@@ -690,13 +1077,85 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     });
   });
 
+  app.post("/users/:id/test-teams-dm", async (request) => {
+    const params = request.params as { id: string };
+    await requireSelfOrManagerAccess(request, params.id);
+    const tenantId = requireTenantId(request);
+    await ensureTargetUserInTenant(params.id, tenantId);
+
+    const [acct, botCred, ms365Cred, branding] = await Promise.all([
+      prisma.userExternalAccount.findUnique({
+        where: { userId_provider: { userId: params.id, provider: IntegrationPlatform.MS_TEAMS } }
+      }),
+      prisma.tenantIntegrationCredential.findUnique({
+        where: { tenantId_platform: { tenantId, platform: IntegrationPlatform.MS_TEAMS } },
+        select: { clientIdRef: true, clientSecretRef: true, webhookTokenRef: true, status: true }
+      }),
+      prisma.tenantIntegrationCredential.findUnique({
+        where: { tenantId_platform: { tenantId, platform: IntegrationPlatform.MS365 } },
+        select: { clientIdRef: true, clientSecretRef: true, webhookTokenRef: true, status: true }
+      }),
+      prisma.tenantBranding.findUnique({ where: { tenantId }, select: { appName: true } })
+    ]);
+
+    if (!acct) return { ok: false, message: "User has no MS Teams account connected. Ask them to use the 'Connect with Microsoft Teams' button on their Notifications page." };
+    if (!botCred?.clientIdRef || !botCred?.clientSecretRef || !botCred?.webhookTokenRef) return { ok: false, message: "MS Teams Bot credentials are incomplete. Check Settings → Integrations → Microsoft Teams." };
+    if (botCred.status !== SourceStatus.ENABLED) return { ok: false, message: "MS Teams integration is disabled. Enable it in Settings → Integrations → Microsoft Teams." };
+
+    const appName = branding?.appName || "ThinkCRM";
+    const testMsg = `🔔 Test message from ${appName} — your Teams notifications are working!`;
+    const meta = acct.metadata as { serviceUrl?: string; conversationId?: string; chatId?: string } | null;
+
+    const { sendTeamsDmViaGraph, sendTeamsDirectMessage } = await import("../../lib/teams-notify.js");
+
+    // ── Try Graph API first (more reliable — no pairwise ID required) ─────────
+    if (ms365Cred?.clientIdRef && ms365Cred?.clientSecretRef && ms365Cred?.status === SourceStatus.ENABLED) {
+      const aadObjectId = acct.externalUserId.replace(/^8:orgid:/, "").replace(/^29:/, "");
+      const graphCreds = {
+        clientId: ms365Cred.clientIdRef,
+        clientSecret: ms365Cred.clientSecretRef,
+        tenantId: ms365Cred.webhookTokenRef ?? botCred.webhookTokenRef,
+        botAppId: botCred.clientIdRef
+      };
+      const result = await sendTeamsDmViaGraph(aadObjectId, graphCreds, testMsg, meta?.chatId);
+      if (result.ok) {
+        // Cache the chatId for future sends
+        if (result.chatId && result.chatId !== meta?.chatId) {
+          await prisma.userExternalAccount.update({
+            where: { id: acct.id },
+            data: { metadata: { ...meta, chatId: result.chatId } }
+          });
+        }
+        return { ok: true, message: "Test DM sent successfully via Graph API!", method: "graph", userMri: acct.externalUserId };
+      }
+      console.warn(`[test-dm] Graph API failed: ${result.message} — trying Bot Framework fallback`);
+    }
+
+    // ── Fallback: Bot Framework with stored convRef ───────────────────────────
+    const botCreds = { appId: botCred.clientIdRef, appPassword: botCred.clientSecretRef, tenantId: botCred.webhookTokenRef };
+    const convRef = meta?.serviceUrl && meta?.conversationId
+      ? { serviceUrl: meta.serviceUrl, conversationId: meta.conversationId }
+      : undefined;
+
+    const result = await sendTeamsDirectMessage(acct.externalUserId, botCreds, testMsg, convRef);
+
+    return {
+      ok: result.ok,
+      message: result.ok ? "Test DM sent successfully via Bot Framework!" : result.message,
+      method: "bot-framework",
+      userMri: acct.externalUserId,
+      hasConvRef: !!convRef,
+      convRefServiceUrl: convRef?.serviceUrl
+    };
+  });
+
   app.get("/users/:id/integrations", async (request) => {
     const params = request.params as { id: string };
     await requireSelfOrManagerAccess(request, params.id);
     const tenantId = requireTenantId(request);
     await ensureTargetUserInTenant(params.id, tenantId);
 
-    const [accounts, logs] = await Promise.all([
+    const [accounts, logs, lineLoginCred, ms365Cred, msTeamsCred, slackCred] = await Promise.all([
       prisma.userExternalAccount.findMany({
         where: {
           userId: params.id,
@@ -711,20 +1170,36 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
           status: ExecutionStatus.SUCCESS
         },
         orderBy: { startedAt: "desc" }
+      }),
+      prisma.tenantIntegrationCredential.findFirst({
+        where: { tenantId, platform: IntegrationPlatform.LINE_LOGIN, status: SourceStatus.ENABLED },
+        select: { id: true }
+      }),
+      prisma.tenantIntegrationCredential.findFirst({
+        where: { tenantId, platform: IntegrationPlatform.MS365, status: SourceStatus.ENABLED },
+        select: { id: true, clientIdRef: true }
+      }),
+      prisma.tenantIntegrationCredential.findFirst({
+        where: { tenantId, platform: IntegrationPlatform.MS_TEAMS, status: SourceStatus.ENABLED },
+        select: { id: true }
+      }),
+      prisma.tenantIntegrationCredential.findFirst({
+        where: { tenantId, platform: IntegrationPlatform.SLACK, status: SourceStatus.ENABLED },
+        select: { id: true, clientIdRef: true }
       })
     ]);
 
     const accountByProvider = new Map(accounts.map((account) => [account.provider, account]));
     const latestConnectByProvider = new Map<ProfileIntegrationProvider, Date>();
     const latestCalendarSyncByProvider = new Map<ProfileIntegrationProvider, Date>();
-    const latestLineSyncByProvider = new Map<ProfileIntegrationProvider, Date>();
+    const latestNotifSyncByProvider = new Map<ProfileIntegrationProvider, Date>();
 
     for (const log of logs) {
       const provider = log.platform as ProfileIntegrationProvider;
       const completedAt = log.completedAt ?? log.startedAt;
 
       if (
-        (log.operationType === "CALENDAR_BIND_CONNECT" || log.operationType === "LINE_BIND_CONNECT") &&
+        (log.operationType === "CALENDAR_BIND_CONNECT" || log.operationType.endsWith("_BIND_CONNECT")) &&
         !latestConnectByProvider.has(provider)
       ) {
         latestConnectByProvider.set(provider, completedAt);
@@ -732,8 +1207,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       if (log.operationType === "CALENDAR_SYNC" && !latestCalendarSyncByProvider.has(provider)) {
         latestCalendarSyncByProvider.set(provider, completedAt);
       }
-      if (log.operationType === "LINE_NOTIFICATION_SYNC" && !latestLineSyncByProvider.has(provider)) {
-        latestLineSyncByProvider.set(provider, completedAt);
+      if (log.operationType.endsWith("_NOTIFICATION_SYNC") && !latestNotifSyncByProvider.has(provider)) {
+        latestNotifSyncByProvider.set(provider, completedAt);
       }
     }
 
@@ -749,9 +1224,13 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
           ? latestCalendarSyncByProvider.get(provider) ?? null
           : null,
         lastNotificationSyncAt: capabilities.notificationsEnabled
-          ? latestLineSyncByProvider.get(provider) ?? null
+          ? latestNotifSyncByProvider.get(provider) ?? null
           : null,
-        capabilities
+        capabilities,
+        // Platform-specific OAuth connect availability
+        ...(provider === IntegrationPlatform.LINE && { lineLoginEnabled: lineLoginCred !== null }),
+        ...(provider === IntegrationPlatform.MS_TEAMS && { msTeamsConnectEnabled: ms365Cred?.clientIdRef != null && msTeamsCred !== null }),
+        ...(provider === IntegrationPlatform.SLACK && { slackConnectEnabled: slackCred?.clientIdRef != null })
       };
     });
   });
@@ -841,27 +1320,15 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.notFound("Credential record not found. Save credentials first.");
     }
 
-    const hasCredentialValue = Boolean(
-      credential.clientIdRef ||
-        credential.clientSecretRef ||
-        credential.apiKeyRef ||
-        credential.webhookTokenRef
-    );
-    const hasFailureHint = [
-      credential.clientIdRef,
-      credential.clientSecretRef,
-      credential.apiKeyRef,
-      credential.webhookTokenRef
-    ]
-      .filter((value): value is string => Boolean(value))
-      .some((value) => value.toLowerCase().includes("fail"));
+    let testStatus: ExecutionStatus;
+    let testResult: string;
 
-    const testStatus =
-      hasCredentialValue && !hasFailureHint ? ExecutionStatus.SUCCESS : ExecutionStatus.FAILURE;
-    const testResult =
-      testStatus === ExecutionStatus.SUCCESS
-        ? "Connection test passed."
-        : "Connection test failed. Verify credentials and test again.";
+    try {
+      ({ testStatus, testResult } = await runPlatformConnectionTest(platform, credential));
+    } catch (err) {
+      testStatus = ExecutionStatus.FAILURE;
+      testResult = `Test error: ${err instanceof Error ? err.message : String(err)}`;
+    }
 
     const updatedCredential = await prisma.tenantIntegrationCredential.update({
       where: { id: credential.id },
@@ -932,6 +1399,20 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const nextStatus = parsed.data.enabled ? SourceStatus.ENABLED : SourceStatus.DISABLED;
+
+    // If enabling an AI platform, disable all other AI platforms for this tenant first
+    if (parsed.data.enabled && AI_PLATFORMS.has(platform)) {
+      const otherAiPlatforms = [...AI_PLATFORMS].filter((p) => p !== platform);
+      await prisma.tenantIntegrationCredential.updateMany({
+        where: {
+          tenantId: params.id,
+          platform: { in: otherAiPlatforms },
+          status: SourceStatus.ENABLED
+        },
+        data: { status: SourceStatus.DISABLED }
+      });
+    }
+
     const updatedCredential = await prisma.tenantIntegrationCredential.update({
       where: { id: credential.id },
       data: {
@@ -958,6 +1439,214 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     });
 
     return mapTenantCredential(updatedCredential, platform);
+  });
+
+  // ── Teams App Package download ─────────────────────────────────────────────
+  app.get("/tenants/:id/integrations/ms-teams-app-package", async (request, reply) => {
+    requireRoleAtLeast(request, UserRole.MANAGER);
+    assertTenantPathAccess(request, (request.params as { id: string }).id);
+    const tenantId = requireTenantId(request);
+
+    const [botCred, branding] = await Promise.all([
+      prisma.tenantIntegrationCredential.findUnique({
+        where: { tenantId_platform: { tenantId, platform: IntegrationPlatform.MS_TEAMS } },
+        select: { clientIdRef: true }
+      }),
+      prisma.tenantBranding.findUnique({ where: { tenantId }, select: { appName: true } })
+    ]);
+
+    if (!botCred?.clientIdRef) {
+      throw app.httpErrors.badRequest("MS Teams Bot App ID is not configured. Save the Bot credentials first.");
+    }
+
+    const appName = branding?.appName || "ThinkCRM";
+    // Stable UUID derived from the bot App ID — same every download so the catalog app can be found by externalId
+    const teamsAppId = stableTeamsAppId(botCred.clientIdRef);
+
+    const manifest = {
+      $schema: "https://developer.microsoft.com/en-us/json-schemas/teams/v1.17/MicrosoftTeams.schema.json",
+      manifestVersion: "1.17",
+      version: "1.0.0",
+      id: teamsAppId,
+      developer: {
+        name: appName,
+        websiteUrl: "https://thinkcrm.app",
+        privacyUrl: "https://thinkcrm.app/privacy",
+        termsOfUseUrl: "https://thinkcrm.app/terms"
+      },
+      icons: { color: "color.png", outline: "outline.png" },
+      name: { short: appName.slice(0, 30), full: `${appName} Notifications`.slice(0, 100) },
+      description: {
+        short: `${appName} KPI and activity alerts`.slice(0, 80),
+        full: `Receive KPI alerts, check-in reminders, and deal follow-up notifications from ${appName} directly in Microsoft Teams.`.slice(0, 4000)
+      },
+      accentColor: "#5558AF",
+      bots: [
+        {
+          botId: botCred.clientIdRef,
+          scopes: ["personal"],
+          isNotificationOnly: true,
+          supportsFiles: false
+        }
+      ],
+      validDomains: []
+    };
+
+    const manifestJson = Buffer.from(JSON.stringify(manifest, null, 2), "utf8");
+    const colorPng  = createSolidPng(192, 192, 85, 88, 175);  // #5558AF
+    const outlinePng = createSolidPng(32, 32, 255, 255, 255);  // white
+
+    const { zipSync } = await import("fflate");
+    const zipBuffer = Buffer.from(zipSync({
+      "manifest.json": new Uint8Array(manifestJson),
+      "color.png":     new Uint8Array(colorPng),
+      "outline.png":   new Uint8Array(outlinePng)
+    }));
+
+    reply
+      .header("Content-Type", "application/zip")
+      .header("Content-Disposition", `attachment; filename="${appName.replace(/\s+/g, "-")}-teams-app.zip"`)
+      .send(zipBuffer);
+  });
+
+  // ── Push Teams bot to all org users via Microsoft Graph ─────────────────────
+  app.post("/tenants/:id/integrations/ms-teams-push-all", async (request) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    assertTenantPathAccess(request, (request.params as { id: string }).id);
+    const tenantId = requireTenantId(request);
+
+    const [ms365Cred, botCred] = await Promise.all([
+      prisma.tenantIntegrationCredential.findUnique({
+        where: { tenantId_platform: { tenantId, platform: IntegrationPlatform.MS365 } },
+        select: { clientIdRef: true, clientSecretRef: true, webhookTokenRef: true, status: true }
+      }),
+      prisma.tenantIntegrationCredential.findUnique({
+        where: { tenantId_platform: { tenantId, platform: IntegrationPlatform.MS_TEAMS } },
+        select: { clientIdRef: true }
+      })
+    ]);
+
+    if (!ms365Cred?.clientIdRef || !ms365Cred?.clientSecretRef)
+      throw app.httpErrors.badRequest("MS365 integration credentials are not configured.");
+    if (ms365Cred.status !== SourceStatus.ENABLED)
+      throw app.httpErrors.badRequest("MS365 integration is not enabled.");
+    if (!botCred?.clientIdRef)
+      throw app.httpErrors.badRequest("MS Teams Bot App ID is not configured.");
+
+    const aadTenantId = ms365Cred.webhookTokenRef ?? "";
+
+    // Acquire Graph token
+    const tokenRes = await fetch(`https://login.microsoftonline.com/${aadTenantId}/oauth2/v2.0/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "client_credentials",
+        client_id: ms365Cred.clientIdRef,
+        client_secret: ms365Cred.clientSecretRef,
+        scope: "https://graph.microsoft.com/.default"
+      })
+    });
+    const tokenData = await tokenRes.json() as { access_token?: string; error_description?: string };
+    if (!tokenData.access_token)
+      throw app.httpErrors.badGateway(tokenData.error_description ?? "Failed to acquire Graph token.");
+
+    const graphToken = tokenData.access_token;
+    const appExternalId = stableTeamsAppId(botCred.clientIdRef);
+
+    // Find the app in the org catalog by its stable externalId
+    const catalogRes = await fetch(
+      `https://graph.microsoft.com/v1.0/appCatalogs/teamsApps?$filter=externalId eq '${appExternalId}'&$select=id,displayName`,
+      { headers: { Authorization: `Bearer ${graphToken}` } }
+    );
+    const catalogData = await catalogRes.json() as { value?: Array<{ id: string; displayName?: string }> };
+    const catalogApp = catalogData.value?.[0];
+    if (!catalogApp?.id) {
+      return {
+        ok: false,
+        message: "App not found in your org's Teams catalog. Upload the app package first via Teams Admin Center → Manage apps, then try again.",
+        externalId: appExternalId
+      };
+    }
+
+    // Get all org users from Graph
+    const usersRes = await fetch(
+      "https://graph.microsoft.com/v1.0/users?$select=id,displayName,mail,userPrincipalName&$top=999",
+      { headers: { Authorization: `Bearer ${graphToken}` } }
+    );
+    const usersRaw = await usersRes.json() as { value?: Array<{ id: string; displayName?: string; mail?: string; userPrincipalName?: string }>; error?: { message?: string } };
+    if (!usersRes.ok || usersRaw.error) {
+      return {
+        ok: false,
+        message: `Graph API error listing users (HTTP ${usersRes.status}): ${usersRaw.error?.message ?? "No users returned. Ensure User.Read.All is granted with admin consent."}`,
+        installed: 0, skipped: 0, failed: 0, errors: []
+      };
+    }
+    const orgUsers = usersRaw.value ?? [];
+
+    // Match org users to CRM users by email, upsert UserExternalAccount MRI
+    const tenantUsers = await prisma.user.findMany({
+      where: { tenantId, isActive: true },
+      select: { id: true, email: true }
+    });
+    const emailToUserId = new Map(tenantUsers.map(u => [u.email.toLowerCase(), u.id]));
+
+    let installed = 0, skipped = 0, failed = 0, matched = 0;
+    const errors: string[] = [];
+    // Sample of first 3 Azure AD emails for debugging email-match issues
+    const sampleAadEmails = orgUsers.slice(0, 3).map(u => u.mail ?? u.userPrincipalName ?? "(none)");
+
+    for (const orgUser of orgUsers) {
+      const email = (orgUser.mail ?? orgUser.userPrincipalName ?? "").toLowerCase();
+      const crmUserId = emailToUserId.get(email);
+      if (!crmUserId) continue; // not a CRM user
+      matched++;
+
+      const mri = `8:orgid:${orgUser.id}`;
+
+      // Upsert the Teams MRI into UserExternalAccount (don't overwrite existing connected accounts)
+      await prisma.userExternalAccount.upsert({
+        where: { userId_provider: { userId: crmUserId, provider: IntegrationPlatform.MS_TEAMS } },
+        create: { userId: crmUserId, provider: IntegrationPlatform.MS_TEAMS, externalUserId: mri, status: "CONNECTED" },
+        update: {}  // Don't overwrite — user may have already connected via OAuth
+      });
+
+      // Install the app for this user via Graph
+      const installRes = await fetch(
+        `https://graph.microsoft.com/v1.0/users/${orgUser.id}/teamwork/installedApps`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${graphToken}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ "teamsApp@odata.bind": `https://graph.microsoft.com/v1.0/appCatalogs/teamsApps/${catalogApp.id}` })
+        }
+      );
+
+      if (installRes.status === 201 || installRes.status === 204) {
+        installed++;
+      } else if (installRes.status === 409) {
+        skipped++; // Already installed
+      } else {
+        failed++;
+        const errText = await installRes.text().catch(() => "");
+        errors.push(`${orgUser.displayName ?? email}: HTTP ${installRes.status} — ${errText.slice(0, 100)}`);
+      }
+    }
+
+    const diagMsg = matched === 0
+      ? `No email matches found. Azure AD returned ${orgUsers.length} user(s) but none matched CRM emails. Sample AAD emails: ${sampleAadEmails.join(", ")}`
+      : `Done. Installed: ${installed}, already installed (skipped): ${skipped}, failed: ${failed}.`;
+
+    return {
+      ok: matched > 0,
+      message: diagMsg,
+      orgUsersFound: orgUsers.length,
+      crmUsersFound: tenantUsers.length,
+      matched,
+      installed,
+      skipped,
+      failed,
+      sampleAadEmails,
+      errors: errors.slice(0, 10)
+    };
   });
 
   app.post("/teams", async (request, reply) => {
@@ -1001,19 +1690,23 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.get("/teams", async (request) => {
-    requireRoleAtLeast(request, UserRole.MANAGER);
+    requireAuth(request);
     const tenantId = requireTenantId(request);
     const teams = await prisma.team.findMany({
       where: { tenantId },
       orderBy: [{ teamName: "asc" }],
       include: {
+        director: {
+          select: { id: true, fullName: true, role: true, avatarUrl: true }
+        },
         users: {
           select: {
             id: true,
             fullName: true,
             email: true,
             role: true,
-            isActive: true
+            isActive: true,
+            avatarUrl: true
           },
           orderBy: [{ fullName: "asc" }]
         },
@@ -1188,6 +1881,85 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     };
   });
 
+  app.post("/teams/:id/notification-channels/test", async (request) => {
+    requireRoleAtLeast(request, UserRole.MANAGER);
+    const tenantId = requireTenantId(request);
+    const params = request.params as { id: string };
+    await ensureTeamBelongsToTenant(tenantId, params.id, app);
+
+    const channels = await prisma.teamNotificationChannel.findMany({
+      where: { tenantId, teamId: params.id, isEnabled: true },
+      select: { id: true, channelType: true, channelTarget: true }
+    });
+
+    if (channels.length === 0) {
+      throw app.httpErrors.badRequest("No notification channels configured for this team.");
+    }
+
+    // Load credentials and branding in parallel
+    const [lineCredential, emailCredential, branding] = await Promise.all([
+      prisma.tenantIntegrationCredential.findUnique({
+        where: { tenantId_platform: { tenantId, platform: IntegrationPlatform.LINE } },
+        select: { apiKeyRef: true }
+      }),
+      prisma.tenantIntegrationCredential.findUnique({
+        where: { tenantId_platform: { tenantId, platform: IntegrationPlatform.EMAIL } },
+        select: { clientIdRef: true, clientSecretRef: true, apiKeyRef: true, webhookTokenRef: true }
+      }),
+      prisma.tenantBranding.findUnique({
+        where: { tenantId },
+        select: { appName: true }
+      })
+    ]);
+    const appName = branding?.appName || "CRM";
+
+    const results: { channelType: string; channelTarget: string; status: string; message: string }[] = [];
+
+    for (const ch of channels) {
+      if (ch.channelType === ChannelType.LINE) {
+        if (!lineCredential?.apiKeyRef) {
+          results.push({ channelType: ch.channelType, channelTarget: ch.channelTarget, status: "ERROR", message: "LINE Channel Access Token not configured. Set it in Integrations settings." });
+          continue;
+        }
+        const { sendLinePush } = await import("../../lib/line-notify.js");
+        const r = await sendLinePush(lineCredential.apiKeyRef, ch.channelTarget, { type: "text", text: `🔔 Test connection successful.\n[${appName}]` });
+        results.push({ channelType: ch.channelType, channelTarget: ch.channelTarget, status: r.ok ? "OK" : "ERROR", message: r.message });
+      } else if (ch.channelType === ChannelType.MS_TEAMS) {
+        const { sendTeamsCard } = await import("../../lib/teams-notify.js");
+        const r = await sendTeamsCard(ch.channelTarget, {
+          title: "🔔 Test Connection Successful",
+          accentColor: "good",
+          facts: [{ title: "Source", value: appName }],
+          footer: `[${appName}]`
+        });
+        results.push({ channelType: ch.channelType, channelTarget: ch.channelTarget, status: r.ok ? "OK" : "ERROR", message: r.message });
+      } else if (ch.channelType === ChannelType.EMAIL) {
+        if (!emailCredential?.clientIdRef || !emailCredential?.apiKeyRef || !emailCredential?.webhookTokenRef) {
+          results.push({ channelType: ch.channelType, channelTarget: ch.channelTarget, status: "ERROR", message: "Email SMTP credentials not fully configured. Set Host, From Address and Password in Integrations settings." });
+          continue;
+        }
+        const { sendEmailCard } = await import("../../lib/email-notify.js");
+        const emailConfig = {
+          host: emailCredential.clientIdRef,
+          port: parseInt(emailCredential.clientSecretRef ?? "587", 10),
+          fromAddress: emailCredential.webhookTokenRef,
+          password: emailCredential.apiKeyRef
+        };
+        const r = await sendEmailCard(emailConfig, ch.channelTarget, {
+          subject: `🔔 Test Connection Successful — [${appName}]`,
+          title: "🔔 Test Connection Successful",
+          facts: [{ label: "Source", value: appName }],
+          footer: `[${appName}]`
+        });
+        results.push({ channelType: ch.channelType, channelTarget: ch.channelTarget, status: r.ok ? "OK" : "ERROR", message: r.message });
+      } else {
+        results.push({ channelType: ch.channelType, channelTarget: ch.channelTarget, status: "NOT_IMPLEMENTED", message: "Notification delivery for this channel type is not yet configured." });
+      }
+    }
+
+    return { teamId: params.id, results };
+  });
+
   app.get("/kpi-targets/reps", async (request) => {
     requireRoleAtLeast(request, UserRole.ADMIN);
     const tenantId = requireTenantId(request);
@@ -1213,8 +1985,21 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     });
   });
 
+  app.get("/users/visible-reps", async (request) => {
+    requireAuth(request);
+    const role = request.requestContext.role;
+    if (role === UserRole.REP) return [];
+    const tenantId = requireTenantId(request);
+    const visibleIds = [...(await listVisibleUserIds(request))];
+    return prisma.user.findMany({
+      where: { id: { in: visibleIds }, tenantId, role: UserRole.REP, isActive: true },
+      select: { id: true, fullName: true, teamId: true, avatarUrl: true },
+      orderBy: { fullName: "asc" }
+    });
+  });
+
   app.post("/kpi-targets", async (request, reply) => {
-    requireRoleAtLeast(request, UserRole.ADMIN);
+    requireRoleAtLeast(request, UserRole.MANAGER);
     const tenantId = requireTenantId(request);
     const parsed = kpiTargetCreateSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -1247,7 +2032,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.patch("/kpi-targets/:id", async (request) => {
-    requireRoleAtLeast(request, UserRole.ADMIN);
+    requireRoleAtLeast(request, UserRole.MANAGER);
     const tenantId = requireTenantId(request);
     const params = request.params as { id: string };
     const parsed = kpiTargetUpdateSchema.safeParse(request.body);
@@ -1291,7 +2076,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.get("/kpi-targets", async (request) => {
-    requireRoleAtLeast(request, UserRole.ADMIN);
+    requireRoleAtLeast(request, UserRole.REP);
     const tenantId = requireTenantId(request);
     const parsed = kpiTargetListQuerySchema.safeParse(request.query);
     if (!parsed.success) {
@@ -1299,15 +2084,18 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const filters = parsed.data;
+
+    // Non-admins can only see KPI targets for users visible to them
+    const visibleIds = await listVisibleUserIds(request);
+    const visibilityScope = visibleIds.size > 0 ? [...visibleIds] : null;
+
     if (filters.userId) {
+      if (visibilityScope && !visibilityScope.includes(filters.userId)) {
+        throw app.httpErrors.forbidden("You do not have access to that user's KPI data.");
+      }
       const rep = await prisma.user.findFirst({
-        where: {
-          tenantId,
-          id: filters.userId
-        },
-        select: {
-          id: true
-        }
+        where: { tenantId, id: filters.userId },
+        select: { id: true }
       });
       if (!rep) {
         throw app.httpErrors.badRequest("Requested user does not belong to this tenant.");
@@ -1315,10 +2103,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     }
     if (filters.teamId) {
       const team = await prisma.team.findFirst({
-        where: {
-          id: filters.teamId,
-          tenantId
-        },
+        where: { id: filters.teamId, tenantId },
         select: { id: true }
       });
       if (!team) {
@@ -1329,11 +2114,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     let teamRepIds: string[] | undefined;
     if (filters.teamId) {
       const repsInTeam = await prisma.user.findMany({
-        where: {
-          tenantId,
-          teamId: filters.teamId,
-          role: UserRole.REP
-        },
+        where: { tenantId, teamId: filters.teamId, role: UserRole.REP },
         select: { id: true }
       });
       teamRepIds = repsInTeam.map((rep) => rep.id);
@@ -1348,11 +2129,18 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
           ? [filters.userId]
           : teamRepIds;
 
+    // Intersect explicit filters with visibility scope
+    const finalUserIds = visibilityScope
+      ? filteredUserIds
+        ? filteredUserIds.filter((id) => visibilityScope.includes(id))
+        : visibilityScope
+      : filteredUserIds;
+
     const rows = await prisma.salesKpiTarget.findMany({
       where: {
         tenantId,
         targetMonth: filters.targetMonth,
-        ...(filteredUserIds ? { userId: { in: filteredUserIds } } : {})
+        ...(finalUserIds ? { userId: { in: finalUserIds } } : {})
       },
       orderBy: [{ targetMonth: "desc" }, { createdAt: "desc" }]
     });
@@ -1369,6 +2157,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
             fullName: true,
             email: true,
             teamId: true,
+            avatarUrl: true,
             team: {
               select: {
                 id: true,
@@ -1393,10 +2182,34 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) {
       throw app.httpErrors.badRequest(parsed.error.message);
     }
+
+    const tenantForUpload = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { slug: true } });
+    if (!tenantForUpload) throw app.httpErrors.notFound("Tenant not found.");
+
+    let objectKey: string;
+    if (parsed.data.entityType) {
+      const folder = ENTITY_FOLDER[parsed.data.entityType];
+      if (!folder) {
+        throw app.httpErrors.badRequest(
+          `Unknown entityType "${parsed.data.entityType}". Valid values: ${Object.keys(ENTITY_FOLDER).join(", ")}.`
+        );
+      }
+      const safeName = (parsed.data.filename ?? "file")
+        .replace(/[^a-zA-Z0-9._-]/g, "_")
+        .replace(/_{2,}/g, "_")
+        .slice(0, 200);
+      const parts = [folder];
+      if (parsed.data.entityId) parts.push(parsed.data.entityId);
+      parts.push(`${Date.now()}_${safeName}`);
+      objectKey = parts.join("/");
+    } else {
+      objectKey = parsed.data.objectKey!;
+    }
+
     try {
       return await createR2PresignedUpload({
-        tenantId,
-        objectKeyOrRef: parsed.data.objectKey,
+        tenantSlug: tenantForUpload.slug,
+        objectKeyOrRef: objectKey,
         contentType: parsed.data.contentType,
         expiresInSeconds: parsed.data.expiresInSeconds
       });
@@ -1412,9 +2225,13 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) {
       throw app.httpErrors.badRequest(parsed.error.message);
     }
+
+    const tenantForDownload = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { slug: true } });
+    if (!tenantForDownload) throw app.httpErrors.notFound("Tenant not found.");
+
     try {
       return await createR2PresignedDownload({
-        tenantId,
+        tenantSlug: tenantForDownload.slug,
         objectKeyOrRef: parsed.data.objectKey,
         expiresInSeconds: parsed.data.expiresInSeconds
       });
@@ -1613,5 +2430,244 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       adminIpAllowlistEnabled: false,
       sso: { enabled: false, protocol: "SAML" }
     };
+  });
+
+  // ── Notification preferences (self) ─────────────────────────────────────
+  const notifPrefsSchema = z.object({
+    // Personal notifications (delivered to the user's connected channel)
+    dealFollowUp:    z.boolean().optional(),
+    visitRemind:     z.boolean().optional(),
+    // Group notifications (delivered to supervisors/managers/directors about their reps)
+    repCheckin:      z.boolean().optional(),
+    repCheckout:     z.boolean().optional(),
+    repDealWon:      z.boolean().optional(),
+    repDealLost:     z.boolean().optional(),
+    // Legacy keys kept for backward compatibility
+    dealAssigned:   z.boolean().optional(),
+    dealWon:        z.boolean().optional(),
+    dealLost:       z.boolean().optional(),
+    visitScheduled: z.boolean().optional(),
+    visitCheckin:   z.boolean().optional(),
+    visitCheckout:  z.boolean().optional(),
+    kpiAlert:       z.boolean().optional(),
+    weeklyDigest:   z.boolean().optional()
+  });
+
+  app.get("/users/me/notif-prefs", async (request) => {
+    requireAuth(request);
+    const userId = requireUserId(request);
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { notifPrefs: true } });
+    return (user?.notifPrefs ?? {}) as Record<string, boolean>;
+  });
+
+  app.put("/users/me/notif-prefs", async (request) => {
+    requireAuth(request);
+    const userId = requireUserId(request);
+    const parsed = notifPrefsSchema.safeParse(request.body ?? {});
+    if (!parsed.success) throw app.httpErrors.badRequest(parsed.error.message);
+    await prisma.user.update({ where: { id: userId }, data: { notifPrefs: parsed.data } });
+    return parsed.data;
+  });
+
+  // ── User profile read/edit (ADMIN only) ──────────────────────────────────
+  app.get("/users/:id", async (request) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+    const { id } = request.params as { id: string };
+    const user = await prisma.user.findFirst({
+      where: { id, tenantId },
+      select: {
+        id: true,
+        fullName: true,
+        email: true,
+        role: true,
+        teamId: true,
+        managerUserId: true,
+        createdAt: true,
+        manager: { select: { id: true, fullName: true } }
+      }
+    });
+    if (!user) throw app.httpErrors.notFound("User not found.");
+    return user;
+  });
+
+  const userEditSchema = z.object({
+    fullName:      z.string().min(1).max(120),
+    email:         z.string().email(),
+    role:          z.nativeEnum(UserRole),
+    managerUserId: z.preprocess(v => (v === "" ? null : v), z.string().min(1).nullable().optional())
+  });
+
+  app.patch("/users/:id", async (request) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+    const { id } = request.params as { id: string };
+
+    const existing = await prisma.user.findFirst({ where: { id, tenantId } });
+    if (!existing) throw app.httpErrors.notFound("User not found.");
+
+    const parsed = userEditSchema.safeParse(request.body);
+    if (!parsed.success) throw app.httpErrors.badRequest(parsed.error.message);
+
+    const { fullName, email, role, managerUserId } = parsed.data;
+
+    // Validate managerUserId belongs to same tenant if provided
+    if (managerUserId) {
+      const mgr = await prisma.user.findFirst({ where: { id: managerUserId, tenantId } });
+      if (!mgr) throw app.httpErrors.badRequest("Manager user not found in tenant.");
+      if (managerUserId === id) throw app.httpErrors.badRequest("User cannot be their own manager.");
+    }
+
+    return prisma.user.update({
+      where: { id },
+      data: { fullName, email, role, managerUserId: managerUserId ?? null },
+      select: { id: true, fullName: true, email: true, role: true, managerUserId: true }
+    });
+  });
+
+  // ── Cron Job management (Admin only) ─────────────────────────────────────────
+
+  const cronJobUpdateSchema = z.object({
+    cronExpr: z.string().trim().min(9).max(100),
+    isEnabled: z.boolean(),
+    timezone: z.string().trim().min(1).max(80).optional()
+  });
+
+  /** List all job definitions with their tenant config + last 10 runs. */
+  app.get("/cron-jobs", async (request) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+
+    // Read tenant timezone once for default seeding
+    const tenantRecord = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { timezone: true }
+    });
+    const tenantTz = tenantRecord?.timezone || "Asia/Bangkok";
+
+    const results = await Promise.all(
+      JOB_DEFS.map(async (def) => {
+        // Upsert default config if it doesn't exist yet, using tenant's own timezone
+        const config = await prisma.cronJobConfig.upsert({
+          where: { tenantId_jobKey: { tenantId, jobKey: def.key } },
+          update: {},
+          create: {
+            tenantId,
+            jobKey: def.key,
+            cronExpr: def.defaultCronExpr,
+            timezone: tenantTz,
+            isEnabled: true
+          }
+        });
+
+        const runs = await prisma.cronJobRun.findMany({
+          where: { tenantId, jobKey: def.key },
+          orderBy: { startedAt: "desc" },
+          take: 20
+        });
+
+        return {
+          jobKey: def.key,
+          label: def.label,
+          description: def.description,
+          defaultCronExpr: def.defaultCronExpr,
+          config: {
+            id: config.id,
+            cronExpr: config.cronExpr,
+            timezone: config.timezone,
+            isEnabled: config.isEnabled,
+            updatedAt: config.updatedAt
+          },
+          runs
+        };
+      })
+    );
+
+    return results;
+  });
+
+  /** Update schedule config for a single job. */
+  app.put("/cron-jobs/:jobKey", async (request) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+    const { jobKey } = request.params as { jobKey: string };
+
+    if (!JOB_DEFS.find(d => d.key === jobKey)) {
+      throw app.httpErrors.notFound("Unknown job key.");
+    }
+
+    const parsed = cronJobUpdateSchema.safeParse(request.body);
+    if (!parsed.success) throw app.httpErrors.badRequest(parsed.error.message);
+
+    // Validate cron expression using node-cron
+    const cron = await import("node-cron");
+    if (!cron.validate(parsed.data.cronExpr)) {
+      throw app.httpErrors.badRequest(`Invalid cron expression: "${parsed.data.cronExpr}"`);
+    }
+
+    // Use tenant's timezone as default when caller doesn't supply one
+    const tenantForUpdate = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { timezone: true }
+    });
+    const effectiveTz = parsed.data.timezone ?? tenantForUpdate?.timezone ?? "Asia/Bangkok";
+
+    const config = await prisma.cronJobConfig.upsert({
+      where: { tenantId_jobKey: { tenantId, jobKey } },
+      update: {
+        cronExpr: parsed.data.cronExpr,
+        isEnabled: parsed.data.isEnabled,
+        timezone: effectiveTz
+      },
+      create: {
+        tenantId,
+        jobKey,
+        cronExpr: parsed.data.cronExpr,
+        isEnabled: parsed.data.isEnabled,
+        timezone: effectiveTz
+      }
+    });
+
+    // Hot-reload the scheduled task
+    await rescheduleJob(tenantId, jobKey);
+
+    return config;
+  });
+
+  /** Manually trigger a job right now. */
+  app.post("/cron-jobs/:jobKey/trigger", async (request, reply) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+    const { jobKey } = request.params as { jobKey: string };
+
+    if (!JOB_DEFS.find(d => d.key === jobKey)) {
+      throw app.httpErrors.notFound("Unknown job key.");
+    }
+
+    const runId = await runJobNow(tenantId, jobKey);
+    return reply.code(202).send({ runId, message: "Job triggered. Check run history for results." });
+  });
+
+  /** Paginated run history for a job. */
+  app.get("/cron-jobs/:jobKey/runs", async (request) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+    const { jobKey } = request.params as { jobKey: string };
+
+    const query = request.query as { limit?: string; offset?: string };
+    const limit = Math.min(parseInt(query.limit ?? "50", 10), 200);
+    const offset = parseInt(query.offset ?? "0", 10);
+
+    const [runs, total] = await Promise.all([
+      prisma.cronJobRun.findMany({
+        where: { tenantId, jobKey },
+        orderBy: { startedAt: "desc" },
+        take: limit,
+        skip: offset
+      }),
+      prisma.cronJobRun.count({ where: { tenantId, jobKey } })
+    ]);
+
+    return { runs, total, limit, offset };
   });
 };

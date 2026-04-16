@@ -2,6 +2,7 @@ import {
   AiVisitRecommendationSourceType,
   AiVisitRecommendationStatus,
   DealStatus,
+  IntegrationPlatform,
   JobStatus,
   Prisma,
   UserRole,
@@ -12,9 +13,12 @@ import type { FastifyPluginAsync, FastifyRequest } from "fastify";
 import { extname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import Anthropic from "@anthropic-ai/sdk";
 import { requireTenantId, requireUserId } from "../../lib/http.js";
 import { prisma } from "../../lib/prisma.js";
 import { uploadBufferToR2 } from "../../lib/r2-storage.js";
+import { config } from "../../config.js";
+import { convertToMp4, isFfmpegAvailable } from "../../lib/audio-convert.js";
 
 const createRecommendationRunSchema = z
   .object({
@@ -41,7 +45,7 @@ const aiAnalysisFilterSchema = z
 
 const jsonVoiceNoteCreateSchema = z
   .object({
-    entityType: z.enum(["VISIT", "DEAL"]),
+    entityType: z.enum(["VISIT", "DEAL", "QUOTATION"]),
     entityId: z.string().trim().min(1),
     audioObjectKey: z.string().trim().min(1)
   })
@@ -49,8 +53,8 @@ const jsonVoiceNoteCreateSchema = z
 
 const voiceNoteConfirmSchema = z
   .object({
-    transcriptText: z.string().trim().min(1).optional(),
-    summaryText: z.string().trim().min(1).optional()
+    transcriptText: z.preprocess(v => (v === "" ? undefined : v), z.string().trim().min(1).optional()),
+    summaryText: z.preprocess(v => (v === "" ? undefined : v), z.string().trim().min(1).optional())
   })
   .strict();
 
@@ -91,17 +95,24 @@ function resolveAudioFileExtension(fileName: string, mimeType: string): string {
 async function createAudioObjectFromMultipart(input: {
   request: FastifyRequest;
   tenantId: string;
+  tenantSlug: string;
   app: Parameters<FastifyPluginAsync>[0];
 }): Promise<{
-  entityType: "VISIT" | "DEAL";
+  entityType: "VISIT" | "DEAL" | "QUOTATION";
   entityId: string;
   audioObjectKey: string;
+  audioBuffer: Buffer;
+  audioMimeType: string;
+  transcriptText: string | null;
+  outputLang: "TH" | "EN";
 }> {
-  let entityType: "VISIT" | "DEAL" | null = null;
+  let entityType: "VISIT" | "DEAL" | "QUOTATION" | null = null;
   let entityId: string | null = null;
   let audioFileBuffer: Buffer | null = null;
   let audioFileName = "voice-note";
   let audioMimeType = "application/octet-stream";
+  let transcriptText: string | null = null;
+  let outputLang: "TH" | "EN" = "TH";
 
   for await (const part of input.request.parts()) {
     if (part.type === "file") {
@@ -112,7 +123,7 @@ async function createAudioObjectFromMultipart(input: {
     }
 
     if (part.fieldname === "entityType") {
-      if (part.value === "VISIT" || part.value === "DEAL") {
+      if (part.value === "VISIT" || part.value === "DEAL" || part.value === "QUOTATION") {
         entityType = part.value;
       }
       continue;
@@ -123,6 +134,19 @@ async function createAudioObjectFromMultipart(input: {
       if (normalized.length > 0) {
         entityId = normalized;
       }
+      continue;
+    }
+
+    if (part.fieldname === "transcriptText") {
+      const normalized = String(part.value ?? "").trim();
+      if (normalized.length > 0) {
+        transcriptText = normalized;
+      }
+      continue;
+    }
+
+    if (part.fieldname === "outputLang") {
+      if (part.value === "EN") outputLang = "EN";
     }
   }
 
@@ -133,15 +157,31 @@ async function createAudioObjectFromMultipart(input: {
     throw input.app.httpErrors.badRequest("Multipart upload requires a non-empty audio file.");
   }
 
-  const extension = resolveAudioFileExtension(audioFileName, audioMimeType);
-  const storedFileName = `${Date.now()}-${randomUUID()}${extension}`;
+  // Convert to MP4 (AAC) for universal playback — handles .webm, .mov, .wav, etc.
+  let uploadBuffer = audioFileBuffer;
+  let uploadMimeType = audioMimeType;
+  let uploadExtension = resolveAudioFileExtension(audioFileName, audioMimeType);
+
+  if (await isFfmpegAvailable()) {
+    try {
+      uploadBuffer = await convertToMp4(audioFileBuffer, uploadExtension);
+      uploadMimeType = "audio/mp4";
+      uploadExtension = ".mp4";
+    } catch (err) {
+      // Conversion failed — fall back to storing the original format
+      input.app.log.warn({ err }, "ffmpeg conversion failed, storing original audio");
+    }
+  }
+
+  const storedFileName = `${Date.now()}-${randomUUID()}${uploadExtension}`;
   let stored: { objectKey: string; objectRef: string };
   try {
+    const entityFolder = entityType === "VISIT" ? "visits" : entityType === "QUOTATION" ? "quotations" : "deals";
     stored = await uploadBufferToR2({
-      tenantId: input.tenantId,
-      objectKeyOrRef: `voice-notes/${entityType.toLowerCase()}/${storedFileName}`,
-      contentType: audioMimeType,
-      data: audioFileBuffer
+      tenantSlug: input.tenantSlug,
+      objectKeyOrRef: `${entityFolder}/${entityId}/${storedFileName}`,
+      contentType: uploadMimeType,
+      data: uploadBuffer
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown upload failure.";
@@ -151,20 +191,67 @@ async function createAudioObjectFromMultipart(input: {
   return {
     entityType,
     entityId,
-    audioObjectKey: stored.objectRef
+    audioObjectKey: stored.objectRef,
+    audioBuffer: audioFileBuffer,
+    audioMimeType,
+    transcriptText,
+    outputLang
   };
 }
 
-function buildAutoTranscript(input: {
-  entityType: "VISIT" | "DEAL";
-  entityId: string;
-}): { transcriptText: string; summaryText: string; confidenceScore: number } {
-  const entityLabel = input.entityType === "VISIT" ? "visit" : "deal";
-  return {
-    transcriptText: `Auto-transcribed voice note for ${entityLabel} ${input.entityId}. Please review and edit before confirmation.`,
-    summaryText: `Voice note summary prepared for ${entityLabel} ${input.entityId}. Confirm to update the progress log.`,
-    confidenceScore: 0.78
-  };
+async function resolveAnthropicApiKey(tenantId: string): Promise<string | null> {
+  const cred = await prisma.tenantIntegrationCredential.findFirst({
+    where: {
+      tenantId,
+      platform: IntegrationPlatform.ANTHROPIC,
+      status: "ENABLED",
+      apiKeyRef: { not: null }
+    },
+    select: { apiKeyRef: true }
+  });
+  if (cred?.apiKeyRef) return cred.apiKeyRef;
+  return config.ANTHROPIC_API_KEY ?? null;
+}
+
+async function summarizeTranscript(
+  transcriptText: string,
+  apiKey: string,
+  outputLang: "TH" | "EN" = "TH"
+): Promise<{ transcriptText: string; summaryText: string; confidenceScore: number }> {
+  const client = new Anthropic({ apiKey });
+
+  const langInstruction = outputLang === "TH"
+    ? "Write the summary in Thai (ภาษาไทย)."
+    : "Write the summary in English.";
+
+  const response = await client.messages.create({
+    model: "claude-haiku-4-5-20251001",
+    max_tokens: 512,
+    messages: [
+      {
+        role: "user",
+        content: `You are a CRM assistant. Summarize the following sales call transcript as 3-5 concise bullet points. Focus on key outcomes, customer needs, objections, and next steps. ${langInstruction} Respond ONLY with valid JSON: {"summary": "• point 1\\n• point 2\\n• point 3"}\n\nTranscript:\n${transcriptText}`
+      }
+    ]
+  });
+
+  const firstBlock = response.content[0];
+  const rawText = firstBlock?.type === "text" ? firstBlock.text : "";
+  try {
+    const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+    const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
+    return {
+      transcriptText,
+      summaryText: parsed.summary || rawText || "No summary generated.",
+      confidenceScore: 0.9
+    };
+  } catch {
+    return {
+      transcriptText: rawText || "Transcription failed.",
+      summaryText: "No summary generated.",
+      confidenceScore: 0.5
+    };
+  }
 }
 
 function normalizeRecommendation(row: {
@@ -922,41 +1009,68 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
     };
   });
 
+  app.get("/ai/status", async (request) => {
+    const tenantId = requireTenantId(request);
+    const apiKey = await resolveAnthropicApiKey(tenantId);
+    return { transcriptionAvailable: Boolean(apiKey) };
+  });
+
   app.post("/voice-notes", async (request, reply) => {
     const tenantId = requireTenantId(request);
     const requestedById = requireUserId(request);
-    const payload = request.isMultipart()
-      ? await createAudioObjectFromMultipart({ request, tenantId, app })
-      : (() => {
-          const parsed = jsonVoiceNoteCreateSchema.safeParse(request.body ?? {});
-          if (!parsed.success) {
-            throw app.httpErrors.badRequest(parsed.error.message);
-          }
-          return parsed.data;
-        })();
+    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { slug: true } });
+    if (!tenant) throw app.httpErrors.notFound("Tenant not found.");
+    let audioBuffer: Buffer | null = null;
+    let audioMimeType = "audio/webm";
+    let payload: { entityType: "VISIT" | "DEAL" | "QUOTATION"; entityId: string; audioObjectKey: string };
+    let multipartResult: Awaited<ReturnType<typeof createAudioObjectFromMultipart>> | null = null;
+
+    if (request.isMultipart()) {
+      multipartResult = await createAudioObjectFromMultipart({ request, tenantId, tenantSlug: tenant.slug, app });
+      audioBuffer = multipartResult.audioBuffer;
+      audioMimeType = multipartResult.audioMimeType;
+      payload = {
+        entityType: multipartResult.entityType,
+        entityId: multipartResult.entityId,
+        audioObjectKey: multipartResult.audioObjectKey
+      };
+    } else {
+      const parsed = jsonVoiceNoteCreateSchema.safeParse(request.body ?? {});
+      if (!parsed.success) {
+        throw app.httpErrors.badRequest(parsed.error.message);
+      }
+      payload = parsed.data;
+    }
 
     if (payload.entityType === "VISIT") {
       const visit = await prisma.visit.findFirst({
         where: { id: payload.entityId, tenantId },
         select: { id: true }
       });
-      if (!visit) {
-        throw app.httpErrors.notFound("Visit not found in tenant.");
-      }
+      if (!visit) throw app.httpErrors.notFound("Visit not found in tenant.");
+    } else if (payload.entityType === "QUOTATION") {
+      const quotation = await prisma.quotation.findFirst({
+        where: { id: payload.entityId, tenantId },
+        select: { id: true }
+      });
+      if (!quotation) throw app.httpErrors.notFound("Quotation not found in tenant.");
     } else {
       const deal = await prisma.deal.findFirst({
         where: { id: payload.entityId, tenantId },
         select: { id: true }
       });
-      if (!deal) {
-        throw app.httpErrors.notFound("Deal not found in tenant.");
-      }
+      if (!deal) throw app.httpErrors.notFound("Deal not found in tenant.");
     }
 
-    const transcript = buildAutoTranscript({
-      entityType: payload.entityType,
-      entityId: payload.entityId
-    });
+    const anthropicApiKey = await resolveAnthropicApiKey(tenantId);
+    const browserTranscript = multipartResult?.transcriptText ?? null;
+    const outputLang = multipartResult?.outputLang ?? "TH";
+    const transcript =
+      browserTranscript && anthropicApiKey
+        ? await summarizeTranscript(browserTranscript, anthropicApiKey, outputLang)
+        : browserTranscript
+          ? { transcriptText: browserTranscript, summaryText: "", confidenceScore: 0 }
+          : { transcriptText: "", summaryText: "", confidenceScore: 0 };
 
     const created = await prisma.voiceNoteJob.create({
       data: {
@@ -1006,6 +1120,30 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
           ? "rejected"
           : "pending"
     };
+  });
+
+  app.get("/voice-notes/:jobId/audio-url", async (request) => {
+    const tenantId = requireTenantId(request);
+    const params = request.params as { jobId: string };
+    const job = await prisma.voiceNoteJob.findUnique({
+      where: { id: params.jobId },
+      select: { id: true, tenantId: true, audioObjectKey: true }
+    });
+    if (!job || job.tenantId !== tenantId) {
+      throw app.httpErrors.notFound("Voice note job not found.");
+    }
+    if (!job.audioObjectKey || job.audioObjectKey.startsWith("dev://")) {
+      return { url: null, reason: "Audio not available in local dev mode." };
+    }
+    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { slug: true } });
+    if (!tenant) throw app.httpErrors.notFound("Tenant not found.");
+    const { createR2PresignedDownload } = await import("../../lib/r2-storage.js");
+    const { downloadUrl } = await createR2PresignedDownload({
+      tenantSlug: tenant.slug,
+      objectKeyOrRef: job.audioObjectKey,
+      expiresInSeconds: 3600
+    });
+    return { url: downloadUrl };
   });
 
   app.post("/voice-notes/:jobId/confirm", async (request) => {
@@ -1106,6 +1244,173 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
       transcript: result.transcript,
       progressLogUpdate: result.progressLogUpdate
     };
+  });
+
+  // ── Lost-deals AI analysis ───────────────────────────────────────────────
+  app.get("/ai/lost-deals-analysis", async (request) => {
+    const tenantId = requireTenantId(request);
+    const query = request.query as {
+      dateFrom?: string;
+      dateTo?: string;
+      repId?: string;
+    };
+
+    const where = {
+      tenantId,
+      status: DealStatus.LOST,
+      lostNote: { not: null as null },
+      closedAt: undefined as { gte?: Date; lte?: Date } | undefined,
+      ownerId: undefined as string | undefined
+    };
+    if (query.dateFrom) where.closedAt = { ...where.closedAt, gte: new Date(query.dateFrom) };
+    if (query.dateTo)   where.closedAt = { ...where.closedAt, lte: new Date(query.dateTo)   };
+    if (query.repId)    where.ownerId  = query.repId;
+
+    const deals = await prisma.deal.findMany({
+      where,
+      select: {
+        id: true, dealNo: true, dealName: true, estimatedValue: true,
+        closedAt: true, lostNote: true,
+        customer: { select: { name: true, customerCode: true } },
+        owner:    { select: { fullName: true } }
+      },
+      orderBy: { closedAt: "desc" }
+    });
+
+    if (!deals.length) {
+      return { dealCount: 0, analysis: null, message: "No lost deals with notes found for the selected period." };
+    }
+
+    // Find the first enabled AI credential (ANTHROPIC, GEMINI, OPENAI) or fall back to env
+    const AI_PLATFORMS_ORDERED = [
+      IntegrationPlatform.ANTHROPIC,
+      IntegrationPlatform.GEMINI,
+      IntegrationPlatform.OPENAI
+    ] as const;
+    type AiPlatform = (typeof AI_PLATFORMS_ORDERED)[number];
+
+    const enabledAiCred = await prisma.tenantIntegrationCredential.findFirst({
+      where: {
+        tenantId,
+        platform: { in: [...AI_PLATFORMS_ORDERED] },
+        status: "ENABLED",
+        apiKeyRef: { not: null }
+      }
+    });
+
+    let aiPlatform: AiPlatform = IntegrationPlatform.ANTHROPIC;
+    let apiKey = "";
+
+    if (enabledAiCred?.apiKeyRef) {
+      aiPlatform = enabledAiCred.platform as AiPlatform;
+      apiKey = enabledAiCred.apiKeyRef;
+    } else {
+      // Fall back to env variable (legacy)
+      apiKey = process.env.ANTHROPIC_API_KEY ?? "";
+      aiPlatform = IntegrationPlatform.ANTHROPIC;
+    }
+
+    if (!apiKey) {
+      return { configured: false, dealCount: 0, analysis: null };
+    }
+
+    const notesBlock = deals
+      .map((d, i) => {
+        const closed = d.closedAt ? new Date(d.closedAt).toLocaleDateString("en-GB") : "unknown";
+        const value  = d.estimatedValue.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+        return `[${i + 1}] Deal: "${d.dealName}" | Rep: ${d.owner.fullName} | Customer: ${d.customer.name} | Value: ${value} | Lost: ${closed}\nReason: ${d.lostNote}`;
+      })
+      .join("\n\n");
+
+    const prompt = `You are a CRM sales analyst. Analyze the following ${deals.length} lost deal notes and return structured JSON insights.
+
+LOST DEAL NOTES:
+${notesBlock}
+
+Return ONLY valid JSON with this structure (no prose, no markdown fences):
+{
+  "summary": "2-3 sentence executive summary of why deals are being lost",
+  "themes": [
+    {
+      "name": "Theme name",
+      "count": <integer>,
+      "percentage": <0-100>,
+      "description": "What this theme means",
+      "examples": ["short direct quote from note 1", "short direct quote from note 2"]
+    }
+  ],
+  "trends": ["Observation about a pattern or change over time"],
+  "recommendations": [
+    {
+      "priority": "high",
+      "title": "Short action title",
+      "detail": "Concrete action the team can take"
+    }
+  ]
+}
+
+Rules:
+- themes: identify 3-7 distinct themes; a single deal can belong to multiple themes
+- examples: pick verbatim short phrases from the notes, not paraphrases
+- recommendations: at least 3, ordered high → medium → low priority
+- Return ONLY the JSON object, nothing else`;
+
+    async function callAiProvider(platform: AiPlatform, key: string, userPrompt: string): Promise<string> {
+      if (platform === IntegrationPlatform.GEMINI) {
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(key)}`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ contents: [{ parts: [{ text: userPrompt }] }] })
+          }
+        );
+        if (!res.ok) {
+          const err = await res.text().catch(() => "");
+          throw app.httpErrors.badGateway(`Gemini error: ${res.status} ${err.slice(0, 120)}`);
+        }
+        const body = await res.json() as { candidates: Array<{ content: { parts: Array<{ text: string }> } }> };
+        return body.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+      }
+
+      if (platform === IntegrationPlatform.OPENAI) {
+        const res = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${key}`, "content-type": "application/json" },
+          body: JSON.stringify({ model: "gpt-4o-mini", max_tokens: 2048, messages: [{ role: "user", content: userPrompt }] })
+        });
+        if (!res.ok) {
+          const err = await res.text().catch(() => "");
+          throw app.httpErrors.badGateway(`OpenAI error: ${res.status} ${err.slice(0, 120)}`);
+        }
+        const body = await res.json() as { choices: Array<{ message: { content: string } }> };
+        return body.choices?.[0]?.message?.content ?? "";
+      }
+
+      // Default: Anthropic
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 2048, messages: [{ role: "user", content: userPrompt }] })
+      });
+      if (!res.ok) {
+        const err = await res.text().catch(() => "");
+        throw app.httpErrors.badGateway(`Anthropic error: ${res.status} ${err.slice(0, 120)}`);
+      }
+      const body = await res.json() as { content: Array<{ text: string }> };
+      return body.content?.[0]?.text ?? "";
+    }
+
+    const rawText = await callAiProvider(aiPlatform, apiKey, prompt);
+
+    let analysis: unknown;
+    try {
+      analysis = JSON.parse(rawText);
+    } catch {
+      analysis = { summary: rawText, themes: [], trends: [], recommendations: [] };
+    }
+
+    return { dealCount: deals.length, analysis };
   });
 
   app.post("/voice-notes/:jobId/reject", async (request) => {

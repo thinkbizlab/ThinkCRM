@@ -8,7 +8,9 @@ const monthQuerySchema = z.object({
   month: z
     .string()
     .regex(/^\d{4}-\d{2}$/)
-    .optional()
+    .optional(),
+  repId: z.string().optional(),
+  teamId: z.string().optional()
 });
 
 function resolveMonthWindow(month?: string): { monthKey: string; dateFrom: Date; dateTo: Date } {
@@ -80,6 +82,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.badRequest("Invalid month query. Expected YYYY-MM.");
     }
     const { monthKey, dateFrom, dateTo } = resolveMonthWindow(parsedQuery.data.month);
+    const { repId, teamId } = parsedQuery.data;
     const requesterId = request.requestContext.userId;
     const requesterRole = request.requestContext.role;
     if (!requesterId) {
@@ -94,7 +97,8 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
           role: true,
           managerUserId: true,
           teamId: true,
-          fullName: true
+          fullName: true,
+          avatarUrl: true
         }
       }),
       prisma.team.findMany({
@@ -104,6 +108,19 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
     ]);
 
     const visibleUserIds = resolveVisibleUserIds(users, requesterId, requesterRole ?? undefined);
+    // Narrow scope to a specific team if requested
+    if (teamId) {
+      for (const id of [...visibleUserIds]) {
+        const user = users.find((u) => u.id === id);
+        if (!user || user.teamId !== teamId) visibleUserIds.delete(id);
+      }
+    }
+    // Narrow scope to a specific rep if requested (must be within the caller's visible set)
+    if (repId && visibleUserIds.has(repId)) {
+      for (const id of [...visibleUserIds]) {
+        if (id !== repId) visibleUserIds.delete(id);
+      }
+    }
     const visibleUserIdList = [...visibleUserIds];
 
     const [deals, visits, targets] = await Promise.all([
@@ -170,8 +187,9 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
       return acc;
     }, {});
 
-    const teamNameById = new Map(teams.map((team) => [team.id, team.teamName]));
-    const userNameById = new Map(users.map((user) => [user.id, user.fullName]));
+    const teamNameById  = new Map(teams.map((team) => [team.id, team.teamName]));
+    const userNameById  = new Map(users.map((user) => [user.id, user.fullName]));
+    const userAvatarById = new Map(users.map((user) => [user.id, user.avatarUrl ?? null]));
 
     const targetVsActual = scopedTargets.map((target) => {
       const actual = actualByUser[target.userId] ?? { visits: 0, newDealValue: 0, revenue: 0, teamId: null };
@@ -182,6 +200,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
       return {
         userId: target.userId,
         userName: userNameById.get(target.userId) ?? target.userId,
+        avatarUrl: userAvatarById.get(target.userId) ?? null,
         teamId: actual.teamId,
         teamName: actual.teamId ? (teamNameById.get(actual.teamId) ?? "Unassigned Team") : "Unassigned Team",
         month: target.targetMonth,
@@ -277,6 +296,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
         return {
           userId: entry.userId,
           userName: entry.userName,
+          avatarUrl: entry.avatarUrl,
           teamName: entry.teamName,
           score,
           badge,

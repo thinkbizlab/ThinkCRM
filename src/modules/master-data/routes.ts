@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
-import { CustomFieldDataType, EntityType, Prisma, UserRole } from "@prisma/client";
+import { CustomerType, CustomFieldDataType, EntityType, Prisma, UserRole } from "@prisma/client";
 import { z } from "zod";
 import { listVisibleUserIds, requireRoleAtLeast, requireTenantId, requireUserId } from "../../lib/http.js";
 import { writeEntityChangelog } from "../../lib/changelog.js";
@@ -65,10 +65,13 @@ const paymentTermUpdateSchema = paymentTermSchema.partial().extend({
 const customerSchema = z.object({
   customerCode: z.string().min(2).max(40),
   name: z.string().min(2).max(200),
+  customerType: z.nativeEnum(CustomerType).optional(),
+  taxId: z.string().max(20).optional(),
   defaultTermId: z.string().min(1),
   ownerId: z.string().optional(),
   siteLat: z.number().min(-90).max(90).optional(),
   siteLng: z.number().min(-180).max(180).optional(),
+  externalRef: z.string().trim().max(100).optional(),
   customFields: customFieldValuesSchema.optional()
 });
 const customerUpdateSchema = customerSchema.partial().extend({
@@ -79,12 +82,16 @@ const itemSchema = z.object({
   itemCode: z.string().min(1).max(40),
   name: z.string().min(2).max(200),
   unitPrice: z.number().nonnegative(),
+  externalRef: z.string().trim().max(100).optional(),
   customFields: customFieldValuesSchema.optional()
 });
 const itemUpdateSchema = itemSchema.partial();
 
 const customerAddressSchema = z.object({
   addressLine1: z.string().min(1),
+  subDistrict: z.string().max(120).optional(),
+  district: z.string().max(120).optional(),
+  province: z.string().max(120).optional(),
   city: z.string().optional(),
   state: z.string().optional(),
   country: z.string().optional(),
@@ -95,9 +102,16 @@ const customerAddressSchema = z.object({
 
 const customerContactSchema = z.object({
   name: z.string().min(1),
-  position: z.string().min(1),
+  position: z.string().min(1).max(120),
+  tel: z.string().max(30).optional(),
+  email: z.string().email().optional().or(z.literal("")),
+  lineId: z.string().max(60).optional(),
+  whatsapp: z.string().max(30).optional(),
   customFields: customFieldValuesSchema.optional()
-});
+}).refine(
+  (d) => !!(d.tel?.trim() || d.email?.trim() || d.lineId?.trim() || d.whatsapp?.trim()),
+  { message: "At least one contact channel (Tel, Email, LINE ID, or WhatsApp) is required." }
+);
 
 function resolveCustomFieldEntityType(raw: string, app: Parameters<FastifyPluginAsync>[0]): EntityType {
   const normalized = raw.trim().toLowerCase();
@@ -380,9 +394,18 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
 
   app.get("/customers", async (request) => {
     const tenantId = requireTenantId(request);
+    const requesterId = requireUserId(request);
     const visibleUserIdList = [...(await listVisibleUserIds(request))];
+    const query = request.query as { scope?: string };
+    // scope=mine → only current user's customers (default)
+    // scope=team → all visible hierarchy
+    // scope=all  → same as team (further expansion for ADMIN)
+    const ownerFilter =
+      query.scope === "team" || query.scope === "all"
+        ? { in: visibleUserIdList }
+        : requesterId;
     return prisma.customer.findMany({
-      where: { tenantId, ownerId: { in: visibleUserIdList } },
+      where: { tenantId, ownerId: ownerFilter },
       include: {
         addresses: true,
         contacts: true,
@@ -396,8 +419,12 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     const tenantId = requireTenantId(request);
     const visibleUserIdList = [...(await listVisibleUserIds(request))];
     const params = request.params as { id: string };
+    const isCode = /^[A-Za-z]+-\d+$/.test(params.id);
+    const where = isCode
+      ? { customerCode: params.id, tenantId, ownerId: { in: visibleUserIdList } }
+      : { id: params.id, tenantId, ownerId: { in: visibleUserIdList } };
     const customer = await prisma.customer.findFirst({
-      where: { id: params.id, tenantId, ownerId: { in: visibleUserIdList } },
+      where,
       include: {
         addresses: true,
         contacts: true,
@@ -431,6 +458,18 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.forbidden("customer owner must be within your hierarchy scope.");
     }
 
+    if (parsed.data.taxId) {
+      const taxIdDuplicate = await prisma.customer.findFirst({
+        where: { tenantId, taxId: parsed.data.taxId },
+        select: { customerCode: true, name: true }
+      });
+      if (taxIdDuplicate) {
+        throw app.httpErrors.conflict(
+          `Tax ID "${parsed.data.taxId}" is already registered to customer "${taxIdDuplicate.name}" (${taxIdDuplicate.customerCode}).`
+        );
+      }
+    }
+
     const definitions = await prisma.customFieldDefinition.findMany({
       where: { tenantId, entityType: EntityType.CUSTOMER }
     });
@@ -441,6 +480,8 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
           tenantId,
           customerCode: parsed.data.customerCode,
           name: parsed.data.name,
+          customerType: parsed.data.customerType ?? CustomerType.COMPANY,
+          taxId: parsed.data.taxId,
           defaultTermId: parsed.data.defaultTermId,
           ownerId,
           customFields
@@ -486,6 +527,19 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     if (!paymentTerm) {
       throw app.httpErrors.badRequest("defaultTermId is invalid or inactive for this tenant.");
     }
+
+    if (parsed.data.taxId) {
+      const taxIdDuplicate = await prisma.customer.findFirst({
+        where: { tenantId, taxId: parsed.data.taxId, id: { not: params.id } },
+        select: { customerCode: true, name: true }
+      });
+      if (taxIdDuplicate) {
+        throw app.httpErrors.conflict(
+          `Tax ID "${parsed.data.taxId}" is already registered to customer "${taxIdDuplicate.name}" (${taxIdDuplicate.customerCode}).`
+        );
+      }
+    }
+
     let customFields: Prisma.InputJsonValue | undefined;
     if (parsed.data.customFields !== undefined) {
       const definitions = await prisma.customFieldDefinition.findMany({
@@ -502,6 +556,8 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
         data: {
           customerCode: parsed.data.customerCode,
           name: parsed.data.name,
+          customerType: parsed.data.customerType,
+          taxId: parsed.data.taxId,
           defaultTermId: parsed.data.defaultTermId,
           ownerId: parsed.data.ownerId,
           customFields
@@ -548,6 +604,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/customers/:id/addresses", async (request, reply) => {
     const tenantId = requireTenantId(request);
+    const changedById = requireUserId(request);
     const visibleUserIdList = [...(await listVisibleUserIds(request))];
     const params = request.params as { id: string };
     const parsed = customerAddressSchema.safeParse(request.body);
@@ -561,29 +618,45 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       visibleUserIds: visibleUserIdList
     });
 
-    const existing = await prisma.customerAddress.count({
+    const existingCount = await prisma.customerAddress.count({
       where: { customerId: params.id }
     });
 
-    const created = await prisma.customerAddress.create({
-      data: {
-        customerId: params.id,
-        addressLine1: parsed.data.addressLine1,
-        city: parsed.data.city,
-        state: parsed.data.state,
-        country: parsed.data.country,
-        postalCode: parsed.data.postalCode,
-        latitude: parsed.data.latitude,
-        longitude: parsed.data.longitude,
-        isDefaultBilling: existing === 0,
-        isDefaultShipping: existing === 0
-      }
+    const created = await prisma.$transaction(async (tx) => {
+      const row = await tx.customerAddress.create({
+        data: {
+          customerId: params.id,
+          addressLine1: parsed.data.addressLine1,
+          subDistrict: parsed.data.subDistrict,
+          district: parsed.data.district,
+          province: parsed.data.province,
+          city: parsed.data.city,
+          state: parsed.data.state,
+          country: parsed.data.country,
+          postalCode: parsed.data.postalCode,
+          latitude: parsed.data.latitude,
+          longitude: parsed.data.longitude,
+          isDefaultBilling: existingCount === 0,
+          isDefaultShipping: existingCount === 0
+        }
+      });
+      await writeEntityChangelog({
+        db: tx,
+        tenantId,
+        entityType: EntityType.CUSTOMER,
+        entityId: params.id,
+        action: "CREATE",
+        changedById,
+        after: row
+      });
+      return row;
     });
     return reply.code(201).send(created);
   });
 
   app.post("/customers/:id/contacts", async (request, reply) => {
     const tenantId = requireTenantId(request);
+    const changedById = requireUserId(request);
     const visibleUserIdList = [...(await listVisibleUserIds(request))];
     const params = request.params as { id: string };
     const parsed = customerContactSchema.safeParse(request.body);
@@ -596,13 +669,29 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       visibleUserIds: visibleUserIdList
     });
 
-    const created = await prisma.customerContact.create({
-      data: {
-        customerId: params.id,
-        name: parsed.data.name,
-        position: parsed.data.position,
-        customFields: (parsed.data.customFields ?? undefined) as Prisma.InputJsonValue | undefined
-      }
+    const created = await prisma.$transaction(async (tx) => {
+      const row = await tx.customerContact.create({
+        data: {
+          customerId: params.id,
+          name: parsed.data.name,
+          position: parsed.data.position,
+          tel: parsed.data.tel,
+          email: parsed.data.email || null,
+          lineId: parsed.data.lineId,
+          whatsapp: parsed.data.whatsapp,
+          customFields: (parsed.data.customFields ?? undefined) as Prisma.InputJsonValue | undefined
+        }
+      });
+      await writeEntityChangelog({
+        db: tx,
+        tenantId,
+        entityType: EntityType.CUSTOMER,
+        entityId: params.id,
+        action: "CREATE",
+        changedById,
+        after: row
+      });
+      return row;
     });
     return reply.code(201).send(created);
   });
@@ -756,5 +845,105 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     }
     await prisma.paymentTerm.delete({ where: { id: params.id } });
     return reply.code(204).send();
+  });
+
+  // ── DBD Datawarehouse proxy ──────────────────────────────────────────────
+  // Proxies requests to Thailand's DBD company registry to avoid CORS.
+  // Set DBD_API_KEY env var if the target API requires one.
+  app.get("/dbd/company/:taxId", async (request) => {
+    requireTenantId(request);
+    const { taxId } = request.params as { taxId: string };
+    if (!/^\d{13}$/.test(taxId)) {
+      throw app.httpErrors.badRequest("Tax ID must be exactly 13 digits.");
+    }
+
+    const baseUrl =
+      process.env["DBD_API_URL"] ??
+      "https://datawarehouse.dbd.go.th/api/juristic/";
+    const apiKey = process.env["DBD_API_KEY"] ?? "";
+
+    try {
+      const headers: Record<string, string> = { Accept: "application/json" };
+      if (apiKey) headers["api_key"] = apiKey;
+
+      const res = await fetch(`${baseUrl}${taxId}`, { headers });
+      if (!res.ok) {
+        if (res.status === 404) throw app.httpErrors.notFound("Company not found in DBD registry.");
+        throw app.httpErrors.badGateway(`DBD API returned ${res.status}.`);
+      }
+      const data = await res.json() as Record<string, unknown>;
+      // Normalise the DBD response into a stable shape regardless of API version
+      return {
+        taxId,
+        name: data["juristicName"] ?? data["name"] ?? data["juristic_name"] ?? null,
+        nameEn: data["juristicNameEn"] ?? data["name_en"] ?? null,
+        addressLine1: data["address"] ?? data["addressLine1"] ?? null,
+        province: data["province"] ?? null,
+        postalCode: data["postcode"] ?? data["postal_code"] ?? null,
+        status: data["statusName"] ?? data["status"] ?? null,
+        registeredCapital: data["registeredCapital"] ?? data["registered_capital"] ?? null,
+        raw: data
+      };
+    } catch (err: unknown) {
+      if (err && typeof err === "object" && "statusCode" in err) throw err;
+      throw app.httpErrors.badGateway("Could not reach DBD API. Check DBD_API_URL configuration.");
+    }
+  });
+
+  // ── Thai geography search ────────────────────────────────────────────────
+  // Returns sub-district / district / province matches for autocomplete.
+  // We load the compact dataset lazily and cache it in-process.
+  let thaiGeoCache: ThaiGeoEntry[] | null = null;
+
+  type ThaiGeoEntry = {
+    sub_district: string;
+    district: string;
+    province: string;
+    zipcode: number;
+  };
+
+  async function getThaiGeoData(): Promise<ThaiGeoEntry[]> {
+    if (thaiGeoCache) return thaiGeoCache;
+    const url =
+      process.env["THAI_GEO_JSON_URL"] ??
+      "https://raw.githubusercontent.com/kongvut/thai-province-data/master/api_tambon.json";
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Failed to load Thai geo data: ${res.status}`);
+    const raw = await res.json() as Array<{
+      name_th: string;
+      amphure: { name_th: string; province: { name_th: string } };
+      zip_code: number;
+    }>;
+    thaiGeoCache = raw.map((t) => ({
+      sub_district: t.name_th,
+      district: t.amphure?.name_th ?? "",
+      province: t.amphure?.province?.name_th ?? "",
+      zipcode: t.zip_code
+    }));
+    return thaiGeoCache;
+  }
+
+  app.get("/geo/th/search", async (request) => {
+    requireTenantId(request);
+    const query = request.query as { q?: string };
+    const q = (query.q ?? "").trim();
+    if (q.length < 2) return [];
+
+    try {
+      const data = await getThaiGeoData();
+      const lower = q.toLowerCase();
+      const results = data
+        .filter(
+          (e) =>
+            e.sub_district.includes(q) ||
+            e.district.includes(q) ||
+            e.province.includes(q) ||
+            String(e.zipcode).startsWith(q)
+        )
+        .slice(0, 20);
+      return results;
+    } catch {
+      return []; // Fail gracefully — autocomplete is non-critical
+    }
   });
 };

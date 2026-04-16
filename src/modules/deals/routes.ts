@@ -1,5 +1,6 @@
-import { DealStatus, EntityType, Prisma, QuotationStatus, UserRole } from "@prisma/client";
+import { ChannelType, DealStatus, EntityType, IntegrationPlatform, Prisma, QuotationStatus, SourceStatus, UserRole } from "@prisma/client";
 import type { FastifyPluginAsync } from "fastify";
+import { config } from "../../config.js";
 import { z } from "zod";
 import {
   assertTenantPathAccess,
@@ -11,8 +12,155 @@ import {
 import { writeEntityChangelog } from "../../lib/changelog.js";
 import { prisma } from "../../lib/prisma.js";
 
+async function sendDealLineNotification(opts: {
+  tenantId: string;
+  ownerId: string;
+  dealId: string;
+  status: typeof DealStatus.WON | typeof DealStatus.LOST;
+}) {
+  try {
+    const [owner, lineCredential, emailCredential, branding] = await Promise.all([
+      prisma.user.findUnique({
+        where: { id: opts.ownerId },
+        select: { teamId: true, fullName: true }
+      }),
+      prisma.tenantIntegrationCredential.findUnique({
+        where: { tenantId_platform: { tenantId: opts.tenantId, platform: IntegrationPlatform.LINE } },
+        select: { apiKeyRef: true, status: true }
+      }),
+      prisma.tenantIntegrationCredential.findUnique({
+        where: { tenantId_platform: { tenantId: opts.tenantId, platform: IntegrationPlatform.EMAIL } },
+        select: { clientIdRef: true, clientSecretRef: true, apiKeyRef: true, webhookTokenRef: true, status: true }
+      }),
+      prisma.tenantBranding.findUnique({
+        where: { tenantId: opts.tenantId },
+        select: { appName: true }
+      })
+    ]);
+
+    if (!owner?.teamId) {
+      console.warn("[sendDealLineNotification] missing owner.teamId", { teamId: owner?.teamId });
+      return;
+    }
+
+    const allChannels = await prisma.teamNotificationChannel.findMany({
+      where: { tenantId: opts.tenantId, teamId: owner.teamId, isEnabled: true,
+        channelType: { in: [ChannelType.LINE, ChannelType.MS_TEAMS, ChannelType.EMAIL] } },
+      select: { channelType: true, channelTarget: true }
+    });
+    if (allChannels.length === 0) {
+      console.warn("[sendDealLineNotification] no notification channels configured for team", { teamId: owner.teamId });
+      return;
+    }
+
+    const lineChannels  = allChannels.filter(c => c.channelType === ChannelType.LINE);
+    const teamsChannels = allChannels.filter(c => c.channelType === ChannelType.MS_TEAMS);
+    const emailChannels = allChannels.filter(c => c.channelType === ChannelType.EMAIL);
+
+    const deal = await prisma.deal.findUnique({
+      where: { id: opts.dealId },
+      select: {
+        dealNo: true,
+        dealName: true,
+        estimatedValue: true,
+        lostNote: true,
+        customer: { select: { name: true } }
+      }
+    });
+
+    const appName = branding?.appName || "CRM";
+    const repName = owner.fullName || "Sales Rep";
+    const customerName = deal?.customer?.name || "—";
+    const dealNo = deal?.dealNo || "—";
+    const dealName = deal?.dealName || "—";
+    const value = deal?.estimatedValue != null
+      ? new Intl.NumberFormat("th-TH", { style: "currency", currency: "THB", maximumFractionDigits: 0 }).format(deal.estimatedValue)
+      : "—";
+    const closedAt = new Date().toLocaleString("th-TH", {
+      timeZone: "Asia/Bangkok", day: "2-digit", month: "2-digit", year: "numeric",
+      hour: "2-digit", minute: "2-digit", hour12: false
+    });
+
+    const isWon = opts.status === DealStatus.WON;
+    const emoji = isWon ? "🏆" : "❌";
+    const label = isWon ? "Deal WON" : "Deal LOST";
+
+    const lostLine = !isWon && deal?.lostNote
+      ? `📝 Lost Reason : ${deal.lostNote}\n`
+      : "";
+
+    const text =
+      `${emoji} ${label}\n` +
+      `${"─".repeat(28)}\n` +
+      `🔖 Deal ID     : ${dealNo}\n` +
+      `👤 Sales Rep   : ${repName}\n` +
+      `🏢 Customer    : ${customerName}\n` +
+      `📋 Deal        : ${dealName}\n` +
+      `💰 Value       : ${value}\n` +
+      lostLine +
+      `🕐 Closed At   : ${closedAt}\n` +
+      `${"─".repeat(28)}\n` +
+      `[${appName}]`;
+
+    const sends: Promise<unknown>[] = [];
+
+    if (lineChannels.length > 0 && lineCredential?.apiKeyRef && lineCredential.status === SourceStatus.ENABLED) {
+      const { sendLinePush } = await import("../../lib/line-notify.js");
+      lineChannels.forEach(ch => sends.push(sendLinePush(lineCredential.apiKeyRef!, ch.channelTarget, { type: "text", text })));
+    }
+
+    if (teamsChannels.length > 0) {
+      const { sendTeamsCard } = await import("../../lib/teams-notify.js");
+      const facts = [
+        { title: "Deal ID",    value: dealNo },
+        { title: "Sales Rep",  value: repName },
+        { title: "Customer",   value: customerName },
+        { title: "Deal",       value: dealName },
+        { title: "Value",      value: value },
+        ...(!isWon && deal?.lostNote ? [{ title: "Lost Reason", value: deal.lostNote }] : []),
+        { title: "Closed At",  value: closedAt }
+      ];
+      teamsChannels.forEach(ch => sends.push(sendTeamsCard(ch.channelTarget, {
+        title: `${emoji} ${label}`,
+        accentColor: isWon ? "good" : "attention",
+        facts,
+        footer: `[${appName}]`
+      })));
+    }
+
+    if (emailChannels.length > 0 && emailCredential?.clientIdRef && emailCredential?.apiKeyRef && emailCredential?.webhookTokenRef && emailCredential.status === SourceStatus.ENABLED) {
+      const { sendEmailCard } = await import("../../lib/email-notify.js");
+      const emailConfig = {
+        host: emailCredential.clientIdRef,
+        port: parseInt(emailCredential.clientSecretRef ?? "587", 10),
+        fromAddress: emailCredential.webhookTokenRef,
+        password: emailCredential.apiKeyRef
+      };
+      const emailFacts = [
+        { label: "Deal ID",     value: dealNo },
+        { label: "Sales Rep",   value: repName },
+        { label: "Customer",    value: customerName },
+        { label: "Deal",        value: dealName },
+        { label: "Value",       value: value },
+        ...(!isWon && deal?.lostNote ? [{ label: "Lost Reason", value: deal.lostNote }] : []),
+        { label: "Closed At",   value: closedAt }
+      ];
+      emailChannels.forEach(ch => sends.push(sendEmailCard(emailConfig, ch.channelTarget, {
+        subject: `${emoji} ${label} — ${dealName}`,
+        title: `${emoji} ${label}`,
+        facts: emailFacts,
+        detailUrl: config.APP_URL ? `${config.APP_URL}/deals/${encodeURIComponent(dealNo)}` : undefined,
+        footer: `[${appName}]`
+      })));
+    }
+
+    await Promise.allSettled(sends);
+  } catch (err) {
+    console.error("[sendDealLineNotification] error:", err);
+  }
+}
+
 const createDealSchema = z.object({
-  dealNo: z.string().min(1),
   dealName: z.string().min(2),
   customerId: z.string().min(1),
   stageId: z.string().min(1),
@@ -25,7 +173,15 @@ const updateDealSchema = createDealSchema.partial();
 
 const progressSchema = z.object({
   note: z.string().trim().min(1),
-  attachmentUrl: z.string().url().optional(),
+  attachmentUrls: z
+    .array(
+      z.string().refine(
+        (v) => v.startsWith("r2://") || z.string().url().safeParse(v).success,
+        "each attachmentUrl must be a valid URL or r2:// object reference"
+      )
+    )
+    .max(5, "A maximum of 5 attachments is allowed")
+    .optional(),
   followUpAt: z.string().datetime().optional()
 });
 
@@ -67,7 +223,8 @@ const stageReorderSchema = z.object({
 });
 
 const moveStageSchema = z.object({
-  stageId: z.string().min(1)
+  stageId: z.string().min(1),
+  lostNote: z.string().trim().min(10).optional()
 });
 
 const quoteItemSchema = z.object({
@@ -265,6 +422,7 @@ function isStageTransitionAllowed(
   toStage: {
     id: string;
     stageOrder: number;
+    isClosedLost: boolean;
     allowForwardMove: boolean;
     allowBackwardMove: boolean;
     allowStageSkip: boolean;
@@ -277,6 +435,11 @@ function isStageTransitionAllowed(
 
   if (fromStage.isClosedWon || fromStage.isClosedLost) {
     return false;
+  }
+
+  // Lost is a terminal stage reachable from any open stage regardless of skip rules
+  if (toStage.isClosedLost) {
+    return true;
   }
 
   const explicitAllowedSources = parseAllowedSourceStageIds(toStage.allowedSourceStageIds);
@@ -549,8 +712,13 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
   app.get("/deals", async (request) => {
     const tenantId = requireTenantId(request);
     const visibleUserIdList = [...(await listVisibleUserIds(request))];
+    const { customerId } = request.query as { customerId?: string };
     const deals = await prisma.deal.findMany({
-      where: { tenantId, ownerId: { in: visibleUserIdList } },
+      where: {
+        tenantId,
+        ownerId: { in: visibleUserIdList },
+        ...(customerId ? { customerId } : {})
+      },
       include: { customer: true, stage: true, owner: true },
       orderBy: { createdAt: "desc" }
     });
@@ -563,7 +731,17 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
     const params = request.params as { id: string };
     const deal = await prisma.deal.findFirst({
       where: { id: params.id, tenantId, ownerId: { in: visibleUserIdList } },
-      include: { customer: true, stage: true, owner: true }
+      include: {
+        customer: {
+          include: {
+            contacts: true,
+            addresses: true,
+            paymentTerm: true
+          }
+        },
+        stage: true,
+        owner: true
+      }
     });
     if (!deal) {
       throw app.httpErrors.notFound("Deal not found.");
@@ -591,11 +769,13 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
     assertValidFollowUpWindow(app, new Date(data.followUpAt), data.closedAt ? new Date(data.closedAt) : null);
 
     const created = await prisma.$transaction(async (tx) => {
+      const dealCount = await tx.deal.count({ where: { tenantId } });
+      const dealNo = `D-${String(dealCount + 1).padStart(6, "0")}`;
       const row = await tx.deal.create({
         data: {
           tenantId,
           ownerId,
-          dealNo: data.dealNo,
+          dealNo,
           dealName: data.dealName,
           customerId: data.customerId,
           stageId: data.stageId,
@@ -732,29 +912,39 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
         ? DealStatus.LOST
         : DealStatus.OPEN;
 
-    return prisma.$transaction(async (tx) => {
-      const updated = await tx.deal.update({
+    if (nextStatus === DealStatus.LOST && !parsed.data.lostNote?.trim()) {
+      throw app.httpErrors.badRequest("Lost reason is required when moving a deal to a Lost stage.");
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const result = await tx.deal.update({
         where: { id: params.id },
         data: {
           stageId: targetStage.id,
           status: nextStatus,
-          closedAt:
-            nextStatus === DealStatus.OPEN ? null : deal.closedAt ?? new Date()
+          closedAt: nextStatus === DealStatus.OPEN ? null : deal.closedAt ?? new Date(),
+          ...(nextStatus === DealStatus.LOST ? { lostNote: parsed.data.lostNote } : {})
         }
       });
       await writeEntityChangelog({
         db: tx,
         tenantId,
         entityType: EntityType.DEAL,
-        entityId: updated.id,
+        entityId: result.id,
         action: "UPDATE",
         changedById: actorId,
         before: { stageId: deal.stageId, status: deal.status, closedAt: deal.closedAt },
-        after: { stageId: updated.stageId, status: updated.status, closedAt: updated.closedAt },
+        after: { stageId: result.stageId, status: result.status, closedAt: result.closedAt },
         context: { workflow: "MOVE_STAGE" }
       });
-      return updated;
+      return result;
     });
+
+    if (nextStatus === DealStatus.WON || nextStatus === DealStatus.LOST) {
+      void sendDealLineNotification({ tenantId, ownerId: actorId, dealId: params.id, status: nextStatus });
+    }
+
+    return updated;
   });
 
   app.get("/deals/:id/progress-updates", async (request) => {
@@ -818,7 +1008,7 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
           dealId: params.id,
           createdById,
           note: parsed.data.note,
-          attachmentUrl: parsed.data.attachmentUrl
+          attachmentUrls: parsed.data.attachmentUrls ?? []
         },
         include: {
           createdBy: {
@@ -912,8 +1102,8 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
     if (!deal) {
       throw app.httpErrors.notFound("Deal not found.");
     }
-    return prisma.$transaction(async (tx) => {
-      const updated = await tx.deal.update({
+    const updated = await prisma.$transaction(async (tx) => {
+      const result = await tx.deal.update({
         where: { id: params.id },
         data: {
           status,
@@ -924,15 +1114,19 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
         db: tx,
         tenantId,
         entityType: EntityType.DEAL,
-        entityId: updated.id,
+        entityId: result.id,
         action: "UPDATE",
         changedById: actorId,
         before: { status: deal.status, closedAt: deal.closedAt },
-        after: { status: updated.status, closedAt: updated.closedAt },
+        after: { status: result.status, closedAt: result.closedAt },
         context: { workflow: "CLOSE_DEAL", outcome: body.outcome }
       });
-      return updated;
+      return result;
     });
+
+    void sendDealLineNotification({ tenantId, ownerId: actorId, dealId: params.id, status });
+
+    return updated;
   });
 
   app.delete("/deals/:id", async (request, reply) => {
