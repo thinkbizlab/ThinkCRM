@@ -313,6 +313,16 @@ export async function buildApp() {
   app.get("/reset-password", async (_, reply) => reply.sendFile("index.html"));
   app.get("/accept-invite", async (_, reply) => reply.sendFile("index.html"));
   app.get("/signup", async (_, reply) => reply.sendFile("index.html"));
+  app.get("/super-admin", async (_, reply) => reply.sendFile("index.html"));
+  app.get("/verify-email", async (_, reply) => reply.sendFile("index.html"));
+
+  // SPA catch-all: serve index.html for any unmatched GET that isn't an API/file request
+  app.setNotFoundHandler(async (request, reply) => {
+    if (request.method === "GET" && !request.url.startsWith("/api/")) {
+      return reply.sendFile("index.html");
+    }
+    return reply.code(404).send({ statusCode: 404, error: "Not Found", message: `Route ${request.method}:${request.url} not found` });
+  });
 
   return app;
 }
