@@ -1,7 +1,7 @@
 import { ExecutionStatus, SourceStatus, UserRole } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { buildApp } from "../../app.js";
+import { buildApp } from "../../build-app.js";
 import { hashPassword } from "../../lib/password.js";
 import { prisma } from "../../lib/prisma.js";
 

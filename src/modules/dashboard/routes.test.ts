@@ -1,7 +1,7 @@
 import { DealStatus, UserRole, VisitStatus, VisitType } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { buildApp } from "../../app.js";
+import { buildApp } from "../../build-app.js";
 import { prisma } from "../../lib/prisma.js";
 
 type DashboardFixture = {
