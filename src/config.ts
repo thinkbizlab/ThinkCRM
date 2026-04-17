@@ -57,6 +57,11 @@ const configSchema = z.object({
   // Optional: Vercel Cron secret — protects /api/v1/cron/* endpoints.
   // Auto-set by Vercel when you add cron jobs. Generate your own for non-Vercel deployments.
   CRON_SECRET: z.preprocess(v => (v === "" ? undefined : v), z.string().min(16).optional()),
+  // Optional: Vercel API — enables auto-provisioning of tenant custom domains.
+  // Get the project ID from Vercel dashboard → Settings → General.
+  // Create a token at vercel.com/account/tokens (scope: project-level or team-level).
+  VERCEL_PROJECT_ID: z.preprocess(v => (v === "" ? undefined : v), z.string().optional()),
+  VERCEL_API_TOKEN: z.preprocess(v => (v === "" ? undefined : v), z.string().optional()),
 });
 
 export type AppConfig = z.infer<typeof configSchema>;

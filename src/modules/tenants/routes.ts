@@ -6,6 +6,7 @@ import { z } from "zod";
 import { assertTenantPathAccess, requireRoleAtLeast } from "../../lib/http.js";
 import { hashPassword } from "../../lib/password.js";
 import { prisma } from "../../lib/prisma.js";
+import { addVercelDomain, removeVercelDomain } from "../../lib/vercel-domains.js";
 import { onboardTenantSchema } from "./schemas.js";
 
 const signupSchema = z.object({
@@ -450,7 +451,14 @@ export const tenantRoutes: FastifyPluginAsync = async (app) => {
         verifiedAt: verified ? new Date() : null
       }
     });
-    return reply.send({ verified, status: updated.status, verifiedAt: updated.verifiedAt });
+
+    // Auto-provision on Vercel when verification succeeds
+    let vercelDomain: { added: boolean; error?: string } | undefined;
+    if (verified) {
+      vercelDomain = await addVercelDomain(record.domain);
+    }
+
+    return reply.send({ verified, status: updated.status, verifiedAt: updated.verifiedAt, vercelDomain });
   });
 
   app.delete("/tenants/:tenantId/custom-domain", async (request, reply) => {
@@ -462,6 +470,10 @@ export const tenantRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.notFound("No custom domain configured for this tenant.");
     }
     await prisma.tenantCustomDomain.delete({ where: { tenantId } });
+
+    // Remove from Vercel when domain is deleted
+    await removeVercelDomain(existing.domain);
+
     return reply.code(204).send();
   });
 
