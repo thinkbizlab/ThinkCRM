@@ -1,4 +1,4 @@
-import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { config } from "../config.js";
 
@@ -178,4 +178,31 @@ export async function uploadBufferToR2(input: {
     objectKey,
     objectRef: buildR2ObjectRef(objectKey)
   };
+}
+
+/**
+ * Calculate total storage used by a tenant in R2 (lists all objects under {slug}/ prefix).
+ * Returns { totalBytes, objectCount }.
+ */
+export async function getTenantR2Storage(tenantSlug: string): Promise<{ totalBytes: number; objectCount: number }> {
+  if (!isR2Configured) return { totalBytes: 0, objectCount: 0 };
+
+  let totalBytes = 0;
+  let objectCount = 0;
+  let continuationToken: string | undefined;
+
+  do {
+    const res = await r2Client.send(new ListObjectsV2Command({
+      Bucket: config.R2_BUCKET,
+      Prefix: `${tenantSlug}/`,
+      ContinuationToken: continuationToken,
+    }));
+    for (const obj of res.Contents ?? []) {
+      totalBytes += obj.Size ?? 0;
+      objectCount++;
+    }
+    continuationToken = res.IsTruncated ? res.NextContinuationToken : undefined;
+  } while (continuationToken);
+
+  return { totalBytes, objectCount };
 }

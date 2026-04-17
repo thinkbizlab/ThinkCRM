@@ -3,6 +3,7 @@ import { z } from "zod";
 import { isSuperAdmin, requireSuperAdmin } from "../../lib/http.js";
 import { prisma } from "../../lib/prisma.js";
 import { logAuditEvent } from "../../lib/audit.js";
+import { getTenantR2Storage, isR2Configured } from "../../lib/r2-storage.js";
 import { removeVercelDomain } from "../../lib/vercel-domains.js";
 
 const tenantUpdateSchema = z.object({
@@ -55,6 +56,10 @@ export const superAdminRoutes: FastifyPluginAsync = async (app) => {
           orderBy: { createdAt: "desc" },
           select: { status: true, trialEndsAt: true, seatCount: true, billingCycle: true },
         },
+        storageQuotas: {
+          take: 1,
+          select: { includedBytes: true },
+        },
       },
     });
 
@@ -70,6 +75,7 @@ export const superAdminRoutes: FastifyPluginAsync = async (app) => {
       dealCount: t._count.deals,
       customerCount: t._count.customers,
       visitCount: t._count.visits,
+      storageQuotaBytes: t.storageQuotas[0] ? Number(t.storageQuotas[0].includedBytes) : null,
       subscription: t.subscriptions[0] ?? null,
     }));
   });
@@ -197,5 +203,49 @@ export const superAdminRoutes: FastifyPluginAsync = async (app) => {
       prisma.subscription.count({ where: { status: "TRIALING" } }),
     ]);
     return { tenantCount, userCount, dealCount, activeCount, inactiveCount: tenantCount - activeCount, trialCount };
+  });
+
+  // ── R2 storage usage per tenant ──────────────────────────────────────────
+  app.get("/super-admin/storage", async () => {
+    if (!isR2Configured) return { configured: false, tenants: [] };
+
+    const tenants = await prisma.tenant.findMany({
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        storageQuotas: { take: 1, select: { includedBytes: true } },
+      },
+    });
+
+    // Fetch R2 storage for all tenants in parallel
+    const storageResults = await Promise.all(
+      tenants.map(async (t) => {
+        try {
+          const usage = await getTenantR2Storage(t.slug);
+          return {
+            tenantId: t.id,
+            name: t.name,
+            slug: t.slug,
+            quotaBytes: t.storageQuotas[0] ? Number(t.storageQuotas[0].includedBytes) : 0,
+            usedBytes: usage.totalBytes,
+            objectCount: usage.objectCount,
+          };
+        } catch {
+          return {
+            tenantId: t.id,
+            name: t.name,
+            slug: t.slug,
+            quotaBytes: t.storageQuotas[0] ? Number(t.storageQuotas[0].includedBytes) : 0,
+            usedBytes: -1,
+            objectCount: 0,
+          };
+        }
+      })
+    );
+
+    const totalUsedBytes = storageResults.reduce((sum, t) => sum + Math.max(0, t.usedBytes), 0);
+    return { configured: true, totalUsedBytes, tenants: storageResults };
   });
 };

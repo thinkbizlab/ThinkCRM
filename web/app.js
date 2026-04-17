@@ -11198,6 +11198,7 @@ applyThemeMode("LIGHT");
           <div class="sa-stat"><div class="sa-stat-val">${stats.trialCount}</div><div class="sa-stat-lbl">Trial</div></div>
           <div class="sa-stat"><div class="sa-stat-val">${stats.userCount}</div><div class="sa-stat-lbl">Total Users</div></div>
           <div class="sa-stat"><div class="sa-stat-val">${stats.dealCount}</div><div class="sa-stat-lbl">Total Deals</div></div>
+          <div class="sa-stat" id="sa-storage-stat"><div class="sa-stat-val">-</div><div class="sa-stat-lbl">R2 Storage</div></div>
         </div>
         <div class="sa-toolbar">
           <input class="sa-search" id="sa-search" type="text" placeholder="Search workspaces..." />
@@ -11207,6 +11208,7 @@ applyThemeMode("LIGHT");
             <option value="inactive">Inactive</option>
           </select>
           <button class="sa-btn sa-btn--refresh" id="sa-refresh">Refresh</button>
+          <button class="sa-btn sa-btn--primary" id="sa-load-storage">Load R2 Storage</button>
         </div>
         <div class="sa-table-wrap">
           <table class="sa-table">
@@ -11219,6 +11221,7 @@ applyThemeMode("LIGHT");
                 <th>Users</th>
                 <th>Deals</th>
                 <th>Customers</th>
+                <th>R2 Storage</th>
                 <th>Created</th>
                 <th>Actions</th>
               </tr>
@@ -11237,7 +11240,45 @@ applyThemeMode("LIGHT");
     qs("#sa-search")?.addEventListener("input", (e) => filterTenants(e.target.value, qs("#sa-status-filter")?.value));
     qs("#sa-status-filter")?.addEventListener("change", (e) => filterTenants(qs("#sa-search")?.value, e.target.value));
     qs("#sa-detail-modal .sa-modal-backdrop")?.addEventListener("click", closeSAModal);
+    qs("#sa-load-storage")?.addEventListener("click", loadR2Storage);
     panel._tenants = tenants;
+  }
+
+  function formatBytes(bytes) {
+    if (bytes < 0) return "Error";
+    if (bytes === 0) return "0 B";
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return (bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0) + " " + units[i];
+  }
+
+  async function loadR2Storage() {
+    const btn = qs("#sa-load-storage");
+    if (btn) { btn.disabled = true; btn.textContent = "Loading..."; }
+    try {
+      const data = await api("/super-admin/storage");
+      if (!data.configured) {
+        if (btn) { btn.textContent = "R2 not configured"; }
+        return;
+      }
+      // Update total stat
+      const statEl = qs("#sa-storage-stat");
+      if (statEl) statEl.querySelector(".sa-stat-val").textContent = formatBytes(data.totalUsedBytes);
+      // Update per-tenant cells
+      for (const t of data.tenants) {
+        const cell = panel.querySelector(`.sa-storage-cell[data-tenant-slug="${t.slug}"]`);
+        if (!cell) continue;
+        const pct = t.quotaBytes > 0 ? Math.round((t.usedBytes / t.quotaBytes) * 100) : 0;
+        const color = pct > 90 ? "sa-badge--red" : pct > 70 ? "sa-badge--yellow" : "sa-badge--green";
+        cell.innerHTML = t.usedBytes < 0
+          ? '<span class="sa-badge sa-badge--red">Error</span>'
+          : `<span class="sa-badge ${color}">${formatBytes(t.usedBytes)}</span><br><span style="font-size:10px;color:#94a3b8">${t.objectCount} files / ${formatBytes(t.quotaBytes)} quota</span>`;
+      }
+      if (btn) { btn.textContent = "Refresh Storage"; btn.disabled = false; }
+    } catch (err) {
+      if (btn) { btn.textContent = "Load R2 Storage"; btn.disabled = false; }
+      alert("Failed to load storage: " + err.message);
+    }
   }
 
   function filterTenants(search, status) {
@@ -11255,7 +11296,7 @@ applyThemeMode("LIGHT");
     const tbody = qs("#sa-tenants-body");
     if (!tbody) return;
     if (!tenants.length) {
-      tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#94a3b8;padding:24px">No workspaces found</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:#94a3b8;padding:24px">No workspaces found</td></tr>';
       return;
     }
     tbody.innerHTML = tenants.map(t => {
@@ -11272,6 +11313,7 @@ applyThemeMode("LIGHT");
         <td>${t.userCount}</td>
         <td>${t.dealCount}</td>
         <td>${t.customerCount}</td>
+        <td class="sa-storage-cell" data-tenant-slug="${escHtml(t.slug)}"><span class="sa-badge sa-badge--gray">-</span></td>
         <td>${created}</td>
         <td class="sa-actions">
           <button class="sa-btn sa-btn--sm" data-sa-action="detail" data-sa-id="${escHtml(t.id)}">View</button>
