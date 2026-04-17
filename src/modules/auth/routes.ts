@@ -106,6 +106,9 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       try { await logAuditEvent(tenant.id, user?.id ?? null, "LOGIN_FAILED", { email: parsed.data.email, reason: "invalid_credentials" }, request.ip); } catch { /* best-effort */ }
       throw app.httpErrors.unauthorized("Invalid tenant or credentials.");
     }
+    if (!user.emailVerified) {
+      return { needsEmailVerification: true, tenantSlug: tenant.slug, email: user.email };
+    }
     if (user.mustResetPassword) {
       throw app.httpErrors.forbidden("First login password reset required.");
     }
@@ -1083,6 +1086,101 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     return { message: "Password reset successfully. Please login with your new password." };
   });
 
+  // ── Email verification ──────────────────────────────────────────────────────
+
+  /** Verify email address using the token sent after signup. */
+  app.get("/auth/verify-email", async (request, reply) => {
+    const { token } = request.query as { token?: string };
+    if (!token) throw app.httpErrors.badRequest("Verification token is required.");
+
+    const user = await prisma.user.findFirst({
+      where: { emailVerifyToken: token },
+      select: { id: true, tenantId: true, email: true, emailVerified: true, emailVerifyExpiresAt: true,
+                tenant: { select: { slug: true } } }
+    });
+    if (!user) throw app.httpErrors.badRequest("Invalid verification token.");
+    if (user.emailVerified) {
+      return reply.send({ verified: true, tenantSlug: user.tenant.slug, message: "Email already verified. You can sign in." });
+    }
+    if (user.emailVerifyExpiresAt && user.emailVerifyExpiresAt < new Date()) {
+      throw app.httpErrors.badRequest("Verification token has expired. Please request a new one.");
+    }
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { emailVerified: true, emailVerifyToken: null, emailVerifyExpiresAt: null }
+    });
+
+    await logAuditEvent(user.tenantId, user.id, "EMAIL_VERIFIED", { email: user.email }, request.ip);
+
+    return reply.send({ verified: true, tenantSlug: user.tenant.slug, message: "Email verified successfully! You can now sign in." });
+  });
+
+  /** Resend verification email (public, rate-limited by token regeneration). */
+  app.post("/auth/resend-verification", async (request) => {
+    const { tenantSlug, email } = request.body as { tenantSlug?: string; email?: string };
+    if (!tenantSlug || !email) throw app.httpErrors.badRequest("tenantSlug and email are required.");
+
+    const tenant = await prisma.tenant.findUnique({ where: { slug: tenantSlug }, select: { id: true } });
+    if (!tenant) return { ok: true }; // Don't reveal tenant existence
+
+    const user = await prisma.user.findFirst({
+      where: { tenantId: tenant.id, email: email.toLowerCase(), isActive: true, emailVerified: false },
+      select: { id: true, email: true, fullName: true, tenantId: true }
+    });
+    if (!user) return { ok: true }; // Don't reveal user existence
+
+    // Generate a fresh token
+    const emailVerifyToken = randomBytes(32).toString("hex");
+    const emailVerifyExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { emailVerifyToken, emailVerifyExpiresAt }
+    });
+
+    // Best-effort email delivery
+    try {
+      const cred = await prisma.tenantIntegrationCredential.findUnique({
+        where: { tenantId_platform: { tenantId: tenant.id, platform: IntegrationPlatform.EMAIL } },
+        select: { clientIdRef: true, clientSecretRef: true, apiKeyRef: true, webhookTokenRef: true }
+      }).then(r => decryptCredential(r));
+
+      let emailConfig: EmailConfig | null = null;
+      if (cred?.clientIdRef && cred?.apiKeyRef && cred?.webhookTokenRef) {
+        emailConfig = {
+          host: cred.clientIdRef,
+          port: smtpPort(cred.clientSecretRef),
+          fromAddress: cred.webhookTokenRef,
+          password: cred.apiKeyRef
+        };
+      } else if (config.SMTP_HOST && config.SMTP_FROM) {
+        emailConfig = {
+          host: config.SMTP_HOST,
+          port: config.SMTP_PORT,
+          fromAddress: config.SMTP_FROM,
+          password: config.SMTP_PASS ?? ""
+        };
+      }
+
+      if (emailConfig) {
+        const baseUrl = await getTenantUrl(tenant.id, tenantSlug);
+        const verifyLink = `${baseUrl}/verify-email?token=${emailVerifyToken}`;
+        await sendEmailCard(emailConfig, user.email, {
+          subject: "Verify your email — ThinkCRM",
+          title: "Verify your email address",
+          facts: [
+            { label: "Email", value: user.email },
+            { label: "Expires in", value: "24 hours" }
+          ],
+          detailUrl: verifyLink,
+          footer: "Click the button above to verify your email and activate your workspace."
+        });
+      }
+    } catch { /* best-effort */ }
+
+    return { ok: true };
+  });
+
   // ── Accept invite (S4) ──────────────────────────────────────────────────────
 
   app.post("/auth/accept-invite", async (request, reply) => {
@@ -1126,7 +1224,8 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
           role: invite.role as UserRole,
           teamId: invite.teamId,
           passwordHash: hashPassword(parsed.data.password),
-          mustResetPassword: false
+          mustResetPassword: false,
+          emailVerified: true
         }
       }),
       prisma.userInvite.update({

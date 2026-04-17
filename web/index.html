@@ -133,6 +133,31 @@
               </div>
             </div>
 
+            <!-- Email verification pending (shown after signup) -->
+            <div class="login-form" id="verify-pending-panel" hidden>
+              <h2 class="login-heading">Check your email</h2>
+              <p class="login-subtitle">We sent a verification link to <strong id="verify-pending-email"></strong>. Click the link in your email to activate your workspace.</p>
+              <div class="login-fields" style="text-align:center;padding:16px 0">
+                <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#6d28d9" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>
+                <p class="login-subtitle" style="margin-top:12px">Didn't receive the email? Check your spam folder or</p>
+              </div>
+              <button class="login-submit" id="resend-verify-btn" style="background:#f1f5f9;color:#6d28d9;border:1px solid #e2e8f0">Resend verification email</button>
+              <p id="verify-pending-message" class="login-error"></p>
+              <div class="login-forgot-row" style="text-align:center">
+                <a href="/" class="login-forgot-link">&larr; Back to sign in</a>
+              </div>
+            </div>
+
+            <!-- Email verification result (shown at /verify-email?token=) -->
+            <div class="login-form" id="verify-email-panel" hidden>
+              <h2 class="login-heading" id="verify-email-heading">Verifying...</h2>
+              <p class="login-subtitle" id="verify-email-subtitle">Please wait while we verify your email address.</p>
+              <p id="verify-email-message" class="login-error"></p>
+              <div class="login-forgot-row" style="text-align:center">
+                <a href="/" class="login-forgot-link" id="verify-email-signin-link" hidden>&rarr; Sign in to your workspace</a>
+              </div>
+            </div>
+
             <!-- Reset password form (shown when ?token= is in URL) -->
             <div class="login-form" id="reset-password-panel" hidden>
               <h2 class="login-heading">Set new password</h2>

@@ -510,6 +510,7 @@ export const apiFirstRoutes: FastifyPluginAsync = async (app) => {
               role: row.role,
               teamId: row.teamId,
               mustResetPassword: true,
+              emailVerified: true,
               passwordHash: pw
             }
           })

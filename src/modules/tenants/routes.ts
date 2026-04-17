@@ -1,11 +1,16 @@
-import { UserRole } from "@prisma/client";
+import { IntegrationPlatform, UserRole } from "@prisma/client";
 import type { FastifyPluginAsync } from "fastify";
 import { randomBytes } from "node:crypto";
 import { promises as dns } from "node:dns";
 import { z } from "zod";
+import { config } from "../../config.js";
 import { assertTenantPathAccess, requireRoleAtLeast } from "../../lib/http.js";
+import { sendEmailCard, type EmailConfig } from "../../lib/email-notify.js";
 import { hashPassword } from "../../lib/password.js";
 import { prisma } from "../../lib/prisma.js";
+import { decryptCredential } from "../../lib/secrets.js";
+import { smtpPort } from "../../lib/smtp-port.js";
+import { getTenantUrl } from "../../lib/tenant-url.js";
 import { addVercelDomain, removeVercelDomain } from "../../lib/vercel-domains.js";
 import { onboardTenantSchema } from "./schemas.js";
 
@@ -48,7 +53,7 @@ export const tenantRoutes: FastifyPluginAsync = async (app) => {
     if (existing) throw app.httpErrors.conflict("That workspace URL is already taken. Please choose another.");
 
     const periodStart = new Date();
-    const { tenant, admin } = await prisma.$transaction(async (tx) => {
+    const { tenant, admin, emailVerifyToken } = await prisma.$transaction(async (tx) => {
       const tenant = await tx.tenant.create({
         data: { name: companyName, slug }
       });
@@ -121,16 +126,57 @@ export const tenantRoutes: FastifyPluginAsync = async (app) => {
         ]
       });
 
-      return { tenant, admin };
+      // Generate email verification token (valid 24 hours)
+      const emailVerifyToken = randomBytes(32).toString("hex");
+      const emailVerifyExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      await tx.user.update({
+        where: { id: admin.id },
+        data: { emailVerifyToken, emailVerifyExpiresAt }
+      });
+
+      return { tenant, admin, emailVerifyToken };
     });
 
-    // Sign a JWT so the new admin is immediately logged in.
-    const token = app.jwt.sign(
-      { tenantId: tenant.id, userId: admin.id, role: admin.role, email: admin.email },
-      { expiresIn: "7d" }
-    );
+    // Send verification email (best-effort — don't fail signup on email errors)
+    try {
+      const baseUrl = await getTenantUrl(tenant.id, slug);
+      const verifyLink = `${baseUrl}/verify-email?token=${emailVerifyToken}`;
 
-    return reply.code(201).send({ token, tenantSlug: tenant.slug, userId: admin.id });
+      let emailConfig: EmailConfig | null = null;
+      if (config.SMTP_HOST && config.SMTP_FROM) {
+        emailConfig = {
+          host: config.SMTP_HOST,
+          port: config.SMTP_PORT,
+          fromAddress: config.SMTP_FROM,
+          password: config.SMTP_PASS ?? ""
+        };
+      }
+
+      if (emailConfig) {
+        await sendEmailCard(emailConfig, adminEmail, {
+          subject: "Verify your email — ThinkCRM",
+          title: "Welcome to ThinkCRM!",
+          facts: [
+            { label: "Workspace", value: companyName },
+            { label: "Email", value: adminEmail },
+            { label: "Expires in", value: "24 hours" }
+          ],
+          detailUrl: verifyLink,
+          footer: "Click the button above to verify your email and activate your workspace."
+        });
+      } else {
+        app.log.warn(`[signup] No system SMTP configured — verification email for ${adminEmail} not sent. Token: ${emailVerifyToken}`);
+      }
+    } catch (err) {
+      app.log.error({ err }, "[signup] Failed to send verification email");
+    }
+
+    return reply.code(201).send({
+      needsEmailVerification: true,
+      tenantSlug: tenant.slug,
+      email: adminEmail,
+      message: "Workspace created! Please check your email to verify your account."
+    });
   });
 
   // ── Admin-facing onboard endpoint (internal / super-admin use) ────────────
@@ -160,6 +206,7 @@ export const tenantRoutes: FastifyPluginAsync = async (app) => {
           email: payload.admin.email,
           passwordHash: hashPassword(tempPassword),
           mustResetPassword: true,
+          emailVerified: true,
           fullName: payload.admin.fullName,
           role: UserRole.ADMIN
         }

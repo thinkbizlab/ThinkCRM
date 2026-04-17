@@ -9449,6 +9449,20 @@ loginForm.addEventListener("submit", async (event) => {
   const payload = Object.fromEntries(formData.entries());
   try {
     const result = await api("/auth/login", { method: "POST", body: payload, headers: {} });
+    if (result.needsEmailVerification) {
+      // Show the "check your email" panel
+      const loginPanel = qs(".login-form");
+      if (loginPanel) loginPanel.hidden = true;
+      const pendingPanel = qs("#verify-pending-panel");
+      const pendingEmail = qs("#verify-pending-email");
+      if (pendingPanel) {
+        pendingPanel.hidden = false;
+        pendingPanel._tenantSlug = result.tenantSlug || payload.tenantSlug;
+        pendingPanel._email = result.email || payload.email;
+      }
+      if (pendingEmail) pendingEmail.textContent = result.email || payload.email;
+      return;
+    }
     state.token = result.accessToken;
     state.user = result.user;
     state.calendarFilters.ownerIds = [result.user.id];
@@ -9682,16 +9696,96 @@ loginForm.addEventListener("submit", async (event) => {
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Signup failed.");
 
-      // Auto-login: store token and reload as authenticated user
-      localStorage.setItem("jwt", data.token);
-      localStorage.setItem("tenantSlug", data.tenantSlug);
-      window.location.href = "/dashboard";
+      if (data.needsEmailVerification) {
+        // Show "check your email" panel
+        signupPanel.hidden = true;
+        const pendingPanel = qs("#verify-pending-panel");
+        const pendingEmail = qs("#verify-pending-email");
+        if (pendingPanel) pendingPanel.hidden = false;
+        if (pendingEmail) pendingEmail.textContent = data.email || body.adminEmail;
+        // Store context for resend button
+        pendingPanel._tenantSlug = data.tenantSlug || body.slug;
+        pendingPanel._email = data.email || body.adminEmail;
+      } else if (data.token) {
+        // Fallback: auto-login if server returns a token (shouldn't happen with email verify)
+        localStorage.setItem("jwt", data.token);
+        localStorage.setItem("tenantSlug", data.tenantSlug);
+        window.location.href = "/dashboard";
+      }
     } catch (err) {
       signupMsg.textContent = err.message || "Something went wrong. Please try again.";
       btn.disabled = false;
       btn.textContent = "Create workspace";
     }
   });
+})();
+
+// ── Email verification ─────────────────────────────────────────────────────────
+(function initEmailVerification() {
+  const loginPanel      = qs(".login-form");
+  const pendingPanel    = qs("#verify-pending-panel");
+  const verifyPanel     = qs("#verify-email-panel");
+  const resendBtn       = qs("#resend-verify-btn");
+  const pendingMsg      = qs("#verify-pending-message");
+
+  // Resend verification email button
+  resendBtn?.addEventListener("click", async () => {
+    const slug  = pendingPanel?._tenantSlug;
+    const email = pendingPanel?._email;
+    if (!slug || !email) return;
+    resendBtn.disabled = true;
+    resendBtn.textContent = "Sending…";
+    pendingMsg.textContent = "";
+    try {
+      await fetch("/api/v1/auth/resend-verification", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tenantSlug: slug, email })
+      });
+      pendingMsg.style.color = "#16a34a";
+      pendingMsg.textContent = "Verification email sent! Check your inbox.";
+    } catch {
+      pendingMsg.style.color = "";
+      pendingMsg.textContent = "Failed to resend. Please try again.";
+    }
+    resendBtn.disabled = false;
+    resendBtn.textContent = "Resend verification email";
+  });
+
+  // Handle /verify-email?token= route
+  if (window.location.pathname === "/verify-email") {
+    const token = new URLSearchParams(window.location.search).get("token");
+    if (!token) return;
+
+    // Hide login form, show verify panel
+    if (loginPanel) loginPanel.hidden = true;
+    document.querySelectorAll(".login-form").forEach(p => p.hidden = true);
+    if (verifyPanel) verifyPanel.hidden = false;
+
+    const heading  = qs("#verify-email-heading");
+    const subtitle = qs("#verify-email-subtitle");
+    const msg      = qs("#verify-email-message");
+    const link     = qs("#verify-email-signin-link");
+
+    (async () => {
+      try {
+        const res = await fetch(`/api/v1/auth/verify-email?token=${encodeURIComponent(token)}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || "Verification failed.");
+        heading.textContent = "Email verified!";
+        subtitle.textContent = data.message || "Your email has been verified. You can now sign in.";
+        if (link) {
+          link.hidden = false;
+          link.href = data.tenantSlug ? `/?workspace=${data.tenantSlug}` : "/";
+        }
+      } catch (err) {
+        heading.textContent = "Verification failed";
+        subtitle.textContent = "";
+        msg.textContent = err.message || "Invalid or expired verification link.";
+        if (link) { link.hidden = false; link.textContent = "\u2190 Back to sign in"; link.href = "/"; }
+      }
+    })();
+  }
 })();
 
 // ── Accept invite (S4) ──────────────────────────────────────────────────────────

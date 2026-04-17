@@ -65,6 +65,9 @@ model User {
   role                UserRole
   isActive            Boolean               @default(true)
   mustResetPassword   Boolean               @default(false)
+  emailVerified       Boolean               @default(false)
+  emailVerifyToken    String?               @unique
+  emailVerifyExpiresAt DateTime?
   managerUserId       String?
   teamId              String?
   notifPrefs          Json?
