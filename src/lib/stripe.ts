@@ -9,9 +9,9 @@
 import Stripe from "stripe";
 import { config } from "../config.js";
 
-let _stripe: Stripe | null = null;
+let _stripe: InstanceType<typeof Stripe> | null = null;
 
-export function getStripe(): Stripe {
+export function getStripe(): InstanceType<typeof Stripe> {
   if (!_stripe) {
     if (!config.STRIPE_SECRET_KEY) {
       throw new Error("STRIPE_SECRET_KEY is not configured.");
