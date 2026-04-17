@@ -238,7 +238,8 @@ export const superAdminRoutes: FastifyPluginAsync = async (app) => {
             usedBytes: usage.totalBytes,
             objectCount: usage.objectCount,
           };
-        } catch {
+        } catch (err) {
+          app.log.error({ err, slug: t.slug }, "[super-admin] R2 storage scan failed");
           return {
             tenantId: t.id,
             name: t.name,
@@ -246,6 +247,7 @@ export const superAdminRoutes: FastifyPluginAsync = async (app) => {
             quotaBytes: t.storageQuotas[0] ? Number(t.storageQuotas[0].includedBytes) : 0,
             usedBytes: -1,
             objectCount: 0,
+            error: err instanceof Error ? err.message : String(err),
           };
         }
       })
