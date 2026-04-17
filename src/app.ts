@@ -312,3 +312,7 @@ export async function buildApp() {
 
   return app;
 }
+
+// Vercel auto-detects src/app.ts and expects a default export
+// that is either a Fastify instance or a factory function.
+export default buildApp;
