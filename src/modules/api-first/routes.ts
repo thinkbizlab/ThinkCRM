@@ -15,7 +15,6 @@ import { prisma } from "../../lib/prisma.js";
 import { assertSeatAvailable } from "../../lib/plan-limits.js";
 import { updateSubscriptionSeatCount } from "../../lib/subscription-seats.js";
 import { validateCustomFields, asRecord as asRecordCf } from "../../lib/custom-fields.js";
-import { onboardTenantSchema } from "../tenants/schemas.js";
 import { config } from "../../config.js";
 import { decryptCredential } from "../../lib/secrets.js";
 import { smtpPort } from "../../lib/smtp-port.js";
@@ -161,87 +160,7 @@ export const apiFirstRoutes: FastifyPluginAsync = async (app) => {
     };
   });
 
-  app.post("/tenants/signup", async (request, reply) => {
-    const parsed = onboardTenantSchema.safeParse(request.body);
-    if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
-    }
-
-    const payload = parsed.data;
-    const tempPassword = `ThinkCRM-${randomBytes(4).toString("hex")}!`;
-    const exists = await prisma.tenant.findUnique({
-      where: { slug: payload.companySlug }
-    });
-    if (exists) {
-      throw app.httpErrors.conflict("Tenant slug is already used.");
-    }
-
-    const result = await prisma.$transaction(async (tx) => {
-      const tenant = await tx.tenant.create({
-        data: { name: payload.companyName, slug: payload.companySlug }
-      });
-      const admin = await tx.user.create({
-        data: {
-          tenantId: tenant.id,
-          email: payload.admin.email,
-          passwordHash: hashPassword(tempPassword),
-          mustResetPassword: true,
-          fullName: payload.admin.fullName,
-          role: UserRole.ADMIN
-        }
-      });
-      const periodStart = new Date();
-      await tx.subscription.create({
-        data: {
-          tenantId: tenant.id,
-          provider: "STRIPE",
-          pricingModel: "FIXED_PER_USER",
-          status: "ACTIVE",
-          seatPriceCents: payload.billing.seatPriceCents,
-          seatCount: payload.billing.initialSeatCount,
-          currency: payload.billing.currency.toUpperCase(),
-          paymentMethodRef: payload.billing.paymentMethodRef,
-          billingCycle: "MONTHLY",
-          billingPeriodStart: periodStart,
-          billingPeriodEnd: addDays(periodStart, 30)
-        }
-      });
-      await tx.tenantStorageQuota.create({
-        data: {
-          tenantId: tenant.id,
-          includedBytes: BigInt(payload.billing.includedBytes),
-          overagePricePerGb: payload.billing.overagePricePerGb
-        }
-      });
-      await tx.tenantTaxConfig.create({
-        data: { tenantId: tenant.id, vatEnabled: true, vatRatePercent: 7 }
-      });
-      await tx.paymentTerm.create({
-        data: {
-          tenantId: tenant.id,
-          code: "NET30",
-          name: "Net 30",
-          dueDays: 30
-        }
-      });
-      await tx.dealStage.createMany({
-        data: [
-          { tenantId: tenant.id, stageName: "Opportunity", stageOrder: 1, isDefault: true },
-          { tenantId: tenant.id, stageName: "Quotation", stageOrder: 2 },
-          { tenantId: tenant.id, stageName: "Won", stageOrder: 3, isClosedWon: true },
-          { tenantId: tenant.id, stageName: "Lost", stageOrder: 4, isClosedLost: true }
-        ]
-      });
-      return { tenant, admin };
-    });
-
-    return reply.code(201).send({
-      message: "Tenant signup completed.",
-      tenantId: result.tenant.id,
-      adminUserId: result.admin.id,
-      temporaryPassword: tempPassword
-    });
-  });
+  // Tenant signup is handled by tenantRoutes (POST /tenants/signup).
 
   app.get("/dashboard/summary", async (request) => {
     requireAuth(request);
