@@ -11,6 +11,11 @@ import {
 } from "../../lib/http.js";
 import { writeEntityChangelog } from "../../lib/changelog.js";
 import { prisma } from "../../lib/prisma.js";
+import { decryptCredential } from "../../lib/secrets.js";
+import { smtpPort } from "../../lib/smtp-port.js";
+import { fmtBahtCurrency, fmtThaiDateTime } from "../../lib/format.js";
+import { validateCustomFields, asRecord } from "../../lib/custom-fields.js";
+import { getTenantUrl } from "../../lib/tenant-url.js";
 
 async function sendDealLineNotification(opts: {
   tenantId: string;
@@ -27,11 +32,11 @@ async function sendDealLineNotification(opts: {
       prisma.tenantIntegrationCredential.findUnique({
         where: { tenantId_platform: { tenantId: opts.tenantId, platform: IntegrationPlatform.LINE } },
         select: { apiKeyRef: true, status: true }
-      }),
+      }).then(r => decryptCredential(r)),
       prisma.tenantIntegrationCredential.findUnique({
         where: { tenantId_platform: { tenantId: opts.tenantId, platform: IntegrationPlatform.EMAIL } },
         select: { clientIdRef: true, clientSecretRef: true, apiKeyRef: true, webhookTokenRef: true, status: true }
-      }),
+      }).then(r => decryptCredential(r)),
       prisma.tenantBranding.findUnique({
         where: { tenantId: opts.tenantId },
         select: { appName: true }
@@ -74,12 +79,9 @@ async function sendDealLineNotification(opts: {
     const dealNo = deal?.dealNo || "—";
     const dealName = deal?.dealName || "—";
     const value = deal?.estimatedValue != null
-      ? new Intl.NumberFormat("th-TH", { style: "currency", currency: "THB", maximumFractionDigits: 0 }).format(deal.estimatedValue)
+      ? fmtBahtCurrency(deal.estimatedValue)
       : "—";
-    const closedAt = new Date().toLocaleString("th-TH", {
-      timeZone: "Asia/Bangkok", day: "2-digit", month: "2-digit", year: "numeric",
-      hour: "2-digit", minute: "2-digit", hour12: false
-    });
+    const closedAt = fmtThaiDateTime(new Date());
 
     const isWon = opts.status === DealStatus.WON;
     const emoji = isWon ? "🏆" : "❌";
@@ -132,7 +134,7 @@ async function sendDealLineNotification(opts: {
       const { sendEmailCard } = await import("../../lib/email-notify.js");
       const emailConfig = {
         host: emailCredential.clientIdRef,
-        port: parseInt(emailCredential.clientSecretRef ?? "587", 10),
+        port: smtpPort(emailCredential.clientSecretRef),
         fromAddress: emailCredential.webhookTokenRef,
         password: emailCredential.apiKeyRef
       };
@@ -145,11 +147,12 @@ async function sendDealLineNotification(opts: {
         ...(!isWon && deal?.lostNote ? [{ label: "Lost Reason", value: deal.lostNote }] : []),
         { label: "Closed At",   value: closedAt }
       ];
+      const baseUrl = await getTenantUrl(opts.tenantId).catch(() => config.APP_URL ?? "");
       emailChannels.forEach(ch => sends.push(sendEmailCard(emailConfig, ch.channelTarget, {
         subject: `${emoji} ${label} — ${dealName}`,
         title: `${emoji} ${label}`,
         facts: emailFacts,
-        detailUrl: config.APP_URL ? `${config.APP_URL}/deals/${encodeURIComponent(dealNo)}` : undefined,
+        detailUrl: baseUrl ? `${baseUrl}/deals/${encodeURIComponent(dealNo)}` : undefined,
         footer: `[${appName}]`
       })));
     }
@@ -768,6 +771,13 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
     await assertCustomerBelongsToTenant(app, tenantId, data.customerId);
     assertValidFollowUpWindow(app, new Date(data.followUpAt), data.closedAt ? new Date(data.closedAt) : null);
 
+    // H9: Validate custom fields against tenant definitions
+    const dealCfDefs = await prisma.customFieldDefinition.findMany({
+      where: { tenantId, entityType: EntityType.DEAL, isActive: true },
+      select: { fieldKey: true, dataType: true, isRequired: true, isActive: true, optionsJson: true }
+    });
+    const customFields = validateCustomFields(app, dealCfDefs, data.customFields ?? {});
+
     const created = await prisma.$transaction(async (tx) => {
       const dealCount = await tx.deal.count({ where: { tenantId } });
       const dealNo = `D-${String(dealCount + 1).padStart(6, "0")}`;
@@ -782,7 +792,7 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
           estimatedValue: data.estimatedValue,
           followUpAt: new Date(data.followUpAt),
           closedAt: data.closedAt ? new Date(data.closedAt) : null,
-          customFields: data.customFields
+          customFields
         }
       });
       await writeEntityChangelog({
@@ -849,11 +859,25 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
+    // H9: Validate custom fields if provided
+    let customFields: import("@prisma/client").Prisma.InputJsonValue | undefined;
+    if (parsed.data.customFields !== undefined) {
+      const dealCfDefs = await prisma.customFieldDefinition.findMany({
+        where: { tenantId, entityType: EntityType.DEAL, isActive: true },
+        select: { fieldKey: true, dataType: true, isRequired: true, isActive: true, optionsJson: true }
+      });
+      customFields = validateCustomFields(app, dealCfDefs, {
+        ...asRecord(deal.customFields),
+        ...parsed.data.customFields
+      });
+    }
+
     return prisma.$transaction(async (tx) => {
       const updated = await tx.deal.update({
         where: { id: params.id },
         data: {
           ...parsed.data,
+          ...(customFields !== undefined ? { customFields } : {}),
           followUpAt: parsed.data.followUpAt ? new Date(parsed.data.followUpAt) : undefined,
           closedAt: parsed.data.closedAt ? new Date(parsed.data.closedAt) : undefined
         }
@@ -941,7 +965,9 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
     });
 
     if (nextStatus === DealStatus.WON || nextStatus === DealStatus.LOST) {
-      void sendDealLineNotification({ tenantId, ownerId: actorId, dealId: params.id, status: nextStatus });
+      // H8: log errors from fire-and-forget notifications so failures are visible in server logs.
+      sendDealLineNotification({ tenantId, ownerId: actorId, dealId: params.id, status: nextStatus })
+        .catch(err => console.error("[deals] move-stage notification error", err));
     }
 
     return updated;
@@ -1124,7 +1150,8 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
       return result;
     });
 
-    void sendDealLineNotification({ tenantId, ownerId: actorId, dealId: params.id, status });
+    sendDealLineNotification({ tenantId, ownerId: actorId, dealId: params.id, status })
+      .catch(err => console.error("[deals] close notification error", err));
 
     return updated;
   });

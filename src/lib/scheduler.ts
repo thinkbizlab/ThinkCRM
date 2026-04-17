@@ -11,6 +11,10 @@ import cron from "node-cron";
 import type { ScheduledTask } from "node-cron";
 import { CronRunStatus, CronTriggerType } from "@prisma/client";
 import { prisma } from "./prisma.js";
+import { hostname } from "node:os";
+
+// Stamp RUNNING records with this tag so startup cleanup only touches our own runs (M3).
+export const WORKER_TAG = `worker:${hostname()}:${process.pid}`;
 
 // ── Job definitions ───────────────────────────────────────────────────────────
 
@@ -74,8 +78,19 @@ async function executeAndLog(
   const def = getJobDef(jobKey);
   if (!def) return;
 
+  // Overlap guard for scheduled runs — manual runs are checked in runJobNow before the record is created
+  if (!existingRunId) {
+    const alreadyRunning = await prisma.cronJobRun.findFirst({
+      where: { tenantId, jobKey, status: CronRunStatus.RUNNING }
+    });
+    if (alreadyRunning) {
+      console.warn(`[scheduler] ${jobKey} tenant=${tenantId} skipped — run ${alreadyRunning.id} still in progress`);
+      return;
+    }
+  }
+
   const runId = existingRunId ?? (await prisma.cronJobRun.create({
-    data: { tenantId, jobKey, status: CronRunStatus.RUNNING, triggeredBy, startedAt: new Date() }
+    data: { tenantId, jobKey, status: CronRunStatus.RUNNING, triggeredBy, startedAt: new Date(), summary: WORKER_TAG }
   })).id;
 
   let status: CronRunStatus = CronRunStatus.SUCCESS;
@@ -164,6 +179,26 @@ export async function startScheduler(): Promise<void> {
     await loadAndScheduleTenant(tenant.id);
   }
 
+  // S10: System-level daily job — expire trials that have passed their trialEndsAt date.
+  // Runs once a day at 00:05 server time (not tenant-specific, no CronJobConfig row needed).
+  cron.schedule("5 0 * * *", async () => {
+    try {
+      const expired = await prisma.subscription.findMany({
+        where: { status: "TRIALING", trialEndsAt: { lt: new Date() } },
+        select: { tenantId: true, id: true }
+      });
+      for (const sub of expired) {
+        await prisma.$transaction([
+          prisma.subscription.update({ where: { id: sub.id },       data: { status: "CANCELED" } }),
+          prisma.tenant.update(      { where: { id: sub.tenantId }, data: { isActive: false, deactivatedAt: new Date() } })
+        ]);
+        console.log(`[scheduler] Trial expired — tenant=${sub.tenantId}`);
+      }
+    } catch (err) {
+      console.error("[scheduler] trial-expiry job error", err);
+    }
+  });
+
   console.log(`[scheduler] Started — ${activeTasks.size} active tasks across ${tenants.length} tenants`);
 }
 
@@ -193,6 +228,14 @@ export async function rescheduleJob(tenantId: string, jobKey: string): Promise<v
 export async function runJobNow(tenantId: string, jobKey: string): Promise<string> {
   if (!getJobDef(jobKey)) throw new Error(`Unknown job key: ${jobKey}`);
 
+  // Overlap guard — prevent duplicate manual triggers while a run is in progress
+  const alreadyRunning = await prisma.cronJobRun.findFirst({
+    where: { tenantId, jobKey, status: CronRunStatus.RUNNING }
+  });
+  if (alreadyRunning) {
+    throw new Error(`Job "${jobKey}" is already running (runId=${alreadyRunning.id}). Wait for it to finish before triggering again.`);
+  }
+
   // Create the single run record here so we can return its ID immediately
   const runRecord = await prisma.cronJobRun.create({
     data: {
@@ -200,7 +243,8 @@ export async function runJobNow(tenantId: string, jobKey: string): Promise<strin
       jobKey,
       status: CronRunStatus.RUNNING,
       triggeredBy: CronTriggerType.MANUAL,
-      startedAt: new Date()
+      startedAt: new Date(),
+      summary: WORKER_TAG
     }
   });
 

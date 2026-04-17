@@ -63,6 +63,126 @@
                 </div>
               </div>
               <p id="auth-message" class="login-error"></p>
+              <div class="login-forgot-row">
+                <a href="#" id="forgot-password-link" class="login-forgot-link">Forgot password?</a>
+              </div>
+              <div class="login-forgot-row" style="text-align:center;margin-top:var(--sp-4)">
+                <a href="#" id="create-workspace-link" class="login-forgot-link">Create a new workspace &rarr;</a>
+              </div>
+            </div>
+
+            <!-- Forgot password form (hidden by default) -->
+            <div class="login-form" id="forgot-password-panel" hidden>
+              <h2 class="login-heading">Reset password</h2>
+              <p class="login-subtitle">Enter your workspace and email. We'll send a reset link if the account exists.</p>
+              <form id="forgot-password-form">
+                <div class="login-fields">
+                  <div class="login-field-group">
+                    <label class="login-field-label">Workspace</label>
+                    <input class="login-input" name="tenantSlug" required />
+                  </div>
+                  <div class="login-field-group">
+                    <label class="login-field-label">Email</label>
+                    <input class="login-input" name="email" type="email" required />
+                  </div>
+                </div>
+                <button class="login-submit" type="submit">Send reset link</button>
+              </form>
+              <p id="forgot-message" class="login-error"></p>
+              <div class="login-forgot-row">
+                <a href="#" id="back-to-login-link" class="login-forgot-link">&larr; Back to sign in</a>
+              </div>
+            </div>
+
+            <!-- Sign up form -->
+            <div class="login-form" id="signup-panel" hidden>
+              <h2 class="login-heading">Create your workspace</h2>
+              <p class="login-subtitle">Get started in seconds — no credit card required.</p>
+              <form id="signup-form">
+                <div class="login-fields">
+                  <div class="login-field-group">
+                    <label class="login-field-label">Company name</label>
+                    <input class="login-input" name="companyName" type="text" placeholder="Acme Co." required />
+                  </div>
+                  <div class="login-field-group">
+                    <label class="login-field-label">Workspace URL</label>
+                    <div class="signup-slug-row">
+                      <input class="login-input signup-slug-input" name="slug" type="text" placeholder="acme" pattern="[a-z0-9\-]+" minlength="2" maxlength="60" required />
+                      <span class="signup-slug-status" id="slug-status" aria-live="polite"></span>
+                    </div>
+                    <span class="login-subtitle signup-slug-hint" id="slug-hint"></span>
+                  </div>
+                  <div class="login-field-group">
+                    <label class="login-field-label">Your full name</label>
+                    <input class="login-input" name="adminFullName" type="text" placeholder="Jane Smith" required />
+                  </div>
+                  <div class="login-field-group">
+                    <label class="login-field-label">Work email</label>
+                    <input class="login-input" name="adminEmail" type="email" placeholder="jane@acme.com" required />
+                  </div>
+                  <div class="login-field-group">
+                    <label class="login-field-label">Password</label>
+                    <input class="login-input" name="adminPassword" type="password" minlength="12" placeholder="12+ characters" required />
+                  </div>
+                </div>
+                <button class="login-submit" type="submit">Create workspace</button>
+              </form>
+              <p id="signup-message" class="login-error"></p>
+              <div class="login-forgot-row" style="text-align:center">
+                <a href="#" id="back-to-login-from-signup" class="login-forgot-link">&larr; Already have a workspace? Sign in</a>
+              </div>
+            </div>
+
+            <!-- Reset password form (shown when ?token= is in URL) -->
+            <div class="login-form" id="reset-password-panel" hidden>
+              <h2 class="login-heading">Set new password</h2>
+              <p class="login-subtitle">Enter your new password below.</p>
+              <form id="reset-password-form">
+                <input type="hidden" name="token" id="reset-token-input" />
+                <div class="login-fields">
+                  <div class="login-field-group">
+                    <label class="login-field-label">New password</label>
+                    <input class="login-input" name="newPassword" type="password" minlength="12" required />
+                  </div>
+                  <div class="login-field-group">
+                    <label class="login-field-label">Confirm password</label>
+                    <input class="login-input" name="confirmPassword" type="password" minlength="12" required />
+                  </div>
+                </div>
+                <button class="login-submit" type="submit">Reset password</button>
+              </form>
+              <p id="reset-message" class="login-error"></p>
+              <div class="login-forgot-row">
+                <a href="/" class="login-forgot-link">&larr; Back to sign in</a>
+              </div>
+            </div>
+
+            <!-- Accept invite form (shown at /accept-invite?token=) -->
+            <div class="login-form" id="accept-invite-panel" hidden>
+              <h2 class="login-heading">Accept your invitation</h2>
+              <p class="login-subtitle">Set up your account to get started.</p>
+              <form id="accept-invite-form">
+                <input type="hidden" name="token" id="invite-token-input" />
+                <div class="login-fields">
+                  <div class="login-field-group">
+                    <label class="login-field-label">Full name</label>
+                    <input class="login-input" name="fullName" type="text" minlength="2" maxlength="120" required />
+                  </div>
+                  <div class="login-field-group">
+                    <label class="login-field-label">Password</label>
+                    <input class="login-input" name="password" type="password" minlength="12" required />
+                  </div>
+                  <div class="login-field-group">
+                    <label class="login-field-label">Confirm password</label>
+                    <input class="login-input" name="confirmPassword" type="password" minlength="12" required />
+                  </div>
+                </div>
+                <button class="login-submit" type="submit">Create account</button>
+              </form>
+              <p id="invite-message" class="login-error"></p>
+              <div class="login-forgot-row">
+                <a href="/" class="login-forgot-link">&larr; Back to sign in</a>
+              </div>
             </div>
           </div>
         </div>
@@ -178,6 +298,18 @@
             <button id="theme-toggle-btn" style="display:none" aria-hidden="true" tabindex="-1">Theme</button>
           </div>
         </header>
+
+        <!-- ─── ONBOARDING WIZARD ──────────────────────────── -->
+        <div id="onboarding-wizard" class="onboarding-wizard" hidden>
+          <div class="onboarding-wizard-inner">
+            <div class="onboarding-wizard-header">
+              <h3 class="onboarding-wizard-title">Getting started</h3>
+              <button type="button" class="onboarding-wizard-dismiss" id="onboarding-dismiss-btn" aria-label="Dismiss">&#10005;</button>
+            </div>
+            <p class="onboarding-wizard-subtitle">Complete these steps to get the most out of ThinkCRM.</p>
+            <ul class="onboarding-steps" id="onboarding-steps-list"></ul>
+          </div>
+        </div>
 
         <!-- MAIN CONTENT BODY -->
         <div class="app-body">

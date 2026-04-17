@@ -12,6 +12,11 @@ import { z } from "zod";
 import { listVisibleUserIds, requireTenantId, requireUserId } from "../../lib/http.js";
 import { writeEntityChangelog } from "../../lib/changelog.js";
 import { prisma } from "../../lib/prisma.js";
+import { decryptCredential } from "../../lib/secrets.js";
+import { getTenantUrl } from "../../lib/tenant-url.js";
+import { smtpPort } from "../../lib/smtp-port.js";
+import { uploadBufferToR2, buildR2PublicUrl, createR2PresignedDownload } from "../../lib/r2-storage.js";
+import { formatThaiDateTime, googleMapsLink, formatDuration } from "../../lib/line-notify.js";
 
 const DEFAULT_CHECKIN_MAX_DISTANCE_M = 1_000; // fallback when tenant has no visit config
 const EARTH_RADIUS_METERS = 6371000;
@@ -483,7 +488,6 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
         const imageBuffer = Buffer.from(base64Data, "base64");
         const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { slug: true } });
         if (tenant?.slug) {
-          const { uploadBufferToR2 } = await import("../../lib/r2-storage.js");
           const stored = await uploadBufferToR2({
             tenantSlug: tenant.slug,
             objectKeyOrRef: `visits/${params.id}/selfie-${Date.now()}.${ext}`,
@@ -594,11 +598,11 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
         prisma.tenantIntegrationCredential.findUnique({
           where: { tenantId_platform: { tenantId, platform: IntegrationPlatform.LINE } },
           select: { apiKeyRef: true, status: true }
-        }),
+        }).then(r => decryptCredential(r)),
         prisma.tenantIntegrationCredential.findUnique({
           where: { tenantId_platform: { tenantId, platform: IntegrationPlatform.EMAIL } },
           select: { clientIdRef: true, clientSecretRef: true, apiKeyRef: true, webhookTokenRef: true, status: true }
-        }),
+        }).then(r => decryptCredential(r)),
         prisma.tenantBranding.findUnique({
           where: { tenantId },
           select: { appName: true }
@@ -626,7 +630,6 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
           let selfieHttpUrl: string | null = null;
           const rawSelfie = checkedIn.checkInSelfie;
           if (rawSelfie?.startsWith("r2://")) {
-            const { buildR2PublicUrl, createR2PresignedDownload } = await import("../../lib/r2-storage.js");
             selfieHttpUrl = buildR2PublicUrl(rawSelfie);
             if (!selfieHttpUrl) {
               try {
@@ -674,7 +677,6 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
 
           if (teamsChannels.length > 0) {
             const { sendTeamsCard } = await import("../../lib/teams-notify.js");
-            const { formatThaiDateTime, googleMapsLink } = await import("../../lib/line-notify.js");
             const appName = branding?.appName || "CRM";
             const checkInAt = checkedIn.checkInAt ?? new Date();
             const facts = [
@@ -703,15 +705,15 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
               notifWarnings.push("EMAIL");
             } else {
               const { sendEmailCard } = await import("../../lib/email-notify.js");
-              const { formatThaiDateTime, googleMapsLink } = await import("../../lib/line-notify.js");
               const appName = branding?.appName || "CRM";
               const checkInAt = checkedIn.checkInAt ?? new Date();
               const emailConfig = {
                 host: emailCredential.clientIdRef,
-                port: parseInt(emailCredential.clientSecretRef ?? "587", 10),
+                port: smtpPort(emailCredential.clientSecretRef),
                 fromAddress: emailCredential.webhookTokenRef,
                 password: emailCredential.apiKeyRef
               };
+              const tenantBaseUrl = await getTenantUrl(tenantId).catch(() => config.APP_URL ?? "");
               const facts = [
                 { label: "Visit ID",  value: checkedIn.visitNo ?? "—" },
                 { label: "Sales Rep", value: rep.fullName || "—" },
@@ -725,7 +727,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
                   subject: `📍 Check-In Notification — ${visitWithCustomer?.customer?.name || "Visit"}`,
                   title: "📍 Check-In Notification",
                   facts,
-                  detailUrl: config.APP_URL ? `${config.APP_URL}/visits` : undefined,
+                  detailUrl: `${tenantBaseUrl}/visits`,
                   footer: `[${appName}]`
                 }))
               );
@@ -810,11 +812,11 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
         prisma.tenantIntegrationCredential.findUnique({
           where: { tenantId_platform: { tenantId, platform: IntegrationPlatform.LINE } },
           select: { apiKeyRef: true, status: true }
-        }),
+        }).then(r => decryptCredential(r)),
         prisma.tenantIntegrationCredential.findUnique({
           where: { tenantId_platform: { tenantId, platform: IntegrationPlatform.EMAIL } },
           select: { clientIdRef: true, clientSecretRef: true, apiKeyRef: true, webhookTokenRef: true, status: true }
-        }),
+        }).then(r => decryptCredential(r)),
         prisma.tenantBranding.findUnique({
           where: { tenantId },
           select: { appName: true }
@@ -869,7 +871,6 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
 
           if (teamsChannels.length > 0) {
             const { sendTeamsCard } = await import("../../lib/teams-notify.js");
-            const { formatThaiDateTime, googleMapsLink, formatDuration } = await import("../../lib/line-notify.js");
             const appName = branding?.appName || "CRM";
             const checkOutAt = updated.checkOutAt ?? new Date();
             const duration = updated.checkInAt ? formatDuration(updated.checkInAt, checkOutAt) : "—";
@@ -900,16 +901,16 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
               notifWarnings.push("EMAIL");
             } else {
               const { sendEmailCard } = await import("../../lib/email-notify.js");
-              const { formatThaiDateTime, googleMapsLink, formatDuration } = await import("../../lib/line-notify.js");
               const appName = branding?.appName || "CRM";
               const checkOutAt = updated.checkOutAt ?? new Date();
               const duration = updated.checkInAt ? formatDuration(updated.checkInAt, checkOutAt) : "—";
               const emailConfig = {
                 host: emailCredential.clientIdRef,
-                port: parseInt(emailCredential.clientSecretRef ?? "587", 10),
+                port: smtpPort(emailCredential.clientSecretRef),
                 fromAddress: emailCredential.webhookTokenRef,
                 password: emailCredential.apiKeyRef
               };
+              const tenantBaseUrl2 = await getTenantUrl(tenantId).catch(() => config.APP_URL ?? "");
               const facts = [
                 { label: "Visit ID",  value: updated.visitNo ?? "—" },
                 { label: "Sales Rep", value: rep.fullName || "—" },
@@ -924,7 +925,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
                   subject: `✅ Check-Out Notification — ${visitWithCustomer?.customer?.name || "Visit"}`,
                   title: "✅ Check-Out Notification",
                   facts,
-                  detailUrl: config.APP_URL ? `${config.APP_URL}/visits` : undefined,
+                  detailUrl: `${tenantBaseUrl2}/visits`,
                   footer: `[${appName}]`
                 }))
               );

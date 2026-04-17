@@ -11,7 +11,7 @@ import {
 } from "@prisma/client";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { randomUUID, createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { deflateSync } from "node:zlib";
 import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -24,9 +24,13 @@ import {
   requireTenantId,
   requireUserId
 } from "../../lib/http.js";
+import { encryptField, decryptCredential } from "../../lib/secrets.js";
+import { smtpPort } from "../../lib/smtp-port.js";
+import { stableTeamsAppId } from "../../lib/ms-teams-app-id.js";
 import { JOB_DEFS, rescheduleJob, runJobNow } from "../../lib/scheduler.js";
 import { prisma } from "../../lib/prisma.js";
 import {
+  buildR2PublicUrl,
   createR2PresignedDownload,
   createR2PresignedUpload,
   uploadBufferToR2,
@@ -316,7 +320,7 @@ function mapTenantCredential(
     | null,
   platform: TenantIntegrationPlatform
 ) {
-  const activeRecord = record && record.platform === platform ? record : null;
+  const activeRecord = record && record.platform === platform ? decryptCredential(record) : null;
   return {
     id: activeRecord?.id ?? null,
     platform,
@@ -385,20 +389,30 @@ async function runPlatformConnectionTest(
       });
       const tok = await tokenRes.json() as { access_token?: string; error_description?: string };
       if (!tok.access_token) return err(tok.error_description ?? "Token request failed — check App ID, Client Secret, and Tenant ID.");
-      // Step 2: verify the App ID is recognized by the Bot Framework connector (catches mismatched App ID)
+      // Step 2: verify the App ID is recognized by the Bot Framework connector (catches mismatched App ID).
+      // Success indicator: HTTP 400 Bad Request — means the connector accepted the JWT but rejected the
+      // payload (expected — our test payload is minimal). HTTP 401 means the JWT itself was rejected
+      // (wrong App ID). HTTP 5xx is inconclusive (connector may be temporarily unavailable).
       for (const serviceUrl of ["https://smba.trafficmanager.net/ap/", "https://smba.trafficmanager.net/apis/"]) {
         const probeRes = await fetch(`${serviceUrl}v3/conversations`, {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${tok.access_token}` },
           body: JSON.stringify({ bot: { id: cred.clientIdRef, name: "test" }, members: [{ id: "test" }], isGroup: false })
         });
+        // H7: Explicitly accept 400 as success (JWT accepted, bad payload is expected).
+        // Treat 5xx as inconclusive rather than erroneously reporting success.
+        if (probeRes.status === 400) {
+          return ok(`Bot Framework credentials verified — App ID recognized by connector.`);
+        }
+        if (probeRes.status >= 500) {
+          return err(`Bot Framework connector returned ${probeRes.status} — server error. Credentials may be valid; try again in a moment.`);
+        }
         if (probeRes.status !== 401) {
-          // Any non-401 (even 400 bad request) means the connector accepted the JWT
+          // 2xx or other non-401/non-5xx — connector accepted the JWT
           return ok(`Bot Framework credentials verified — App ID recognized by connector (${probeRes.status}).`);
         }
         const body = await probeRes.json().catch(() => ({})) as { error?: { message?: string } };
         if (body.error?.message && !body.error.message.includes("Invalid JWT")) {
-          // Different error = JWT accepted, just a bad payload
           return ok(`Bot Framework credentials verified — App ID recognized by connector.`);
         }
       }
@@ -450,7 +464,7 @@ async function runPlatformConnectionTest(
 
     case IntegrationPlatform.EMAIL: {
       if (!cred.clientIdRef || !cred.apiKeyRef || !cred.webhookTokenRef) return err("SMTP Host, Password, and From Address are required.");
-      const port = parseInt(cred.clientSecretRef ?? "587", 10);
+      const port = smtpPort(cred.clientSecretRef);
       const nodemailer = await import("nodemailer");
       const transporter = nodemailer.createTransport({
         host: cred.clientIdRef, port, secure: port === 465,
@@ -554,12 +568,6 @@ async function ensureTeamBelongsToTenant(
   return team;
 }
 
-// ── Teams App ID helper ────────────────────────────────────────────────────────
-/** Derives a stable, deterministic UUID from the bot App ID so the catalog externalId never changes. */
-function stableTeamsAppId(botAppId: string): string {
-  const h = createHash("sha256").update("thinkcrm-teams-app:" + botAppId).digest("hex");
-  return `${h.slice(0,8)}-${h.slice(8,12)}-4${h.slice(13,16)}-${(["8","9","a","b"] as const)[parseInt(h[16]!, 16) & 3]}${h.slice(17,20)}-${h.slice(20,32)}`;
-}
 
 // ── PNG helper ────────────────────────────────────────────────────────────────
 // Generates a minimal valid solid-colour PNG without external dependencies.
@@ -752,17 +760,22 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     const tenant = await prisma.tenant.findUnique({ where: { id: params.id }, select: { slug: true } });
     if (!tenant) return branding;
     const resolved = { ...branding } as typeof branding & { logoUrl?: string | null; faviconUrl?: string | null };
+    // M10: Prefer fast R2 public CDN URL; fall back to presigned download URL.
     if (resolved.logoUrl?.startsWith("r2://")) {
-      try {
-        const dl = await createR2PresignedDownload({ tenantSlug: tenant.slug, objectKeyOrRef: resolved.logoUrl });
-        resolved.logoUrl = dl.downloadUrl;
-      } catch { /* leave as-is */ }
+      resolved.logoUrl = buildR2PublicUrl(resolved.logoUrl) ?? await (async () => {
+        try {
+          const dl = await createR2PresignedDownload({ tenantSlug: tenant.slug, objectKeyOrRef: resolved.logoUrl! });
+          return dl.downloadUrl;
+        } catch { return null; }
+      })();
     }
     if (resolved.faviconUrl?.startsWith("r2://")) {
-      try {
-        const dl = await createR2PresignedDownload({ tenantSlug: tenant.slug, objectKeyOrRef: resolved.faviconUrl });
-        resolved.faviconUrl = dl.downloadUrl;
-      } catch { /* leave as-is */ }
+      resolved.faviconUrl = buildR2PublicUrl(resolved.faviconUrl) ?? await (async () => {
+        try {
+          const dl = await createR2PresignedDownload({ tenantSlug: tenant.slug, objectKeyOrRef: resolved.faviconUrl! });
+          return dl.downloadUrl;
+        } catch { return null; }
+      })();
     }
     return resolved;
   });
@@ -1090,11 +1103,11 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       prisma.tenantIntegrationCredential.findUnique({
         where: { tenantId_platform: { tenantId, platform: IntegrationPlatform.MS_TEAMS } },
         select: { clientIdRef: true, clientSecretRef: true, webhookTokenRef: true, status: true }
-      }),
+      }).then(r => decryptCredential(r)),
       prisma.tenantIntegrationCredential.findUnique({
         where: { tenantId_platform: { tenantId, platform: IntegrationPlatform.MS365 } },
         select: { clientIdRef: true, clientSecretRef: true, webhookTokenRef: true, status: true }
-      }),
+      }).then(r => decryptCredential(r)),
       prisma.tenantBranding.findUnique({ where: { tenantId }, select: { appName: true } })
     ]);
 
@@ -1128,7 +1141,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
         }
         return { ok: true, message: "Test DM sent successfully via Graph API!", method: "graph", userMri: acct.externalUserId };
       }
-      console.warn(`[test-dm] Graph API failed: ${result.message} — trying Bot Framework fallback`);
+      app.log.warn(`[test-dm] Graph API failed: ${result.message} — trying Bot Framework fallback`);
     }
 
     // ── Fallback: Bot Framework with stored convRef ───────────────────────────
@@ -1267,6 +1280,14 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.badRequest(parsed.error.message);
     }
 
+    // H6: For EMAIL, clientSecret holds the SMTP port — validate it is a valid port number.
+    if (platform === IntegrationPlatform.EMAIL && parsed.data.clientSecret !== undefined) {
+      const port = parseInt(parsed.data.clientSecret, 10);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        throw app.httpErrors.badRequest("SMTP Port must be a valid port number (1–65535). Common values: 587 (STARTTLS), 465 (SSL), 25.");
+      }
+    }
+
     const credential = await prisma.tenantIntegrationCredential.upsert({
       where: {
         tenantId_platform: {
@@ -1277,19 +1298,19 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       create: {
         tenantId: params.id,
         platform,
-        clientIdRef: parsed.data.clientId,
-        clientSecretRef: parsed.data.clientSecret,
-        apiKeyRef: parsed.data.apiKey,
-        webhookTokenRef: parsed.data.webhookToken,
+        clientIdRef: encryptField(parsed.data.clientId),
+        clientSecretRef: encryptField(parsed.data.clientSecret),
+        apiKeyRef: encryptField(parsed.data.apiKey),
+        webhookTokenRef: encryptField(parsed.data.webhookToken),
         status: SourceStatus.DISABLED,
         lastTestStatus: null,
         lastTestResult: "Credentials saved. Run Test Connection before enabling."
       },
       update: {
-        clientIdRef: parsed.data.clientId,
-        clientSecretRef: parsed.data.clientSecret,
-        apiKeyRef: parsed.data.apiKey,
-        webhookTokenRef: parsed.data.webhookToken,
+        clientIdRef: encryptField(parsed.data.clientId),
+        clientSecretRef: encryptField(parsed.data.clientSecret),
+        apiKeyRef: encryptField(parsed.data.apiKey),
+        webhookTokenRef: encryptField(parsed.data.webhookToken),
         status: SourceStatus.DISABLED,
         lastTestStatus: null,
         lastTestedAt: null,
@@ -1324,7 +1345,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     let testResult: string;
 
     try {
-      ({ testStatus, testResult } = await runPlatformConnectionTest(platform, credential));
+      ({ testStatus, testResult } = await runPlatformConnectionTest(platform, decryptCredential(credential)));
     } catch (err) {
       testStatus = ExecutionStatus.FAILURE;
       testResult = `Test error: ${err instanceof Error ? err.message : String(err)}`;
@@ -1451,7 +1472,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       prisma.tenantIntegrationCredential.findUnique({
         where: { tenantId_platform: { tenantId, platform: IntegrationPlatform.MS_TEAMS } },
         select: { clientIdRef: true }
-      }),
+      }).then(r => decryptCredential(r)),
       prisma.tenantBranding.findUnique({ where: { tenantId }, select: { appName: true } })
     ]);
 
@@ -1519,11 +1540,11 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       prisma.tenantIntegrationCredential.findUnique({
         where: { tenantId_platform: { tenantId, platform: IntegrationPlatform.MS365 } },
         select: { clientIdRef: true, clientSecretRef: true, webhookTokenRef: true, status: true }
-      }),
+      }).then(r => decryptCredential(r)),
       prisma.tenantIntegrationCredential.findUnique({
         where: { tenantId_platform: { tenantId, platform: IntegrationPlatform.MS_TEAMS } },
         select: { clientIdRef: true }
-      })
+      }).then(r => decryptCredential(r))
     ]);
 
     if (!ms365Cred?.clientIdRef || !ms365Cred?.clientSecretRef)
@@ -1901,11 +1922,11 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       prisma.tenantIntegrationCredential.findUnique({
         where: { tenantId_platform: { tenantId, platform: IntegrationPlatform.LINE } },
         select: { apiKeyRef: true }
-      }),
+      }).then(r => decryptCredential(r)),
       prisma.tenantIntegrationCredential.findUnique({
         where: { tenantId_platform: { tenantId, platform: IntegrationPlatform.EMAIL } },
         select: { clientIdRef: true, clientSecretRef: true, apiKeyRef: true, webhookTokenRef: true }
-      }),
+      }).then(r => decryptCredential(r)),
       prisma.tenantBranding.findUnique({
         where: { tenantId },
         select: { appName: true }
@@ -1941,7 +1962,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
         const { sendEmailCard } = await import("../../lib/email-notify.js");
         const emailConfig = {
           host: emailCredential.clientIdRef,
-          port: parseInt(emailCredential.clientSecretRef ?? "587", 10),
+          port: smtpPort(emailCredential.clientSecretRef),
           fromAddress: emailCredential.webhookTokenRef,
           password: emailCredential.apiKeyRef
         };
@@ -2669,5 +2690,32 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     ]);
 
     return { runs, total, limit, offset };
+  });
+
+  app.get("/settings/audit-log", async (request) => {
+    const tenantId = requireTenantId(request);
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const q = request.query as { page?: string; limit?: string; action?: string };
+    const page  = Math.max(1, parseInt(q.page  ?? "1",  10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(q.limit ?? "50", 10) || 50));
+    const skip  = (page - 1) * limit;
+
+    const where = {
+      tenantId,
+      ...(q.action ? { action: q.action } : {})
+    };
+
+    const [rows, total] = await Promise.all([
+      prisma.auditLog.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip,
+        take: limit,
+        select: { id: true, userId: true, action: true, detail: true, ipAddress: true, createdAt: true }
+      }),
+      prisma.auditLog.count({ where })
+    ]);
+
+    return { data: rows, total, page, limit, pages: Math.ceil(total / limit) };
   });
 };

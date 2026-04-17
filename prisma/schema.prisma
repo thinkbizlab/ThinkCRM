@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -12,6 +12,9 @@ model Tenant {
   name                  String
   slug                  String                   @unique
   timezone              String                   @default("Asia/Bangkok")
+  isActive              Boolean                  @default(true)
+  deactivatedAt         DateTime?
+  stripeCustomerId      String?
   createdAt             DateTime                 @default(now())
   updatedAt             DateTime                 @updatedAt
   users                 User[]
@@ -46,6 +49,11 @@ model Tenant {
   customDomain           TenantCustomDomain?
   cronJobConfigs         CronJobConfig[]
   cronJobRuns            CronJobRun[]
+  userInvites            UserInvite[]
+  auditLogs              AuditLog[]
+  stripeWebhookDeliveries StripeWebhookDelivery[]
+  syncApiKeys            SyncApiKey[]
+  syncExternalRefs       SyncExternalRef[]
 }
 
 model User {
@@ -77,8 +85,10 @@ model User {
   voiceNoteConfirmed  VoiceNoteTranscript[] @relation("VoiceConfirmedBy")
   aiVisitRecommendationRuns AiVisitRecommendationRun[] @relation("AiVisitRecommendationRunRep")
   entityChangelogs      EntityChangelog[]      @relation("EntityChangelogChangedBy")
+  devices               UserDevice[]
 
   @@unique([tenantId, email])
+  @@index([tenantId, isActive, role])
 }
 
 model EntityChangelog {
@@ -113,6 +123,8 @@ model Subscription {
   billingPeriodStart DateTime           @default(now())
   billingPeriodEnd   DateTime           @default(now())
   externalCustomerId String?
+  trialEndsAt        DateTime?
+  planFeatures       Json?
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
   tenant             Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -417,6 +429,10 @@ model Deal {
   progress       DealProgressUpdate[]
   quotations     Quotation[]
   visits         Visit[]
+
+  @@index([tenantId, ownerId, status, closedAt])
+  @@index([tenantId, stageId])
+  @@index([tenantId, followUpAt])
 }
 
 model DealProgressUpdate {
@@ -474,11 +490,14 @@ model TenantRoleChain {
 }
 
 model StripeWebhookDelivery {
-  id         String   @id @default(cuid())
-  eventId    String   @unique
-  eventType  String
-  tenantId   String?
-  receivedAt DateTime @default(now())
+  id        String   @id @default(cuid())
+  eventId   String   @unique
+  eventType String
+  tenantId  String?
+  createdAt DateTime @default(now())
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
 }
 
 model QuotationItem {
@@ -533,6 +552,9 @@ model Visit {
   rep           User        @relation("VisitRep", fields: [repId], references: [id], onDelete: Restrict)
   customer      Customer    @relation(fields: [customerId], references: [id], onDelete: Restrict)
   deal          Deal?       @relation(fields: [dealId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, repId, checkInAt])
+  @@index([tenantId, status, plannedAt])
 }
 
 model SalesKpiTarget {
@@ -753,6 +775,7 @@ enum ChannelType {
   EMAIL
   SLACK
   LINE
+  APNS
 }
 
 enum DealStatus {
@@ -924,9 +947,107 @@ model CronJobRun {
   summary     String?
   triggeredBy CronTriggerType @default(SCHEDULED)
   tenant      Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  config      CronJobConfig?  @relation(fields: [tenantId, jobKey], references: [tenantId, jobKey])
+  config      CronJobConfig   @relation(fields: [tenantId, jobKey], references: [tenantId, jobKey], onDelete: Cascade)
 
   @@index([tenantId, jobKey, startedAt])
+}
+
+model OAuthState {
+  state      String   @id
+  tenantSlug String
+  userId     String?
+  expiresAt  DateTime
+
+  @@index([expiresAt])
+}
+
+/// Short-lived one-time exchange code that wraps a signed JWT.
+/// Created by OAuth callbacks; consumed by POST /auth/oauth/exchange.
+/// Prevents the JWT from appearing in server logs, browser history, or Referer headers.
+model OAuthExchangeCode {
+  code      String   @id
+  jwt       String
+  expiresAt DateTime
+
+  @@index([expiresAt])
+}
+
+model PasswordResetToken {
+  token     String    @id
+  tenantId  String
+  userId    String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([expiresAt])
+}
+
+model UserInvite {
+  id         String    @id @default(cuid())
+  tenantId   String
+  email      String
+  role       UserRole  @default(REP)
+  teamId     String?
+  invitedById String?
+  token      String    @unique
+  expiresAt  DateTime
+  acceptedAt DateTime?
+  createdAt  DateTime  @default(now())
+  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@index([tenantId, email])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String?
+  action    String
+  detail    Json?
+  ipAddress String?
+  createdAt DateTime @default(now())
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, action])
+}
+
+model RefreshToken {
+  id        String    @id @default(cuid())
+  token     String    @unique
+  tenantId  String
+  userId    String
+  deviceId  String?
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([token])
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model UserDevice {
+  id          String         @id @default(cuid())
+  tenantId    String
+  userId      String
+  platform    DevicePlatform
+  deviceToken String
+  deviceName  String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, deviceToken])
+  @@index([tenantId, userId])
+}
+
+enum DevicePlatform {
+  IOS
+  ANDROID
+  WEB
 }
 
 enum CronRunStatus {
@@ -939,3 +1060,37 @@ enum CronTriggerType {
   SCHEDULED
   MANUAL
 }
+
+// ── Data Sync Framework ─────────────────────────────────────────────────────
+
+model SyncApiKey {
+  id          String    @id @default(cuid())
+  tenantId    String
+  label       String
+  keyHash     String    @unique
+  keyPrefix   String
+  scopes      String[]
+  isActive    Boolean   @default(true)
+  lastUsedAt  DateTime?
+  expiresAt   DateTime?
+  createdAt   DateTime  @default(now())
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+}
+
+model SyncExternalRef {
+  id             String   @id @default(cuid())
+  tenantId       String
+  entityType     EntityType
+  entityId       String
+  externalId     String
+  externalSource String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, entityType, externalId, externalSource])
+  @@index([tenantId, entityType, entityId])
+}
+

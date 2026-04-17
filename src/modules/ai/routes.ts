@@ -16,7 +16,9 @@ import { z } from "zod";
 import Anthropic from "@anthropic-ai/sdk";
 import { requireTenantId, requireUserId } from "../../lib/http.js";
 import { prisma } from "../../lib/prisma.js";
-import { uploadBufferToR2 } from "../../lib/r2-storage.js";
+import { getPlanLimits, assertVoiceNotesAvailable } from "../../lib/plan-limits.js";
+import { decryptField } from "../../lib/secrets.js";
+import { uploadBufferToR2, createR2PresignedDownload } from "../../lib/r2-storage.js";
 import { config } from "../../config.js";
 import { convertToMp4, isFfmpegAvailable } from "../../lib/audio-convert.js";
 
@@ -173,7 +175,8 @@ async function createAudioObjectFromMultipart(input: {
     }
   }
 
-  const storedFileName = `${Date.now()}-${randomUUID()}${uploadExtension}`;
+  // M12: Use only a random UUID — prefixing with Date.now() leaks the upload timestamp via the object key.
+  const storedFileName = `${randomUUID()}${uploadExtension}`;
   let stored: { objectKey: string; objectRef: string };
   try {
     const entityFolder = entityType === "VISIT" ? "visits" : entityType === "QUOTATION" ? "quotations" : "deals";
@@ -209,7 +212,7 @@ async function resolveAnthropicApiKey(tenantId: string): Promise<string | null> 
     },
     select: { apiKeyRef: true }
   });
-  if (cred?.apiKeyRef) return cred.apiKeyRef;
+  if (cred?.apiKeyRef) return decryptField(cred.apiKeyRef);
   return config.ANTHROPIC_API_KEY ?? null;
 }
 
@@ -1018,6 +1021,9 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
   app.post("/voice-notes", async (request, reply) => {
     const tenantId = requireTenantId(request);
     const requestedById = requireUserId(request);
+    // S7: check voice notes feature gate before doing any file work
+    const limits = await getPlanLimits(tenantId);
+    assertVoiceNotesAvailable(limits, app.httpErrors);
     const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { slug: true } });
     if (!tenant) throw app.httpErrors.notFound("Tenant not found.");
     let audioBuffer: Buffer | null = null;
@@ -1137,7 +1143,6 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
     }
     const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { slug: true } });
     if (!tenant) throw app.httpErrors.notFound("Tenant not found.");
-    const { createR2PresignedDownload } = await import("../../lib/r2-storage.js");
     const { downloadUrl } = await createR2PresignedDownload({
       tenantSlug: tenant.slug,
       objectKeyOrRef: job.audioObjectKey,

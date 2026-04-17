@@ -1,6 +1,8 @@
 import type { PrismaClient, SubscriptionStatus } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { config } from "../config.js";
+import { getStripe } from "./stripe.js";
 
 const legacyBodySchema = z.object({
   eventType: z.string().min(1),
@@ -41,7 +43,8 @@ function mapStripeSubscriptionStatus(raw: string | undefined): SubscriptionStatu
 
 export async function recordStripeWebhookAndSyncSubscription(
   db: PrismaClient,
-  rawBody: unknown
+  rawBody: unknown,
+  stripeSignature?: string
 ): Promise<{
   received: boolean;
   duplicate?: boolean;
@@ -49,7 +52,20 @@ export async function recordStripeWebhookAndSyncSubscription(
   subscriptionId?: string | null;
   statusApplied?: SubscriptionStatus | null;
 }> {
-  const legacy = legacyBodySchema.safeParse(rawBody);
+  // When Stripe webhook secret is configured, verify the signature.
+  // This prevents replay attacks and forged webhook payloads.
+  if (config.STRIPE_WEBHOOK_SECRET && stripeSignature && typeof rawBody === "string") {
+    try {
+      getStripe().webhooks.constructEvent(rawBody, stripeSignature, config.STRIPE_WEBHOOK_SECRET);
+    } catch {
+      throw new Error("INVALID_WEBHOOK_BODY");
+    }
+  }
+
+  // Parse the verified (or unverified-dev) body as JSON if it arrived as a string.
+  const body = typeof rawBody === "string" ? JSON.parse(rawBody) : rawBody;
+
+  const legacy = legacyBodySchema.safeParse(body);
   if (legacy.success) {
     const body = legacy.data;
     const eventId =
@@ -92,7 +108,7 @@ export async function recordStripeWebhookAndSyncSubscription(
     };
   }
 
-  const envelope = stripeEnvelopeSchema.safeParse(rawBody);
+  const envelope = stripeEnvelopeSchema.safeParse(body);
   if (!envelope.success) {
     throw new Error("INVALID_WEBHOOK_BODY");
   }

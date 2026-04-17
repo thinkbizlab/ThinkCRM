@@ -1,4 +1,4 @@
-import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { config } from "../config.js";
 
@@ -137,6 +137,12 @@ export async function createR2PresignedDownload(input: {
     expiresInSeconds: expiresIn,
     expiresAt: new Date(Date.now() + expiresIn * 1000).toISOString()
   };
+}
+
+export async function deleteR2Object(tenantSlug: string, objectKeyOrRef: string): Promise<void> {
+  if (!isR2Configured) return; // no-op in dev
+  const objectKey = parseObjectKeyInput(tenantSlug, objectKeyOrRef);
+  await r2Client.send(new DeleteObjectCommand({ Bucket: config.R2_BUCKET, Key: objectKey }));
 }
 
 export async function uploadBufferToR2(input: {

@@ -1,4 +1,4 @@
-import { EntityType, Prisma, SubscriptionStatus, UserRole } from "@prisma/client";
+import { EntityType, IntegrationPlatform, Prisma, SourceStatus, SubscriptionStatus, UserRole } from "@prisma/client";
 import type { FastifyPluginAsync, FastifyRequest } from "fastify";
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
@@ -12,8 +12,15 @@ import {
 } from "../../lib/http.js";
 import { hashPassword } from "../../lib/password.js";
 import { prisma } from "../../lib/prisma.js";
+import { assertSeatAvailable } from "../../lib/plan-limits.js";
 import { updateSubscriptionSeatCount } from "../../lib/subscription-seats.js";
+import { validateCustomFields, asRecord as asRecordCf } from "../../lib/custom-fields.js";
 import { onboardTenantSchema } from "../tenants/schemas.js";
+import { config } from "../../config.js";
+import { decryptCredential } from "../../lib/secrets.js";
+import { smtpPort } from "../../lib/smtp-port.js";
+import { sendEmailCard, type EmailConfig } from "../../lib/email-notify.js";
+import { getTenantUrl } from "../../lib/tenant-url.js";
 
 const userInviteSchema = z.object({
   email: z.string().email(),
@@ -61,13 +68,6 @@ const customerAddressDefaultsSchema = z
     (value) => value.isDefaultBilling !== undefined || value.isDefaultShipping !== undefined,
     "At least one defaults field is required."
   );
-
-function asRecord(value: Prisma.JsonValue | null | undefined): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-  return value as Record<string, unknown>;
-}
 
 function toEntityType(rawEntityType: string): EntityType | null {
   const normalized = rawEntityType.trim().toLowerCase();
@@ -402,6 +402,7 @@ export const apiFirstRoutes: FastifyPluginAsync = async (app) => {
   app.post("/users/invite", async (request, reply) => {
     requireRoleAtLeast(request, UserRole.ADMIN);
     const tenantId = requireTenantId(request);
+    const invitedById = requireUserId(request);
     const parsed = userInviteSchema.safeParse(request.body);
     if (!parsed.success) {
       throw app.httpErrors.badRequest(parsed.error.message);
@@ -411,6 +412,8 @@ export const apiFirstRoutes: FastifyPluginAsync = async (app) => {
     } catch (error) {
       throw app.httpErrors.badRequest(error instanceof Error ? error.message : "Invalid tenant references.");
     }
+    // S7: enforce seat limit before creating the invite
+    await assertSeatAvailable(tenantId, app.httpErrors);
 
     const existing = await prisma.user.findFirst({
       where: { tenantId, email: parsed.data.email },
@@ -420,24 +423,190 @@ export const apiFirstRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.conflict("User email already exists in this tenant.");
     }
 
-    const tempPassword = `ThinkCRM-${randomBytes(4).toString("hex")}!`;
-    const created = await prisma.user.create({
+    // Expire any previous pending invites for this email in this tenant.
+    await prisma.userInvite.updateMany({
+      where: { tenantId, email: parsed.data.email, acceptedAt: null },
+      data: { expiresAt: new Date() }
+    });
+
+    const token = randomBytes(32).toString("hex");
+    const invite = await prisma.userInvite.create({
       data: {
         tenantId,
         email: parsed.data.email,
-        fullName: parsed.data.fullName,
         role: parsed.data.role,
         teamId: parsed.data.teamId,
-        managerUserId: parsed.data.managerUserId,
-        mustResetPassword: true,
-        passwordHash: hashPassword(tempPassword)
+        invitedById,
+        token,
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // 7 days
       }
     });
+
+    // Best-effort email delivery.
+    let emailSent = false;
+    try {
+      const cred = await prisma.tenantIntegrationCredential.findUnique({
+        where: { tenantId_platform: { tenantId, platform: IntegrationPlatform.EMAIL } },
+        select: { clientIdRef: true, clientSecretRef: true, apiKeyRef: true, webhookTokenRef: true }
+      }).then(r => decryptCredential(r));
+
+      const branding = await prisma.tenantBranding.findUnique({
+        where: { tenantId },
+        select: { appName: true }
+      });
+      const appName = branding?.appName || "ThinkCRM";
+
+      let emailConfig: EmailConfig | null = null;
+      if (cred?.clientIdRef && cred?.apiKeyRef && cred?.webhookTokenRef) {
+        emailConfig = {
+          host: cred.clientIdRef,
+          port: smtpPort(cred.clientSecretRef),
+          fromAddress: cred.webhookTokenRef,
+          password: cred.apiKeyRef
+        };
+      } else if (config.SMTP_HOST && config.SMTP_FROM) {
+        emailConfig = {
+          host: config.SMTP_HOST,
+          port: config.SMTP_PORT,
+          fromAddress: config.SMTP_FROM,
+          password: config.SMTP_PASS ?? ""
+        };
+      }
+
+      if (emailConfig) {
+        const baseUrl = await getTenantUrl(tenantId);
+        const inviteLink = `${baseUrl}/accept-invite?token=${token}`;
+        await sendEmailCard(emailConfig, parsed.data.email, {
+          subject: `You've been invited to ${appName}`,
+          title: `Join ${appName}`,
+          facts: [
+            { label: "Role", value: parsed.data.role },
+            { label: "Expires in", value: "7 days" }
+          ],
+          detailUrl: inviteLink,
+          footer: "If you did not expect this invitation, you can safely ignore this email."
+        });
+        emailSent = true;
+      } else {
+        app.log.warn(`[invite] No SMTP configured — invite email for ${parsed.data.email} not sent. Token: ${token}`);
+      }
+    } catch (err) {
+      app.log.error({ err }, `[invite] Failed to send invite email to ${parsed.data.email}`);
+    }
+
+    const acceptBaseUrl = await getTenantUrl(tenantId).catch(() => config.APP_URL?.replace(/\/$/, "") ?? "");
     return reply.code(201).send({
-      id: created.id,
-      email: created.email,
-      role: created.role,
-      temporaryPassword: tempPassword
+      id: invite.id,
+      email: invite.email,
+      role: invite.role,
+      expiresAt: invite.expiresAt,
+      emailSent,
+      acceptUrl: `${acceptBaseUrl}/accept-invite?token=${token}`
+    });
+  });
+
+  // ── Bulk user import (S12) ─────────────────────────────────────────────────
+
+  const userImportRowSchema = z.object({
+    email: z.string().email(),
+    fullName: z.string().min(2).max(120),
+    role: z.nativeEnum(UserRole).default(UserRole.REP),
+    teamId: z.string().cuid().optional()
+  });
+
+  app.post("/users/import", async (request, reply) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+
+    // Accept JSON array or { users: [...] }
+    const body = request.body as unknown;
+    const rawRows: unknown[] = Array.isArray(body)
+      ? body
+      : (body as Record<string, unknown>)?.users as unknown[] ?? [];
+
+    if (!Array.isArray(rawRows) || rawRows.length === 0) {
+      throw app.httpErrors.badRequest("Expected a JSON array of users or { users: [...] }.");
+    }
+    if (rawRows.length > 200) {
+      throw app.httpErrors.badRequest("Maximum 200 users per import.");
+    }
+
+    // Pre-fetch valid team IDs for this tenant.
+    const tenantTeams = await prisma.team.findMany({
+      where: { tenantId },
+      select: { id: true }
+    });
+    const validTeamIds = new Set(tenantTeams.map(t => t.id));
+
+    // Pre-fetch existing emails to avoid duplicates.
+    const existingUsers = await prisma.user.findMany({
+      where: { tenantId },
+      select: { email: true }
+    });
+    const existingEmails = new Set(existingUsers.map(u => u.email.toLowerCase()));
+
+    const created: { email: string; role: string }[] = [];
+    const errors: { row: number; email?: string; error: string }[] = [];
+    const seenEmails = new Set<string>();
+
+    // Validate all rows first.
+    type ValidRow = z.infer<typeof userImportRowSchema>;
+    const validRows: ValidRow[] = [];
+
+    for (let i = 0; i < rawRows.length; i++) {
+      const parsed = userImportRowSchema.safeParse(rawRows[i]);
+      if (!parsed.success) {
+        errors.push({ row: i + 1, error: parsed.error.issues.map(e => e.message).join("; ") });
+        continue;
+      }
+      const email = parsed.data.email.toLowerCase();
+      if (existingEmails.has(email)) {
+        errors.push({ row: i + 1, email, error: "Email already exists in tenant." });
+        continue;
+      }
+      if (seenEmails.has(email)) {
+        errors.push({ row: i + 1, email, error: "Duplicate email in import." });
+        continue;
+      }
+      if (parsed.data.teamId && !validTeamIds.has(parsed.data.teamId)) {
+        errors.push({ row: i + 1, email, error: "teamId does not belong to tenant." });
+        continue;
+      }
+      seenEmails.add(email);
+      validRows.push(parsed.data);
+    }
+
+    // Create all valid users in a single transaction.
+    if (validRows.length > 0) {
+      const tempPassword = `ThinkCRM-${randomBytes(4).toString("hex")}!`;
+      const pw = hashPassword(tempPassword);
+
+      await prisma.$transaction(
+        validRows.map(row =>
+          prisma.user.create({
+            data: {
+              tenantId,
+              email: row.email.toLowerCase(),
+              fullName: row.fullName,
+              role: row.role,
+              teamId: row.teamId,
+              mustResetPassword: true,
+              passwordHash: pw
+            }
+          })
+        )
+      );
+
+      for (const row of validRows) {
+        created.push({ email: row.email, role: row.role });
+      }
+    }
+
+    return reply.code(created.length > 0 ? 201 : 200).send({
+      created: created.length,
+      errors: errors.length,
+      results: created,
+      errorDetails: errors
     });
   });
 
@@ -553,18 +722,6 @@ export const apiFirstRoutes: FastifyPluginAsync = async (app) => {
     const definitions = await prisma.customFieldDefinition.findMany({
       where: { tenantId, entityType, isActive: true }
     });
-    const requiredKeys = definitions.filter((field) => field.isRequired).map((field) => field.fieldKey);
-    const allowedKeys = new Set(definitions.map((field) => field.fieldKey));
-    for (const key of Object.keys(parsed.data.customFields)) {
-      if (!allowedKeys.has(key)) {
-        throw app.httpErrors.badRequest(`Unknown custom field key "${key}" for entity ${entityType}.`);
-      }
-    }
-    for (const requiredKey of requiredKeys) {
-      if (!(requiredKey in parsed.data.customFields)) {
-        throw app.httpErrors.badRequest(`Missing required custom field "${requiredKey}".`);
-      }
-    }
 
     if (entityType === EntityType.CUSTOMER) {
       const customer = await prisma.customer.findFirst({
@@ -574,14 +731,13 @@ export const apiFirstRoutes: FastifyPluginAsync = async (app) => {
       if (!customer) {
         throw app.httpErrors.notFound("Customer not found.");
       }
+      const customFields = validateCustomFields(app, definitions, {
+        ...asRecordCf(customer.customFields),
+        ...parsed.data.customFields
+      });
       const updated = await prisma.customer.update({
         where: { id: customer.id },
-        data: {
-          customFields: {
-            ...asRecord(customer.customFields),
-            ...parsed.data.customFields
-          } as Prisma.InputJsonObject
-        }
+        data: { customFields }
       });
       return updated;
     }
@@ -594,14 +750,13 @@ export const apiFirstRoutes: FastifyPluginAsync = async (app) => {
       if (!item) {
         throw app.httpErrors.notFound("Item not found.");
       }
+      const customFields = validateCustomFields(app, definitions, {
+        ...asRecordCf(item.customFields),
+        ...parsed.data.customFields
+      });
       const updated = await prisma.item.update({
         where: { id: item.id },
-        data: {
-          customFields: {
-            ...asRecord(item.customFields),
-            ...parsed.data.customFields
-          } as Prisma.InputJsonObject
-        }
+        data: { customFields }
       });
       return updated;
     }
@@ -613,14 +768,13 @@ export const apiFirstRoutes: FastifyPluginAsync = async (app) => {
     if (!paymentTerm) {
       throw app.httpErrors.notFound("Payment term not found.");
     }
+    const customFields = validateCustomFields(app, definitions, {
+      ...asRecordCf(paymentTerm.customFields),
+      ...parsed.data.customFields
+    });
     const updated = await prisma.paymentTerm.update({
       where: { id: paymentTerm.id },
-      data: {
-        customFields: {
-          ...asRecord(paymentTerm.customFields),
-          ...parsed.data.customFields
-        } as Prisma.InputJsonObject
-      }
+      data: { customFields }
     });
     return updated;
   });

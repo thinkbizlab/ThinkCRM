@@ -48,18 +48,10 @@ export async function sendLinePush(
   return { ok: false, status: res.status, message: errMsg };
 }
 
-/** Format a Date to Thailand local time string: DD/MM/YYYY HH:MM */
-export function formatThaiDateTime(date: Date): string {
-  return date.toLocaleString("th-TH", {
-    timeZone: "Asia/Bangkok",
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false
-  });
-}
+import { fmtThaiDateTime } from "./format.js";
+
+// Re-export so existing callers (visits/routes.ts) keep working.
+export const formatThaiDateTime = fmtThaiDateTime;
 
 /** Build a Google Maps link from coordinates */
 export function googleMapsLink(lat: number, lng: number): string {

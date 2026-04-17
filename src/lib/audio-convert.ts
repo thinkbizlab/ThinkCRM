@@ -21,17 +21,20 @@ export async function isFfmpegAvailable(): Promise<boolean> {
  * Throws if ffmpeg is not available or conversion fails.
  */
 export async function convertToMp4(input: Buffer, inputExt: string): Promise<Buffer> {
+  // M5: Sanitize extension — only allow a leading dot followed by alphanumerics to prevent
+  // path traversal or unexpected characters in the temp file path. Fall back to .bin if invalid.
+  const safeExt = /^\.[a-z0-9]{1,10}$/.test(inputExt) ? inputExt : ".bin";
   const id = randomUUID();
   const dir = tmpdir();
-  const inPath  = join(dir, `vn-in-${id}${inputExt}`);
+  const inPath  = join(dir, `vn-in-${id}${safeExt}`);
   const outPath = join(dir, `vn-out-${id}.mp4`);
 
   await writeFile(inPath, input);
 
   try {
     await runFfmpeg([
-      "-y",           // overwrite output without asking
-      "-i", inPath,   // input file
+      "-y",            // overwrite output without asking
+      "-i", inPath,    // input file
       "-vn",          // drop video tracks (handles .mov from iPhone)
       "-acodec", "aac",
       "-b:a", "128k",

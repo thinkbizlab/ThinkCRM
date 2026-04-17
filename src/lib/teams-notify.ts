@@ -4,7 +4,7 @@
  * No OAuth needed — the webhook URL is the credential.
  */
 
-import { createHash } from "node:crypto";
+import { stableTeamsAppId } from "./ms-teams-app-id.js";
 
 export interface TeamsNotifyResult {
   ok: boolean;
@@ -126,11 +126,6 @@ export interface GraphDmCredentials {
   botAppId: string;
 }
 
-/** Derives a stable, deterministic UUID from the bot App ID. */
-function stableTeamsAppId(botAppId: string): string {
-  const h = createHash("sha256").update("thinkcrm-teams-app:" + botAppId).digest("hex");
-  return `${h.slice(0,8)}-${h.slice(8,12)}-4${h.slice(13,16)}-${(["8","9","a","b"] as const)[parseInt(h[16]!, 16) & 3]}${h.slice(17,20)}-${h.slice(20,32)}`;
-}
 
 async function getGraphToken(creds: { clientId: string; clientSecret: string; tenantId: string }): Promise<string> {
   const res = await fetch(

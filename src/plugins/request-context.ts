@@ -1,10 +1,12 @@
 import fp from "fastify-plugin";
 import { UserRole } from "@prisma/client";
 
-const roleSet = new Set<string>(Object.values(UserRole));
-
 export const requestContextPlugin = fp(async (app) => {
   app.addHook("onRequest", async (request) => {
+    // S2: Only accept identity from a verified JWT — never from raw headers.
+    // The previous x-tenant-id / x-user-id / x-user-role header fallback was
+    // removed because any unauthenticated caller could set those headers and
+    // impersonate any user in any tenant (critical auth bypass).
     const authHeader = request.headers.authorization;
     if (typeof authHeader === "string" && authHeader.startsWith("Bearer ")) {
       const token = authHeader.slice("Bearer ".length).trim();
@@ -22,27 +24,14 @@ export const requestContextPlugin = fp(async (app) => {
         };
         return;
       } catch {
-        request.requestContext = {
-          tenantId: null,
-          userId: null,
-          role: null,
-          authenticated: false
-        };
-        return;
+        // Invalid or expired token — treat as unauthenticated.
       }
     }
 
-    const tenantId = request.headers["x-tenant-id"];
-    const userId = request.headers["x-user-id"];
-    const role = request.headers["x-user-role"];
-
-    const parsedRole =
-      typeof role === "string" && roleSet.has(role) ? (role as UserRole) : null;
-
     request.requestContext = {
-      tenantId: typeof tenantId === "string" ? tenantId : null,
-      userId: typeof userId === "string" ? userId : null,
-      role: parsedRole,
+      tenantId: null,
+      userId: null,
+      role: null,
       authenticated: false
     };
   });

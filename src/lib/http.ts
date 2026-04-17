@@ -6,8 +6,8 @@ const roleRank: Record<UserRole, number> = {
   REP: 1,
   SUPERVISOR: 2,
   MANAGER: 3,
-  DIRECTOR: 3,
-  ADMIN: 4
+  DIRECTOR: 4,  // M6: was 3 (same as MANAGER) — requireRoleAtLeast(DIRECTOR) now correctly excludes MANAGERs
+  ADMIN: 5
 };
 
 export function requireAuth(request: FastifyRequest): void {
@@ -118,7 +118,40 @@ function resolveVisibleUserIdsByHierarchy(
   return visible;
 }
 
+// S1: Per-request cache for tenant isActive check — avoids a DB hit on every call.
+const tenantActiveCache = new WeakMap<object, boolean>();
+
+/**
+ * Checks that the tenant in the JWT is still active.
+ * Throws 403 if the tenant has been deactivated.
+ * No-op on unauthenticated requests (public routes).
+ * Called once per request via a global preHandler hook in app.ts.
+ */
+export async function requireActiveTenant(request: FastifyRequest): Promise<void> {
+  if (!request.requestContext.authenticated) return;
+  const tenantId = request.requestContext.tenantId;
+  if (!tenantId) return;
+
+  const cached = tenantActiveCache.get(request);
+  if (cached !== undefined) {
+    if (!cached) throw request.server.httpErrors.forbidden("This workspace has been deactivated. Contact your administrator.");
+    return;
+  }
+
+  const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { isActive: true } });
+  const active = tenant?.isActive ?? false;
+  tenantActiveCache.set(request, active);
+  if (!active) throw request.server.httpErrors.forbidden("This workspace has been deactivated. Contact your administrator.");
+}
+
+// H4: Per-request memo so hierarchy is computed only once per request even when
+// multiple permission checks call listVisibleUserIds() on the same request object.
+const visibleIdsCache = new WeakMap<object, Set<string>>();
+
 export async function listVisibleUserIds(request: FastifyRequest): Promise<Set<string>> {
+  const cached = visibleIdsCache.get(request);
+  if (cached) return cached;
+
   const tenantId = requireTenantId(request);
   const requesterId = requireUserId(request);
   const requesterRole = request.requestContext.role;
@@ -135,6 +168,7 @@ export async function listVisibleUserIds(request: FastifyRequest): Promise<Set<s
   if (!visible.has(requesterId)) {
     visible.add(requesterId);
   }
+  visibleIdsCache.set(request, visible);
   return visible;
 }
 

@@ -1,73 +1,81 @@
 /**
- * Short-lived in-memory state store for OAuth CSRF protection.
- * Each state entry expires after 10 minutes.
+ * DB-backed OAuth state store for CSRF protection.
+ * Replaces the previous in-memory Map implementation, which broke on restarts
+ * and would not work with multiple server instances.
+ *
+ * Each state entry expires after 10 minutes. Expired rows are cleaned up
+ * periodically; the cleanup is idempotent and safe to run on every instance.
  */
 
 import { randomUUID } from "node:crypto";
+import { prisma } from "./prisma.js";
 
 const TTL_MS = 10 * 60 * 1000; // 10 minutes
 
-// ── Login flow (stores tenantSlug only) ───────────────────────────────────────
-
-interface OAuthStateEntry {
-  tenantSlug: string;
-  createdAt: number;
-}
-
-const store = new Map<string, OAuthStateEntry>();
-
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, entry] of store) {
-    if (now - entry.createdAt > TTL_MS) store.delete(key);
-  }
+setInterval(async () => {
+  try {
+    await prisma.oAuthState.deleteMany({ where: { expiresAt: { lt: new Date() } } });
+    await prisma.oAuthExchangeCode.deleteMany({ where: { expiresAt: { lt: new Date() } } });
+  } catch { /* non-critical cleanup — ignore */ }
 }, 5 * 60 * 1000);
 
-export function createOAuthState(tenantSlug: string): string {
+// ── Login flow (stores tenantSlug only) ───────────────────────────────────────
+
+export async function createOAuthState(tenantSlug: string): Promise<string> {
   const state = randomUUID();
-  store.set(state, { tenantSlug, createdAt: Date.now() });
+  await prisma.oAuthState.create({
+    data: { state, tenantSlug, expiresAt: new Date(Date.now() + TTL_MS) }
+  });
   return state;
 }
 
-export function consumeOAuthState(state: string): string | null {
-  const entry = store.get(state);
+export async function consumeOAuthState(state: string): Promise<string | null> {
+  const entry = await prisma.oAuthState.findUnique({ where: { state } });
   if (!entry) return null;
-  store.delete(state);
-  if (Date.now() - entry.createdAt > TTL_MS) return null;
+  await prisma.oAuthState.delete({ where: { state } });
+  if (entry.expiresAt < new Date()) return null;
+  if (entry.userId) return null; // wrong flow — connect state, not login state
   return entry.tenantSlug;
 }
 
 // ── Connect flow (stores tenantSlug + userId — shared by LINE / Teams / Slack) ─
 
-interface ConnectStateEntry {
-  tenantSlug: string;
-  userId: string;
-  createdAt: number;
-}
-
-const connectStore = new Map<string, ConnectStateEntry>();
-
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, entry] of connectStore) {
-    if (now - entry.createdAt > TTL_MS) connectStore.delete(key);
-  }
-}, 5 * 60 * 1000);
-
-export function createConnectState(tenantSlug: string, userId: string): string {
+export async function createConnectState(tenantSlug: string, userId: string): Promise<string> {
   const state = randomUUID();
-  connectStore.set(state, { tenantSlug, userId, createdAt: Date.now() });
+  await prisma.oAuthState.create({
+    data: { state, tenantSlug, userId, expiresAt: new Date(Date.now() + TTL_MS) }
+  });
   return state;
 }
 
-export function consumeConnectState(state: string): { tenantSlug: string; userId: string } | null {
-  const entry = connectStore.get(state);
-  if (!entry) return null;
-  connectStore.delete(state);
-  if (Date.now() - entry.createdAt > TTL_MS) return null;
+export async function consumeConnectState(state: string): Promise<{ tenantSlug: string; userId: string } | null> {
+  const entry = await prisma.oAuthState.findUnique({ where: { state } });
+  if (!entry || !entry.userId) return null;
+  await prisma.oAuthState.delete({ where: { state } });
+  if (entry.expiresAt < new Date()) return null;
   return { tenantSlug: entry.tenantSlug, userId: entry.userId };
 }
 
 // LINE-specific aliases (kept for backward compatibility)
 export const createLineConnectState = createConnectState;
 export const consumeLineConnectState = consumeConnectState;
+
+// ── Exchange code (wraps JWT so it never travels in a URL) ────────────────────
+// TTL is short — the frontend exchanges immediately on page load.
+const EXCHANGE_TTL_MS = 2 * 60 * 1000; // 2 minutes
+
+export async function createExchangeCode(jwt: string): Promise<string> {
+  const code = randomUUID();
+  await prisma.oAuthExchangeCode.create({
+    data: { code, jwt, expiresAt: new Date(Date.now() + EXCHANGE_TTL_MS) }
+  });
+  return code;
+}
+
+export async function consumeExchangeCode(code: string): Promise<string | null> {
+  const entry = await prisma.oAuthExchangeCode.findUnique({ where: { code } });
+  if (!entry) return null;
+  await prisma.oAuthExchangeCode.delete({ where: { code } });
+  if (entry.expiresAt < new Date()) return null;
+  return entry.jwt;
+}

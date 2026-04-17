@@ -4,6 +4,7 @@ import { z } from "zod";
 import { listVisibleUserIds, requireRoleAtLeast, requireTenantId, requireUserId } from "../../lib/http.js";
 import { writeEntityChangelog } from "../../lib/changelog.js";
 import { prisma } from "../../lib/prisma.js";
+import { validateCustomFields, asRecord } from "../../lib/custom-fields.js";
 
 const customFieldValuesSchema = z.record(z.string(), z.unknown());
 
@@ -128,110 +129,6 @@ function resolveCustomFieldEntityType(raw: string, app: Parameters<FastifyPlugin
   throw app.httpErrors.badRequest("Unsupported entity type. Use customer, item, or payment-term.");
 }
 
-function asRecord(input: unknown): Record<string, unknown> {
-  if (!input || Array.isArray(input) || typeof input !== "object") return {};
-  return input as Record<string, unknown>;
-}
-
-function normalizeCustomFieldValue(
-  app: Parameters<FastifyPluginAsync>[0],
-  definition: {
-    fieldKey: string;
-    dataType: CustomFieldDataType;
-    optionsJson: Prisma.JsonValue | null;
-  },
-  value: unknown
-): unknown {
-  switch (definition.dataType) {
-    case CustomFieldDataType.TEXT: {
-      if (typeof value !== "string") {
-        throw app.httpErrors.badRequest(`Custom field "${definition.fieldKey}" must be text.`);
-      }
-      const trimmed = value.trim();
-      return trimmed.length ? trimmed : null;
-    }
-    case CustomFieldDataType.NUMBER: {
-      const numeric =
-        typeof value === "number"
-          ? value
-          : typeof value === "string" && value.trim().length > 0
-            ? Number(value)
-            : Number.NaN;
-      if (!Number.isFinite(numeric)) {
-        throw app.httpErrors.badRequest(`Custom field "${definition.fieldKey}" must be numeric.`);
-      }
-      return numeric;
-    }
-    case CustomFieldDataType.BOOLEAN: {
-      if (typeof value === "boolean") return value;
-      if (typeof value === "string") {
-        if (value === "true") return true;
-        if (value === "false") return false;
-      }
-      throw app.httpErrors.badRequest(`Custom field "${definition.fieldKey}" must be boolean.`);
-    }
-    case CustomFieldDataType.DATE: {
-      if (typeof value !== "string") {
-        throw app.httpErrors.badRequest(`Custom field "${definition.fieldKey}" must be an ISO date string.`);
-      }
-      const parsedDate = new Date(value);
-      if (Number.isNaN(parsedDate.getTime())) {
-        throw app.httpErrors.badRequest(`Custom field "${definition.fieldKey}" has invalid date format.`);
-      }
-      return parsedDate.toISOString();
-    }
-    case CustomFieldDataType.SELECT: {
-      if (typeof value !== "string" || !value.trim().length) {
-        throw app.httpErrors.badRequest(`Custom field "${definition.fieldKey}" must be a non-empty option.`);
-      }
-      const options = Array.isArray(definition.optionsJson)
-        ? definition.optionsJson.filter((option): option is string => typeof option === "string")
-        : [];
-      if (!options.includes(value)) {
-        throw app.httpErrors.badRequest(
-          `Custom field "${definition.fieldKey}" value must match configured options.`
-        );
-      }
-      return value;
-    }
-    default:
-      return value;
-  }
-}
-
-function validateCustomFields(
-  app: Parameters<FastifyPluginAsync>[0],
-  definitions: Array<{
-    fieldKey: string;
-    dataType: CustomFieldDataType;
-    isRequired: boolean;
-    isActive: boolean;
-    optionsJson: Prisma.JsonValue | null;
-  }>,
-  rawValues: Record<string, unknown>
-): Prisma.InputJsonValue | undefined {
-  const activeDefinitions = definitions.filter((definition) => definition.isActive);
-  const definitionMap = new Map(activeDefinitions.map((definition) => [definition.fieldKey, definition]));
-  const normalized: Record<string, unknown> = {};
-
-  for (const [fieldKey, rawValue] of Object.entries(rawValues)) {
-    const definition = definitionMap.get(fieldKey);
-    if (!definition) {
-      throw app.httpErrors.badRequest(`Unknown or inactive custom field "${fieldKey}".`);
-    }
-    const normalizedValue = normalizeCustomFieldValue(app, definition, rawValue);
-    if (normalizedValue === null || normalizedValue === undefined || normalizedValue === "") continue;
-    normalized[fieldKey] = normalizedValue;
-  }
-
-  for (const definition of activeDefinitions.filter((definition) => definition.isRequired)) {
-    if (!Object.hasOwn(normalized, definition.fieldKey)) {
-      throw app.httpErrors.badRequest(`Missing required custom field "${definition.fieldKey}".`);
-    }
-  }
-
-  return Object.keys(normalized).length ? (normalized as Prisma.InputJsonValue) : undefined;
-}
 
 export const masterDataRoutes: FastifyPluginAsync = async (app) => {
   async function findCustomerInScopeOrThrow(input: {

@@ -19,6 +19,9 @@
 
 import { ChannelType, IntegrationPlatform, UserRole } from "@prisma/client";
 import { prisma } from "./prisma.js";
+import { decryptCredential } from "./secrets.js";
+import { smtpPort } from "./smtp-port.js";
+import { fmtThaiMonthYear, fmtBaht } from "./format.js";
 
 // ── Date helpers ─────────────────────────────────────────────────────────────
 
@@ -49,22 +52,6 @@ function monthStartEnd(): { start: Date; end: Date } {
   const end = new Date(start);
   end.setMonth(end.getMonth() + 1);
   return { start, end };
-}
-
-function thaiMonthYear(): string {
-  return new Date().toLocaleDateString("th-TH", {
-    month: "long",
-    year: "numeric",
-    timeZone: "Asia/Bangkok"
-  });
-}
-
-function fmtBaht(value: number): string {
-  return new Intl.NumberFormat("th-TH", {
-    style: "decimal",
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0
-  }).format(value);
 }
 
 // ── Urgency ───────────────────────────────────────────────────────────────────
@@ -150,28 +137,28 @@ function buildKpiAlertMessage(opts: {
 // ── Delivery helpers ──────────────────────────────────────────────────────────
 
 async function getLineCredential(tenantId: string): Promise<string | null> {
-  const cred = await prisma.tenantIntegrationCredential.findUnique({
+  const cred = decryptCredential(await prisma.tenantIntegrationCredential.findUnique({
     where: { tenantId_platform: { tenantId, platform: IntegrationPlatform.LINE } },
     select: { apiKeyRef: true }
-  });
+  }));
   return cred?.apiKeyRef ?? null;
 }
 
 async function getSlackBotToken(tenantId: string): Promise<string | null> {
-  const cred = await prisma.tenantIntegrationCredential.findUnique({
+  const cred = decryptCredential(await prisma.tenantIntegrationCredential.findUnique({
     where: { tenantId_platform: { tenantId, platform: IntegrationPlatform.SLACK } },
     select: { apiKeyRef: true }
-  });
+  }));
   return cred?.apiKeyRef ?? null;
 }
 
 interface TeamsBotCreds { appId: string; appPassword: string; tenantId: string; }
 
 async function getTeamsBotCreds(tenantId: string): Promise<TeamsBotCreds | null> {
-  const cred = await prisma.tenantIntegrationCredential.findUnique({
+  const cred = decryptCredential(await prisma.tenantIntegrationCredential.findUnique({
     where: { tenantId_platform: { tenantId, platform: IntegrationPlatform.MS_TEAMS } },
     select: { clientIdRef: true, clientSecretRef: true, webhookTokenRef: true }
-  });
+  }));
   if (!cred?.clientIdRef || !cred?.clientSecretRef || !cred?.webhookTokenRef) return null;
   return { appId: cred.clientIdRef, appPassword: cred.clientSecretRef, tenantId: cred.webhookTokenRef };
 }
@@ -183,11 +170,11 @@ async function getTeamsGraphCreds(tenantId: string): Promise<TeamsGraphCreds | n
     prisma.tenantIntegrationCredential.findUnique({
       where: { tenantId_platform: { tenantId, platform: IntegrationPlatform.MS365 } },
       select: { clientIdRef: true, clientSecretRef: true, webhookTokenRef: true, status: true }
-    }),
+    }).then(r => decryptCredential(r)),
     prisma.tenantIntegrationCredential.findUnique({
       where: { tenantId_platform: { tenantId, platform: IntegrationPlatform.MS_TEAMS } },
       select: { clientIdRef: true, webhookTokenRef: true }
-    })
+    }).then(r => decryptCredential(r))
   ]);
   if (!ms365Cred?.clientIdRef || !ms365Cred?.clientSecretRef) return null;
   if (ms365Cred.status !== "ENABLED") return null;
@@ -201,14 +188,14 @@ async function getTeamsGraphCreds(tenantId: string): Promise<TeamsGraphCreds | n
 }
 
 async function getEmailCredential(tenantId: string) {
-  const cred = await prisma.tenantIntegrationCredential.findUnique({
+  const cred = decryptCredential(await prisma.tenantIntegrationCredential.findUnique({
     where: { tenantId_platform: { tenantId, platform: IntegrationPlatform.EMAIL } },
     select: { clientIdRef: true, clientSecretRef: true, apiKeyRef: true, webhookTokenRef: true }
-  });
+  }));
   if (!cred?.clientIdRef || !cred.apiKeyRef || !cred.webhookTokenRef) return null;
   return {
     host: cred.clientIdRef,
-    port: parseInt(cred.clientSecretRef ?? "587", 10),
+    port: smtpPort(cred.clientSecretRef),
     fromAddress: cred.webhookTokenRef,
     password: cred.apiKeyRef
   };
@@ -406,7 +393,7 @@ export async function runKpiAlerts(): Promise<void> {
   if (!isLastFiveDaysOfMonth()) return;
 
   const daysLeft = daysLeftInMonth();
-  const monthLabel = thaiMonthYear();
+  const monthLabel = fmtThaiMonthYear();
   console.log(`[kpi-alert] Running KPI alerts — ${monthLabel}, ${daysLeft} days left`);
 
   const tenants = await prisma.tenant.findMany({
@@ -430,7 +417,7 @@ export async function runKpiAlerts(): Promise<void> {
 export async function runKpiAlertsForTenant(tenantId: string, opts?: { force?: boolean }): Promise<string> {
   if (!opts?.force && !isLastFiveDaysOfMonth()) return "Skipped — not in last 5 days of month";
   const daysLeft = daysLeftInMonth();
-  const monthLabel = thaiMonthYear();
+  const monthLabel = fmtThaiMonthYear();
   const tenant = await prisma.tenant.findUnique({
     where: { id: tenantId },
     select: { branding: { select: { appName: true } } }

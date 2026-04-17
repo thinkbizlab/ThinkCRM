@@ -1,10 +1,13 @@
 import { UserRole } from "@prisma/client";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { requireRoleAtLeast, requireTenantId } from "../../lib/http.js";
+import { requireRoleAtLeast, requireTenantId, requireUserId } from "../../lib/http.js";
 import { prisma } from "../../lib/prisma.js";
 import { recordStripeWebhookAndSyncSubscription } from "../../lib/stripe-webhook.js";
 import { updateSubscriptionSeatCount } from "../../lib/subscription-seats.js";
+import { isStripeConfigured, getOrCreateStripeCustomer, getStripe } from "../../lib/stripe.js";
+import { config } from "../../config.js";
+import { getTenantUrl } from "../../lib/tenant-url.js";
 
 const captureSubscriptionSchema = z.object({
   seatPriceCents: z.number().int().positive(),
@@ -146,16 +149,27 @@ async function buildMonthlyInvoicePreview(tenantId: string, month?: string): Pro
 }
 
 export const billingRoutes: FastifyPluginAsync = async (app) => {
-  app.post("/billing/stripe/webhooks", async (request, reply) => {
-    try {
-      const result = await recordStripeWebhookAndSyncSubscription(prisma, request.body);
-      return reply.code(200).send(result);
-    } catch (error) {
-      if (error instanceof Error && error.message === "INVALID_WEBHOOK_BODY") {
-        throw app.httpErrors.badRequest("Invalid webhook body.");
+  // Stripe webhook needs the raw request body (as a string) for signature verification.
+  // Register in a sub-scope with a raw string content-type parser so Fastify doesn't
+  // auto-parse JSON before we can verify the Stripe signature.
+  await app.register(async (scope) => {
+    scope.removeAllContentTypeParsers();
+    scope.addContentTypeParser("application/json", { parseAs: "string" }, (_req, body, done) => done(null, body));
+    scope.addContentTypeParser("*", { parseAs: "string" }, (_req, body, done) => done(null, body));
+
+    scope.post("/billing/stripe/webhooks", async (request, reply) => {
+      try {
+        const sig = request.headers["stripe-signature"] as string | undefined;
+        // request.body is a raw string here (not parsed JSON) — correct for constructEvent.
+        const result = await recordStripeWebhookAndSyncSubscription(prisma, request.body as unknown, sig);
+        return reply.code(200).send(result);
+      } catch (error) {
+        if (error instanceof Error && error.message === "INVALID_WEBHOOK_BODY") {
+          throw app.httpErrors.badRequest("Invalid webhook body.");
+        }
+        throw error;
       }
-      throw error;
-    }
+    });
   });
 
   app.get("/billing/subscription", async (request) => {
@@ -414,5 +428,62 @@ export const billingRoutes: FastifyPluginAsync = async (app) => {
       where: { tenantId },
       orderBy: { invoiceMonth: "desc" }
     });
+  });
+
+  // S6: Stripe Checkout — creates a session for upgrading from TRIALING to ACTIVE.
+  app.post("/billing/stripe/checkout", async (request, reply) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+    const userId   = requireUserId(request);
+    if (!isStripeConfigured()) {
+      throw app.httpErrors.serviceUnavailable("Stripe is not configured. Contact the platform team.");
+    }
+    if (!config.STRIPE_PRICE_ID) {
+      throw app.httpErrors.serviceUnavailable("STRIPE_PRICE_ID is not configured.");
+    }
+    const [tenant, user] = await Promise.all([
+      prisma.tenant.findUnique({ where: { id: tenantId }, select: { name: true, stripeCustomerId: true } }),
+      prisma.user.findUnique({ where: { id: userId }, select: { email: true } })
+    ]);
+    if (!tenant || !user) throw app.httpErrors.notFound("Tenant or user not found.");
+
+    const appUrl = await getTenantUrl(tenantId);
+    const customerId = await getOrCreateStripeCustomer(tenantId, tenant.name, user.email, prisma);
+
+    const session = await getStripe().checkout.sessions.create({
+      customer: customerId,
+      mode: "subscription",
+      line_items: [{ price: config.STRIPE_PRICE_ID, quantity: 1 }],
+      subscription_data: { metadata: { tenantId } },
+      success_url: `${appUrl}/settings/billing?checkout=success`,
+      cancel_url:  `${appUrl}/settings/billing?checkout=cancelled`,
+      metadata: { tenantId }
+    });
+
+    return reply.send({ url: session.url });
+  });
+
+  // S6: Stripe Customer Portal — lets admins manage their subscription and payment method.
+  app.post("/billing/stripe/portal", async (request, reply) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+    if (!isStripeConfigured()) {
+      throw app.httpErrors.serviceUnavailable("Stripe is not configured. Contact the platform team.");
+    }
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { stripeCustomerId: true }
+    });
+    if (!tenant?.stripeCustomerId) {
+      throw app.httpErrors.badRequest("No billing account found. Complete a checkout first.");
+    }
+
+    const appUrl = await getTenantUrl(tenantId);
+    const session = await getStripe().billingPortal.sessions.create({
+      customer: tenant.stripeCustomerId,
+      return_url: `${appUrl}/settings/billing`
+    });
+
+    return reply.send({ url: session.url });
   });
 };

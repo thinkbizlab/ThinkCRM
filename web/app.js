@@ -183,19 +183,30 @@ async function loadOAuthProviderButtons() {
   });
 })();
 
-// Handle OAuth redirect-back: ?oauth_token=xxx or ?oauth_error=xxx
+// Handle OAuth redirect-back: ?oauth_code=xxx or ?oauth_error=xxx
+// The JWT never appears in the URL (C5 fix). The server issues a one-time exchange
+// code; we POST it here to retrieve the JWT over the API.
 (async function handleOAuthReturn() {
   const params = new URLSearchParams(window.location.search);
-  const oauthToken = params.get("oauth_token");
+  const oauthCode  = params.get("oauth_code");
   const oauthError = params.get("oauth_error");
-  if (!oauthToken && !oauthError) return;
-  // Clean URL immediately
+  if (!oauthCode && !oauthError) return;
+  // Clean URL immediately so the code doesn't linger in history
   window.history.replaceState({}, "", window.location.pathname);
   if (oauthError) {
     authMessage.textContent = oauthError;
     return;
   }
   try {
+    // Exchange the one-time code for the JWT
+    const exchangeRes = await fetch("/api/v1/auth/oauth/exchange", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: oauthCode })
+    });
+    if (!exchangeRes.ok) throw new Error("Login succeeded but the session code was invalid. Please try again.");
+    const { token: oauthToken } = await exchangeRes.json();
+
     // Fetch user info using the OAuth-issued JWT
     const meRes = await fetch("/api/v1/auth/me", {
       headers: { Authorization: `Bearer ${oauthToken}` }
@@ -207,6 +218,7 @@ async function loadOAuthProviderButtons() {
     state.calendarFilters.ownerIds = [user.id];
     localStorage.setItem("thinkcrm_token", oauthToken);
     showApp();
+    showTrialBanner(user.subscription);
     updateUserMeta();
     await loadAllViews();
     applyBrandingTheme(state.cache.branding);
@@ -428,10 +440,10 @@ function renderCustomFieldInputs(definitions) {
           if (definition.dataType === "SELECT") {
             const options = Array.isArray(definition.optionsJson) ? definition.optionsJson : [];
             return `
-              <label>${definition.label}
+              <label>${escHtml(definition.label)}
                 <select name="${key}" ${required}>
                   <option value="">Select...</option>
-                  ${options.map((option) => `<option value="${option}">${option}</option>`).join("")}
+                  ${options.map((option) => `<option value="${escHtml(option)}">${escHtml(option)}</option>`).join("")}
                 </select>
               </label>
             `;
@@ -440,14 +452,14 @@ function renderCustomFieldInputs(definitions) {
             return `
               <label>
                 <input type="checkbox" name="${key}" />
-                ${definition.label}
+                ${escHtml(definition.label)}
               </label>
             `;
           }
           const inputType = definition.dataType === "NUMBER" ? "number" : definition.dataType === "DATE" ? "date" : "text";
           return `
-            <label>${definition.label}
-              <input name="${key}" type="${inputType}" ${required} placeholder="${definition.placeholder || ""}" />
+            <label>${escHtml(definition.label)}
+              <input name="${key}" type="${inputType}" ${required} placeholder="${escHtml(definition.placeholder || "")}" />
             </label>
           `;
         })
@@ -465,8 +477,8 @@ function renderCustomFieldDefinitionRows(pageKey) {
     .map(
       (definition) => `
       <div class="row">
-        <h4>${definition.label}</h4>
-        <div class="muted">${definition.fieldKey} · ${definition.dataType}</div>
+        <h4>${escHtml(definition.label)}</h4>
+        <div class="muted">${escHtml(definition.fieldKey)} · ${escHtml(definition.dataType)}</div>
         <div class="muted">Required: ${definition.isRequired ? "Yes" : "No"} · Order: ${definition.displayOrder}</div>
         <div class="inline-actions wrap">
           <button
@@ -593,7 +605,7 @@ function applyBrandingTheme(branding) {
   }
   if (brandMark) {
     const logoSrc = b.logoUrl || "/default-brand.svg";
-    brandMark.innerHTML = `<img src="${logoSrc}" alt="logo" />`;
+    brandMark.innerHTML = `<img src="${escHtml(logoSrc)}" alt="logo" />`;
   }
 
   applyThemeMode(b.themeMode || "LIGHT");
@@ -628,7 +640,7 @@ function updateUserMeta() {
   function renderAvatar(el, size) {
     if (!el) return;
     if (state.user.avatarUrl) {
-      el.innerHTML = `<img src="${state.user.avatarUrl}" alt="${state.user.fullName || ""}" style="width:${size}px;height:${size}px;border-radius:50%;object-fit:cover;display:block">`;
+      el.innerHTML = `<img src="${escHtml(state.user.avatarUrl)}" alt="${escHtml(state.user.fullName || "")}" style="width:${size}px;height:${size}px;border-radius:50%;object-fit:cover;display:block">`;
     } else {
       el.textContent = initials;
     }
@@ -665,7 +677,7 @@ function setStatus(text, isError = false, isWarning = false) {
 
   toast.innerHTML = `
     <span class="toast-icon">${icon}</span>
-    <span class="toast-msg">${text}</span>
+    <span class="toast-msg">${escHtml(text)}</span>
     <button class="toast-close" aria-label="Dismiss">
       <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
     </button>`;
@@ -1195,11 +1207,31 @@ function switchView(target) {
     btn.classList.toggle("active", btn.dataset.view === target);
   });
   if (pageTitle) pageTitle.textContent = pageTitleMap[target] || "ThinkCRM";
+  // Hide onboarding wizard when leaving dashboard
+  const wizard = qs("#onboarding-wizard");
+  if (wizard && target !== "dashboard") wizard.hidden = true;
 }
 
 function showApp() {
   authScreen.classList.remove("active");
   appScreen.classList.add("active");
+}
+
+// S10: Trial banner — shown in the status-bar when subscription is TRIALING.
+function showTrialBanner(subscription) {
+  if (!statusBar || !subscription) return;
+  if (subscription.status !== "TRIALING" || !subscription.trialEndsAt) {
+    statusBar.style.display = "none";
+    statusBar.removeAttribute("aria-hidden");
+    return;
+  }
+  const daysLeft = Math.max(0, Math.ceil((new Date(subscription.trialEndsAt) - Date.now()) / 86400000));
+  const urgency  = daysLeft <= 3 ? "danger" : daysLeft <= 7 ? "warning" : "info";
+  statusBar.innerHTML = `<span class="trial-banner trial-banner--${escHtml(urgency)}">
+    ⏳ Trial: <strong>${daysLeft} day${daysLeft === 1 ? "" : "s"} left</strong> — upgrade to keep access after your trial ends.
+  </span>`;
+  statusBar.style.display = "";
+  statusBar.removeAttribute("aria-hidden");
 }
 
 function showAuth() {
@@ -1236,7 +1268,8 @@ const settingsPageRouteMap = {
   "roles":          "/settings/roles",
   "kpi-targets":    "/settings/kpi-targets",
   "integrations":   "/settings/integrations",
-  "cron-jobs":      "/settings/scheduled-jobs"
+  "cron-jobs":      "/settings/scheduled-jobs",
+  "custom-domain":  "/settings/custom-domain"
 };
 
 // notifPrefs — loaded from API, cached in memory for the session
@@ -1724,7 +1757,7 @@ function renderDashboard(data) {
 
 function renderMasterData(paymentTerms) {
   const termOptions = paymentTerms
-    .map((term) => `<option value="${term.id}">${term.code} - ${term.name}</option>`)
+    .map((term) => `<option value="${term.id}">${escHtml(term.code)} - ${escHtml(term.name)}</option>`)
     .join("");
   const paymentTermFieldDefinitions = getCustomFieldDefinitions("payment-terms");
   const itemFieldDefinitions = getCustomFieldDefinitions("items");
@@ -1777,7 +1810,7 @@ function renderMasterData(paymentTerms) {
           .map(
             (p) => `
           <div class="row">
-            <h4>${p.name} (${p.code})</h4>
+            <h4>${escHtml(p.name)} (${escHtml(p.code)})</h4>
             <div class="muted">Due ${p.dueDays} days</div>
             <div class="chip ${p.isActive ? "chip-success" : "chip-danger"}">${p.isActive ? "Active" : "Inactive"}</div>
             ${renderCustomFieldsSummary(p.customFields)}
@@ -1842,7 +1875,7 @@ function renderMasterData(paymentTerms) {
     .map(
       (item) => `
     <div class="row">
-      <h4>${item.name} (${item.itemCode})</h4>
+      <h4>${escHtml(item.name)} (${escHtml(item.itemCode)})</h4>
       <div class="muted">Unit price ${asMoney(item.unitPrice)}${item.externalRef ? ` · Ref: ${escHtml(item.externalRef)}` : ""}</div>
       ${renderCustomFieldsSummary(item.customFields)}
       <div class="inline-actions wrap">
@@ -2198,7 +2231,7 @@ function renderDealCard(deal, kanban) {
 
   const customerInitial = (deal.customer?.name || "?")[0].toUpperCase();
   const stageOptions = kanban.stages
-    .map((s) => `<option value="${s.id}" ${s.id === deal.stageId ? "selected" : ""}>${s.stageName}</option>`)
+    .map((s) => `<option value="${s.id}" ${s.id === deal.stageId ? "selected" : ""}>${escHtml(s.stageName)}</option>`)
     .join("");
 
   return `
@@ -2242,7 +2275,7 @@ function openDealCreateModal(kanban) {
   const modal = qs("#deal-create-modal");
   if (!modal) return;
   const stageOptions = kanban.stages
-    .map((s) => `<option value="${s.id}">${s.stageName}</option>`).join("");
+    .map((s) => `<option value="${s.id}">${escHtml(s.stageName)}</option>`).join("");
   const form = modal.querySelector("#deal-form");
   form.querySelector('[name="stageId"]').innerHTML = stageOptions;
   form.reset();
@@ -2332,7 +2365,7 @@ function renderDeals(kanban, dealsRoot = views.deals, options = {}) {
             <div class="kanban-col" data-stage-id="${stage.id}" style="--col-accent: var(${accentVar})">
               <div class="kanban-col-header">
                 <div class="kanban-col-header-top">
-                  <h3>${stage.stageName}</h3>
+                  <h3>${escHtml(stage.stageName)}</h3>
                   <span class="kanban-col-count">${stage.deals.length}</span>
                 </div>
                 <div class="kanban-col-value">${asMoney(colValue)}</div>
@@ -4045,9 +4078,9 @@ function showEventDetail(ev, anchorEl) {
   const rows = [
     `<div class="ced-row"><span class="ced-label">Date</span><span class="ced-value">${dateStr}</span></div>`,
     `<div class="ced-row"><span class="ced-label">Time</span><span class="ced-value">${timeStr}</span></div>`,
-    ev.customer ? `<div class="ced-row"><span class="ced-label">Customer</span><span class="ced-value">${ev.customer.name}</span></div>` : "",
-    ev.owner    ? `<div class="ced-row"><span class="ced-label">${ev.type === "deal" ? "Owner" : "Sales Rep"}</span><span class="ced-value">${ev.owner.name}</span></div>` : "",
-    ev.stage && stageAccent ? `<div class="ced-row"><span class="ced-label">Stage</span><span class="ced-value"><span class="ced-stage-badge" style="--sa:var(${stageAccent})">${ev.stage.name}</span></span></div>` : "",
+    ev.customer ? `<div class="ced-row"><span class="ced-label">Customer</span><span class="ced-value">${escHtml(ev.customer.name)}</span></div>` : "",
+    ev.owner    ? `<div class="ced-row"><span class="ced-label">${ev.type === "deal" ? "Owner" : "Sales Rep"}</span><span class="ced-value">${escHtml(ev.owner.name)}</span></div>` : "",
+    ev.stage && stageAccent ? `<div class="ced-row"><span class="ced-label">Stage</span><span class="ced-value"><span class="ced-stage-badge" style="--sa:var(${stageAccent})">${escHtml(ev.stage.name)}</span></span></div>` : "",
     statusLabel ? `<div class="ced-row"><span class="ced-label">Status</span><span class="ced-value"><span class="ced-status ced-status--${statusColor}">${statusLabel}</span></span></div>` : "",
   ].filter(Boolean).join("");
 
@@ -4055,7 +4088,7 @@ function showEventDetail(ev, anchorEl) {
     <div id="cal-event-popover" class="cal-event-popover">
       <div class="ced-header">
         <span class="ced-type-badge ced-type--${ev.type}">${typeLabel}</span>
-        <span class="ced-title">${titleCore}</span>
+        <span class="ced-title">${escHtml(titleCore)}</span>
         <button class="ced-close" id="ced-close-btn" aria-label="Close">✕</button>
       </div>
       <div class="ced-body">${rows}</div>
@@ -4136,9 +4169,9 @@ function renderCalendar(calendarData) {
 
   function eventChip(ev, compact = false) {
     const label = ev.title || ev.customer?.name || "Event";
-    return `<div class="cal-event cal-event--${ev.color || "blue"}" data-event-id="${ev.id}" title="${label}${ev.customer?.name ? " · " + ev.customer.name : ""}">
+    return `<div class="cal-event cal-event--${ev.color || "blue"}" data-event-id="${ev.id}" title="${escHtml(label)}${ev.customer?.name ? " · " + escHtml(ev.customer.name) : ""}">
       ${compact ? "" : `<span class="cal-event-dot"></span>`}
-      <span class="cal-event-label">${label}</span>
+      <span class="cal-event-label">${escHtml(label)}</span>
     </div>`;
   }
 
@@ -4208,8 +4241,8 @@ function renderCalendar(calendarData) {
                 <div class="cal-hour-events">
                   ${evs.map((ev) => `
                     <div class="cal-tl-event cal-event--${ev.color || "blue"}" data-event-id="${ev.id}">
-                      <span class="cal-tl-title">${ev.title}</span>
-                      ${ev.customer?.name ? `<span class="cal-tl-meta">${ev.customer.name}</span>` : ""}
+                      <span class="cal-tl-title">${escHtml(ev.title)}</span>
+                      ${ev.customer?.name ? `<span class="cal-tl-meta">${escHtml(ev.customer.name)}</span>` : ""}
                       ${ev.status ? `<span class="cal-tl-badge">${ev.status}</span>` : ""}
                     </div>
                   `).join("")}
@@ -4428,9 +4461,9 @@ function renderCalendar(calendarData) {
     ).slice(0, 8);
     if (!matches.length) { customerList.hidden = true; return; }
     customerList.innerHTML = matches.map((c) =>
-      `<button type="button" class="cal-autocomplete-item" data-id="${c.id}" data-name="${c.name}">
-         <span class="cal-ac-name">${c.name}</span>
-         ${c.customerCode ? `<span class="cal-ac-code">${c.customerCode}</span>` : ""}
+      `<button type="button" class="cal-autocomplete-item" data-id="${c.id}" data-name="${escHtml(c.name)}">
+         <span class="cal-ac-name">${escHtml(c.name)}</span>
+         ${c.customerCode ? `<span class="cal-ac-code">${escHtml(c.customerCode)}</span>` : ""}
        </button>`
     ).join("");
     customerList.hidden = false;
@@ -4564,8 +4597,8 @@ function renderSettings() {
   const tenantInfo = state.cache.tenantInfo || {};
   const salesRepOptions = state.cache.salesReps
     .map((rep) => {
-      const teamSuffix = rep.team?.teamName ? ` · ${rep.team.teamName}` : "";
-      return `<option value="${rep.id}">${rep.fullName}${teamSuffix}</option>`;
+      const teamSuffix = rep.team?.teamName ? ` · ${escHtml(rep.team.teamName)}` : "";
+      return `<option value="${rep.id}">${escHtml(rep.fullName)}${teamSuffix}</option>`;
     })
     .join("");
   const defaultRepId = state.cache.salesReps[0]?.id || "";
@@ -4586,6 +4619,8 @@ function renderSettings() {
     { page: "roles",          label: "Roles & Permissions",   emoji: "🔐", roles: ["ADMIN"] },
     { page: "kpi-targets",    label: "KPI Targets",            emoji: "🎯", roles: ["ADMIN", "DIRECTOR", "MANAGER", "SUPERVISOR", "REP"] },
     { page: "integrations",   label: "Integrations",          emoji: "🔌", roles: ["ADMIN"] },
+    { page: "custom-domain",  label: "Custom Domain",          emoji: "🌐", roles: ["ADMIN"] },
+    { page: "data-sync",      label: "Data Sync",              emoji: "🔄", roles: ["ADMIN"] },
     { page: "cron-jobs",      label: "Scheduled Jobs",         emoji: "⏱", roles: ["ADMIN"] }
   ];
   const navItems = allNavItems.filter(item => item.roles.includes(role));
@@ -4955,6 +4990,48 @@ function renderSettings() {
           <button type="submit">Save Visit Settings</button>
         </form>
       ` : `<div class="muted">Admin access required.</div>`)}
+
+      ${(function() {
+        const sub = state.user?.subscription;
+        if (!sub || !isAdmin) return "";
+        const isTrialing = sub.status === "TRIALING";
+        const daysLeft = sub.trialEndsAt
+          ? Math.max(0, Math.ceil((new Date(sub.trialEndsAt) - Date.now()) / 86400000))
+          : null;
+        const trialEndDate = sub.trialEndsAt
+          ? new Date(sub.trialEndsAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })
+          : "—";
+        const statusBadge = {
+          TRIALING:  `<span class="badge badge--warning">Trial</span>`,
+          ACTIVE:    `<span class="badge badge--success">Active</span>`,
+          PAST_DUE:  `<span class="badge badge--danger">Past Due</span>`,
+          CANCELED:  `<span class="badge badge--danger">Canceled</span>`,
+        }[sub.status] ?? `<span class="badge">${escHtml(sub.status)}</span>`;
+
+        return csec("Subscription & Trial", `
+          <div class="settings-form">
+            <div class="settings-field-row" style="gap:var(--sp-6);flex-wrap:wrap">
+              <div><span class="form-label" style="margin:0">Status</span><div style="margin-top:var(--sp-1)">${statusBadge}</div></div>
+              <div><span class="form-label" style="margin:0">Seats</span><div style="margin-top:var(--sp-1);font-weight:600">${sub.seatCount}</div></div>
+              ${isTrialing ? `<div><span class="form-label" style="margin:0">Trial ends</span><div style="margin-top:var(--sp-1);font-weight:600">${escHtml(trialEndDate)} ${daysLeft !== null ? `<span class="muted">(${daysLeft}d left)</span>` : ""}</div></div>` : ""}
+            </div>
+            ${isTrialing ? `
+            <div style="margin-top:var(--sp-5);border-top:1px solid var(--border);padding-top:var(--sp-4)">
+              <p class="form-label" style="margin:0 0 var(--sp-2)">Extend trial</p>
+              <p style="font-size:0.83rem;color:var(--muted-color);margin:0 0 var(--sp-3)">Add days to the trial period (e.g. for ongoing negotiations). Max 90 days per extension, 180 days from today total.</p>
+              <form id="extend-trial-form" style="display:flex;align-items:center;gap:var(--sp-3);flex-wrap:wrap">
+                <input class="form-input" id="extend-trial-days" name="days" type="number" min="1" max="90" step="1" value="14" style="width:100px" required />
+                <button type="submit">Extend trial</button>
+              </form>
+              <p id="extend-trial-msg" style="margin:var(--sp-2) 0 0;font-size:0.83rem;min-height:1.2em"></p>
+            </div>
+            ` : ""}
+            ${!isTrialing && sub.status !== "ACTIVE" ? `
+            <p style="margin-top:var(--sp-3);font-size:0.83rem;color:var(--muted-color)">To reactivate, please contact support or complete a new subscription checkout.</p>
+            ` : ""}
+          </div>
+        `);
+      })()}
     `;
   } else if (page === "branding") {
     pageHtml = `
@@ -5022,7 +5099,7 @@ function renderSettings() {
       const hasPhoto = !!m.avatarUrl;
       return `<div class="org-node">
         <div class="org-avatar" style="${hasPhoto ? "overflow:hidden" : "background:" + avatarColor(m.fullName || "")}">${repAvatarHtml(m.fullName, m.avatarUrl)}</div>
-        <div class="org-node-name">${m.fullName || "—"}</div>
+        <div class="org-node-name">${escHtml(m.fullName || "—")}</div>
         <span class="org-node-role ${roleColorCls[m.role] || ""}">${m.role === "DIRECTOR" ? "Sales Director" : m.role}</span>
       </div>`;
     }
@@ -5097,11 +5174,11 @@ function renderSettings() {
       return `<div class="org-team-col">
         <div class="org-team-header">
           <div class="org-team-title">
-            <span class="org-team-name">${team.teamName}</span>
+            <span class="org-team-name">${escHtml(team.teamName)}</span>
             <span class="chip ${team.isActive ? "chip-success" : ""}" style="font-size:0.7rem;padding:1px 6px">${team.isActive ? "Active" : "Inactive"}</span>
           </div>
           ${isAdmin ? `<div class="org-team-actions">
-            <button class="ghost small team-rename-btn" data-team-id="${team.id}" data-team-name="${team.teamName}">Rename</button>
+            <button class="ghost small team-rename-btn" data-team-id="${team.id}" data-team-name="${escHtml(team.teamName)}">Rename</button>
             <button class="ghost small team-toggle-btn" data-team-id="${team.id}" data-is-active="${team.isActive}">${team.isActive ? "Deactivate" : "Activate"}</button>
           </div>` : ""}
         </div>
@@ -5136,7 +5213,7 @@ function renderSettings() {
         <div class="org-director-group">
           <div class="org-director-node">
             <div class="org-avatar org-avatar--director" style="${dirHasPhoto ? "overflow:hidden" : ""}">${repAvatarHtml(director.fullName, director.avatarUrl)}</div>
-            <div class="org-node-name">${director.fullName}</div>
+            <div class="org-node-name">${escHtml(director.fullName)}</div>
             <span class="org-node-role org-role--director">Sales Director</span>
           </div>
           <div class="org-connector-v"></div>
@@ -5254,6 +5331,8 @@ function renderSettings() {
           ${(state.cache.teams || []).map(t => `<option value="${t.id}" ${state.rolePageTeam === t.id ? "selected" : ""}>${escHtml(t.teamName)}</option>`).join("")}
         </select>
         <button class="rp-refresh-btn" id="rp-refresh-btn">↻ Refresh</button>
+        ${isAdmin ? `<button class="ghost small" id="rp-invite-btn">+ Invite User</button>
+        <button class="ghost small" id="rp-import-btn">Import Users</button>` : ""}
         <span class="rp-user-count">${allUsers.length} users</span>
       </div>
 
@@ -5284,7 +5363,7 @@ function renderSettings() {
               return `
               <div class="rp-row" data-uid="${u.id}">
                 <div class="rp-user-cell">
-                  <div class="rp-avatar" style="background:${avatarColor(u.fullName)}">${initials}</div>
+                  <div class="rp-avatar" style="background:${avatarColor(u.fullName)}">${escHtml(initials)}</div>
                   <div class="rp-user-info">
                     <span class="rp-user-name">${escHtml(u.fullName || "—")}${isSelf ? '<span class="rp-you-badge">You</span>' : ""}</span>
                     <span class="rp-user-email">${escHtml(u.email)}</span>
@@ -5616,6 +5695,265 @@ function renderSettings() {
           }
         ]
       )}
+    `;
+  } else if (page === "custom-domain") {
+    // Load custom domain data if not cached
+    if (!state.cache.customDomain) {
+      state.cache.customDomain = { loading: true };
+      api(`/tenants/${state.user?.tenantId}/custom-domain`).then(data => {
+        state.cache.customDomain = data || { empty: true };
+        renderSettings();
+      }).catch(() => {
+        state.cache.customDomain = { empty: true };
+        renderSettings();
+      });
+    }
+    const cd = state.cache.customDomain;
+    const tenantSlug = state.user?.tenantSlug || localStorage.getItem("tenantSlug") || "";
+
+    const subdomainUrl = tenantSlug ? `https://${tenantSlug}.${window.__BASE_DOMAIN || "thinkbizcrm.com"}` : null;
+
+    const statusChip = cd?.status === "VERIFIED"
+      ? `<span class="chip chip-success">Verified</span>`
+      : cd?.status === "PENDING"
+        ? `<span class="chip chip-warning">Pending Verification</span>`
+        : cd?.status === "FAILED"
+          ? `<span class="chip chip-danger">Verification Failed</span>`
+          : "";
+
+    pageHtml = `
+      <section class="card">
+        <h3 class="section-title">Tenant Subdomain</h3>
+        <p class="muted small" style="margin-bottom:var(--sp-3)">Your workspace is automatically available at a subdomain based on your workspace slug. No configuration needed.</p>
+        <div class="settings-field-row" style="align-items:center">
+          <div>
+            <strong>${subdomainUrl || "Not available"}</strong>
+            ${subdomainUrl ? `<p class="muted small" style="margin-top:var(--sp-1)">This URL is always active and requires no DNS setup.</p>` : `<p class="muted small" style="margin-top:var(--sp-1)">Set a workspace slug in Company Settings to enable subdomain access.</p>`}
+          </div>
+        </div>
+      </section>
+
+      <section class="card" style="margin-top:var(--sp-4)">
+        <h3 class="section-title">Custom Domain (Enterprise)</h3>
+        <p class="muted small" style="margin-bottom:var(--sp-3)">Point your own domain to ThinkCRM. Users will access the app at your custom domain with full white-label branding.</p>
+
+        ${cd?.loading ? `<div class="muted">Loading…</div>` : cd?.empty || !cd?.domain ? `
+          <form id="cd-add-form" class="settings-form" style="max-width:500px">
+            <label class="form-label">Domain
+              <input class="form-input" name="domain" type="text" placeholder="crm.yourcompany.com" required pattern="^(?:[a-z0-9](?:[a-z0-9\\-]{0,61}[a-z0-9])?\\.)+[a-z]{2,}$" />
+            </label>
+            <p class="muted small">Enter a subdomain of your company domain (e.g. <code>crm.yourcompany.com</code>). You will need to add a CNAME DNS record.</p>
+            <button type="submit">Add Domain</button>
+            <p id="cd-msg" class="small" style="min-height:1.2em;margin-top:var(--sp-2)"></p>
+          </form>
+        ` : `
+          <div class="cd-domain-info" style="display:flex;flex-direction:column;gap:var(--sp-3)">
+            <div style="display:flex;align-items:center;gap:var(--sp-2)">
+              <strong style="font-size:1.1rem">${escHtml(cd.domain)}</strong>
+              ${statusChip}
+            </div>
+
+            ${cd.status !== "VERIFIED" ? `
+              <div class="cd-dns-instructions" style="background:var(--clr-surface);padding:var(--sp-3);border-radius:8px">
+                <p style="margin-bottom:var(--sp-2)"><strong>Step 1:</strong> Add these DNS records at your domain registrar:</p>
+                <div class="cd-dns-table" style="display:grid;grid-template-columns:auto auto 1fr;gap:var(--sp-1) var(--sp-3);font-family:var(--font-mono);font-size:0.82rem;margin-bottom:var(--sp-2)">
+                  <span class="muted">Type</span><span class="muted">Name</span><span class="muted">Value</span>
+                  <span>CNAME</span><span>${escHtml(cd.domain)}</span><span>app.thinkbizcrm.com</span>
+                  <span>TXT</span><span>_thinkcrm-verify.${escHtml(cd.domain)}</span><span>${escHtml(cd.verificationToken)}</span>
+                </div>
+                <p class="muted small">DNS changes can take up to 48 hours to propagate.</p>
+                <p style="margin-top:var(--sp-2)"><strong>Step 2:</strong> Click "Verify" once your DNS records are in place.</p>
+                <div style="display:flex;gap:var(--sp-2);margin-top:var(--sp-2)">
+                  <button id="cd-verify-btn">Verify Domain</button>
+                  <button class="ghost danger small" id="cd-remove-btn">Remove</button>
+                </div>
+                <p id="cd-msg" class="small" style="min-height:1.2em;margin-top:var(--sp-2)"></p>
+              </div>
+            ` : `
+              <div style="background:var(--clr-surface);padding:var(--sp-3);border-radius:8px">
+                <p>Your custom domain is <strong>verified and active</strong>. Users can access the app at:</p>
+                <p style="font-size:1.1rem;margin:var(--sp-2) 0"><strong>https://${escHtml(cd.domain)}</strong></p>
+                <p class="muted small">Verified on ${cd.verifiedAt ? new Date(cd.verifiedAt).toLocaleDateString() : "—"}</p>
+                <div style="margin-top:var(--sp-3)">
+                  <button class="ghost danger small" id="cd-remove-btn">Remove Domain</button>
+                </div>
+                <p id="cd-msg" class="small" style="min-height:1.2em;margin-top:var(--sp-2)"></p>
+              </div>
+            `}
+          </div>
+        `}
+      </section>
+    `;
+  } else if (page === "data-sync") {
+    // ── Data Sync Settings ─────────────────────────────────────────
+    const syncApiKeys = state.cache.syncApiKeys ?? [];
+    const syncSources = state.cache.syncSources ?? [];
+    const syncJobs = state.cache.syncJobs ?? [];
+    pageHtml = `
+      <section class="card" style="margin-bottom:var(--sp-4)">
+        <h3 class="section-title">🔄 Data Sync</h3>
+        <p class="muted" style="font-size:0.85rem">Sync Customers, Items, and Payment Terms from external ERP systems. Supports API push, REST pull, and file import.</p>
+      </section>
+
+      <!-- API Keys -->
+      <section class="card" style="margin-bottom:var(--sp-4)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-3)">
+          <h4 style="margin:0">🔑 API Keys</h4>
+          <button class="btn-primary small" id="sync-create-key-btn">+ Create API Key</button>
+        </div>
+        <p class="muted" style="font-size:0.82rem;margin-bottom:var(--sp-3)">
+          Give this key to the ERP team. They send data to <code>POST /api/v1/sync/inbound</code> with header <code>X-Api-Key: &lt;key&gt;</code>.
+        </p>
+        ${syncApiKeys.length === 0 ? '<p class="muted">No API keys yet.</p>' : `
+          <table class="data-table">
+            <thead><tr><th>Label</th><th>Prefix</th><th>Scopes</th><th>Status</th><th>Last Used</th><th>Expires</th><th></th></tr></thead>
+            <tbody>
+              ${syncApiKeys.map(k => `<tr>
+                <td>${escHtml(k.label)}</td>
+                <td><code>${escHtml(k.keyPrefix)}…</code></td>
+                <td>${k.scopes.map(s => `<span class="badge badge--muted">${escHtml(s)}</span>`).join(" ")}</td>
+                <td>${k.isActive ? '<span class="badge badge--ok">Active</span>' : '<span class="badge badge--err">Revoked</span>'}</td>
+                <td>${k.lastUsedAt ? new Date(k.lastUsedAt).toLocaleDateString() : "Never"}</td>
+                <td>${k.expiresAt ? new Date(k.expiresAt).toLocaleDateString() : "Never"}</td>
+                <td>${k.isActive ? `<button class="ghost small sync-revoke-key-btn" data-key-id="${k.id}">Revoke</button>` : ""}</td>
+              </tr>`).join("")}
+            </tbody>
+          </table>
+        `}
+        <div id="sync-new-key-form" style="display:none;margin-top:var(--sp-3);padding:var(--sp-3);border:1px solid var(--clr-border);border-radius:var(--radius)">
+          <form id="sync-key-form">
+            <div class="form-row">
+              <label class="form-label">Label <input type="text" name="label" required placeholder="e.g. SAP Production" class="form-control"></label>
+            </div>
+            <div class="form-row">
+              <label class="form-label">Scopes
+                <select name="scopes" multiple class="form-control" style="min-height:80px">
+                  <option value="*" selected>* (All entities)</option>
+                  <option value="CUSTOMER">CUSTOMER</option>
+                  <option value="ITEM">ITEM</option>
+                  <option value="PAYMENT_TERM">PAYMENT_TERM</option>
+                </select>
+              </label>
+            </div>
+            <div class="form-row">
+              <label class="form-label">Expires in (days, leave empty for no expiry) <input type="number" name="expiresInDays" min="1" max="3650" placeholder="365" class="form-control"></label>
+            </div>
+            <div class="form-actions">
+              <button type="submit" class="btn-primary small">Generate Key</button>
+              <button type="button" class="ghost small" id="sync-key-cancel">Cancel</button>
+            </div>
+          </form>
+        </div>
+        <div id="sync-key-reveal" style="display:none;margin-top:var(--sp-3);padding:var(--sp-3);background:var(--clr-surface-hover);border-radius:var(--radius)">
+          <p style="font-weight:600;margin-bottom:var(--sp-2)">Copy this key now — it won't be shown again:</p>
+          <code id="sync-key-value" style="display:block;padding:var(--sp-2);background:var(--clr-bg);border-radius:var(--radius);word-break:break-all;font-size:0.9rem"></code>
+        </div>
+      </section>
+
+      <!-- Data Sources & Field Mappings -->
+      <section class="card" style="margin-bottom:var(--sp-4)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-3)">
+          <h4 style="margin:0">📡 Data Sources & Field Mappings</h4>
+          <button class="btn-primary small" id="sync-create-source-btn">+ Create Source</button>
+        </div>
+        <p class="muted" style="font-size:0.82rem;margin-bottom:var(--sp-3)">
+          Each source represents an external system (ERP, spreadsheet, etc.). Configure field mappings to map ERP fields to CRM fields.
+        </p>
+        ${syncSources.length === 0 ? '<p class="muted">No data sources configured.</p>' : syncSources.map(src => `
+          <div class="sync-source-card" style="border:1px solid var(--clr-border);border-radius:var(--radius);padding:var(--sp-3);margin-bottom:var(--sp-3)">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-2)">
+              <div>
+                <strong>${escHtml(src.sourceName)}</strong>
+                <span class="badge badge--muted" style="margin-left:var(--sp-2)">${escHtml(src.sourceType)}</span>
+                <span class="badge ${src.status === "ENABLED" ? "badge--ok" : "badge--err"}" style="margin-left:var(--sp-1)">${src.status}</span>
+              </div>
+              <div>
+                <button class="ghost small sync-toggle-source-btn" data-source-id="${src.id}" data-current-status="${src.status}">${src.status === "ENABLED" ? "Disable" : "Enable"}</button>
+                <button class="ghost small sync-edit-mappings-btn" data-source-id="${src.id}" data-source-name="${escHtml(src.sourceName)}">Edit Mappings</button>
+              </div>
+            </div>
+            ${src.mappings && src.mappings.length > 0 ? `
+              <table class="data-table" style="font-size:0.82rem">
+                <thead><tr><th>Entity</th><th>Source Field</th><th>→</th><th>CRM Field</th><th>Transform</th><th>Required</th></tr></thead>
+                <tbody>
+                  ${src.mappings.map(m => `<tr>
+                    <td><span class="badge badge--muted">${escHtml(m.entityType)}</span></td>
+                    <td><code>${escHtml(m.sourceField)}</code></td>
+                    <td>→</td>
+                    <td><code>${escHtml(m.targetField)}</code></td>
+                    <td>${m.transformRule ? `<code>${escHtml(m.transformRule)}</code>` : "—"}</td>
+                    <td>${m.isRequired ? "Yes" : ""}</td>
+                  </tr>`).join("")}
+                </tbody>
+              </table>
+            ` : '<p class="muted" style="font-size:0.82rem">No field mappings configured yet.</p>'}
+            ${src.lastSyncAt ? `<p class="muted" style="font-size:0.78rem;margin-top:var(--sp-2)">Last sync: ${new Date(src.lastSyncAt).toLocaleString()}</p>` : ""}
+          </div>
+        `).join("")}
+        <div id="sync-source-form-wrap" style="display:none;margin-top:var(--sp-3);padding:var(--sp-3);border:1px solid var(--clr-border);border-radius:var(--radius)">
+          <form id="sync-source-form">
+            <div class="form-row">
+              <label class="form-label">Source Name <input type="text" name="sourceName" required placeholder="e.g. SAP Business One" class="form-control"></label>
+            </div>
+            <div class="form-row">
+              <label class="form-label">Source Type
+                <select name="sourceType" class="form-control">
+                  <option value="WEBHOOK">Webhook (ERP pushes data)</option>
+                  <option value="REST">REST API (CRM pulls data)</option>
+                  <option value="EXCEL">File Upload (CSV/Excel)</option>
+                </select>
+              </label>
+            </div>
+            <div class="form-actions">
+              <button type="submit" class="btn-primary small">Create Source</button>
+              <button type="button" class="ghost small" id="sync-source-cancel">Cancel</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <!-- Mapping Editor Modal -->
+      <div id="sync-mapping-editor" style="display:none;margin-bottom:var(--sp-4)">
+        <section class="card">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-3)">
+            <h4 style="margin:0">📝 Edit Field Mappings — <span id="sync-mapping-source-name"></span></h4>
+            <button class="ghost small" id="sync-mapping-close">Close</button>
+          </div>
+          <form id="sync-mapping-form">
+            <input type="hidden" name="sourceId" id="sync-mapping-source-id">
+            <div id="sync-mapping-rows"></div>
+            <div style="margin-top:var(--sp-2)">
+              <button type="button" class="ghost small" id="sync-mapping-add-row">+ Add Mapping</button>
+            </div>
+            <div class="form-actions" style="margin-top:var(--sp-3)">
+              <button type="submit" class="btn-primary small">Save Mappings</button>
+            </div>
+          </form>
+        </section>
+      </div>
+
+      <!-- Recent Sync Jobs -->
+      <section class="card">
+        <h4 style="margin-bottom:var(--sp-3)">📋 Recent Sync Jobs</h4>
+        ${syncJobs.length === 0 ? '<p class="muted">No sync jobs yet.</p>' : `
+          <table class="data-table">
+            <thead><tr><th>Time</th><th>Source</th><th>Type</th><th>Status</th><th>Records</th><th></th></tr></thead>
+            <tbody>
+              ${syncJobs.map(j => {
+                const s = j.summaryJson || {};
+                return `<tr>
+                  <td>${new Date(j.startedAt).toLocaleString()}</td>
+                  <td>${escHtml(j.source?.sourceName ?? "—")}</td>
+                  <td><span class="badge badge--muted">${escHtml(j.runType)}</span></td>
+                  <td><span class="badge ${j.status === "SUCCESS" ? "badge--ok" : j.status === "FAILED" ? "badge--err" : "badge--muted"}">${j.status}</span></td>
+                  <td>${s.success_count ?? "—"} / ${s.processed_count ?? "—"}</td>
+                  <td><button class="ghost small sync-view-job-btn" data-job-id="${j.id}">Details</button></td>
+                </tr>`;
+              }).join("")}
+            </tbody>
+          </table>
+        `}
+      </section>
     `;
   } else if (page === "cron-jobs") {
     const cronData = state.cache.cronJobs;
@@ -6064,6 +6402,69 @@ function renderSettings() {
     });
   }
 
+  // ── Custom Domain listeners ──────────────────────────────────
+  qs("#cd-add-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const msg = qs("#cd-msg");
+    const btn = e.target.querySelector('button[type="submit"]');
+    const domain = new FormData(e.target).get("domain")?.toString().trim().toLowerCase();
+    if (!domain) return;
+    btn.disabled = true;
+    msg.textContent = "Saving…";
+    msg.style.color = "";
+    try {
+      await api(`/tenants/${state.user.tenantId}/custom-domain`, { method: "PUT", body: { domain } });
+      state.cache.customDomain = null; // force reload
+      msg.textContent = "Domain added — follow the DNS instructions to verify.";
+      msg.style.color = "var(--clr-success)";
+      setTimeout(() => renderSettings(), 800);
+    } catch (err) {
+      msg.textContent = err.message || "Failed to add domain.";
+      msg.style.color = "var(--clr-danger)";
+      btn.disabled = false;
+    }
+  });
+
+  qs("#cd-verify-btn")?.addEventListener("click", async () => {
+    const msg = qs("#cd-msg");
+    const btn = qs("#cd-verify-btn");
+    btn.disabled = true;
+    btn.textContent = "Verifying…";
+    msg.textContent = "";
+    try {
+      const res = await api(`/tenants/${state.user.tenantId}/custom-domain/verify`, { method: "POST" });
+      if (res.verified) {
+        msg.textContent = "Domain verified successfully!";
+        msg.style.color = "var(--clr-success)";
+        state.cache.customDomain = null;
+        setTimeout(() => renderSettings(), 800);
+      } else {
+        msg.textContent = "Verification failed — DNS records not found yet. This can take up to 48 hours.";
+        msg.style.color = "var(--clr-warning)";
+        state.cache.customDomain = null;
+        setTimeout(() => renderSettings(), 1500);
+      }
+    } catch (err) {
+      msg.textContent = err.message || "Verification failed.";
+      msg.style.color = "var(--clr-danger)";
+      btn.disabled = false;
+      btn.textContent = "Verify Domain";
+    }
+  });
+
+  qs("#cd-remove-btn")?.addEventListener("click", async () => {
+    if (!confirm("Remove this custom domain? Users will no longer be able to access the app at this domain.")) return;
+    const msg = qs("#cd-msg");
+    try {
+      await api(`/tenants/${state.user.tenantId}/custom-domain`, { method: "DELETE" });
+      state.cache.customDomain = null;
+      renderSettings();
+      setStatus("Custom domain removed.");
+    } catch (err) {
+      if (msg) { msg.textContent = err.message || "Failed to remove."; msg.style.color = "var(--clr-danger)"; }
+    }
+  });
+
   // ── Sidebar nav ───────────────────────────────────────────────
   qs("#settings-nav-toggle")?.addEventListener("click", () => {
     state.settingsNavCollapsed = !state.settingsNavCollapsed;
@@ -6071,9 +6472,163 @@ function renderSettings() {
   });
 
   views.settings.querySelectorAll("[data-settings-nav]").forEach((btn) => {
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", async () => {
       navigateToSettingsPage(btn.dataset.settingsNav);
+      if (btn.dataset.settingsNav === "data-sync") await loadSyncData();
       renderSettings();
+    });
+  });
+
+  // ── Data Sync page listeners ────────────────────────────────────
+  qs("#sync-create-key-btn")?.addEventListener("click", () => {
+    const f = qs("#sync-new-key-form");
+    if (f) f.style.display = f.style.display === "none" ? "block" : "none";
+  });
+  qs("#sync-key-cancel")?.addEventListener("click", () => {
+    qs("#sync-new-key-form").style.display = "none";
+  });
+  qs("#sync-key-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    const scopes = Array.from(fd.getAll("scopes"));
+    const expiresInDays = fd.get("expiresInDays") ? Number(fd.get("expiresInDays")) : undefined;
+    try {
+      const result = await api("/sync/api-keys", {
+        method: "POST",
+        body: { label: fd.get("label"), scopes, expiresInDays }
+      });
+      qs("#sync-new-key-form").style.display = "none";
+      qs("#sync-key-reveal").style.display = "block";
+      qs("#sync-key-value").textContent = result.rawKey;
+      await loadSyncData();
+      renderSettings();
+    } catch (err) { setStatus(err.message || "Failed to create key."); }
+  });
+  views.settings.querySelectorAll(".sync-revoke-key-btn").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("Revoke this API key? Any ERP using it will stop working.")) return;
+      try {
+        await api(`/sync/api-keys/${btn.dataset.keyId}/revoke`, { method: "PATCH" });
+        await loadSyncData();
+        renderSettings();
+        setStatus("API key revoked.");
+      } catch (err) { setStatus(err.message); }
+    });
+  });
+
+  // Source CRUD
+  qs("#sync-create-source-btn")?.addEventListener("click", () => {
+    const f = qs("#sync-source-form-wrap");
+    if (f) f.style.display = f.style.display === "none" ? "block" : "none";
+  });
+  qs("#sync-source-cancel")?.addEventListener("click", () => {
+    qs("#sync-source-form-wrap").style.display = "none";
+  });
+  qs("#sync-source-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    try {
+      await api("/integrations/master-data/sources", {
+        method: "POST",
+        body: { sourceName: fd.get("sourceName"), sourceType: fd.get("sourceType"), configJson: {} }
+      });
+      qs("#sync-source-form-wrap").style.display = "none";
+      await loadSyncData();
+      renderSettings();
+      setStatus("Source created.");
+    } catch (err) { setStatus(err.message || "Failed to create source."); }
+  });
+  views.settings.querySelectorAll(".sync-toggle-source-btn").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const newStatus = btn.dataset.currentStatus === "ENABLED" ? "DISABLED" : "ENABLED";
+      try {
+        await api(`/integrations/master-data/sources/${btn.dataset.sourceId}`, {
+          method: "PATCH",
+          body: { status: newStatus }
+        });
+        await loadSyncData();
+        renderSettings();
+      } catch (err) { setStatus(err.message); }
+    });
+  });
+
+  // Mapping editor
+  views.settings.querySelectorAll(".sync-edit-mappings-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const sourceId = btn.dataset.sourceId;
+      const source = (state.cache.syncSources || []).find(s => s.id === sourceId);
+      qs("#sync-mapping-editor").style.display = "block";
+      qs("#sync-mapping-source-name").textContent = btn.dataset.sourceName;
+      qs("#sync-mapping-source-id").value = sourceId;
+      const rows = (source?.mappings || []).map((m, i) => syncMappingRowHtml(i, m)).join("");
+      qs("#sync-mapping-rows").innerHTML = rows || syncMappingRowHtml(0);
+    });
+  });
+  qs("#sync-mapping-close")?.addEventListener("click", () => {
+    qs("#sync-mapping-editor").style.display = "none";
+  });
+  qs("#sync-mapping-add-row")?.addEventListener("click", () => {
+    const container = qs("#sync-mapping-rows");
+    const idx = container.querySelectorAll(".sync-mapping-row").length;
+    container.insertAdjacentHTML("beforeend", syncMappingRowHtml(idx));
+  });
+  qs("#sync-mapping-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const sourceId = qs("#sync-mapping-source-id").value;
+    const rowEls = e.currentTarget.querySelectorAll(".sync-mapping-row");
+    const mappings = [];
+    rowEls.forEach(row => {
+      const et = row.querySelector("[name=entityType]")?.value;
+      const sf = row.querySelector("[name=sourceField]")?.value?.trim();
+      const tf = row.querySelector("[name=targetField]")?.value?.trim();
+      const tr = row.querySelector("[name=transformRule]")?.value?.trim() || undefined;
+      const req = row.querySelector("[name=isRequired]")?.checked || false;
+      if (et && sf && tf) mappings.push({ entityType: et, sourceField: sf, targetField: tf, transformRule: tr, isRequired: req });
+    });
+    try {
+      await api(`/integrations/master-data/sources/${sourceId}/mappings`, {
+        method: "PUT",
+        body: { mappings }
+      });
+      qs("#sync-mapping-editor").style.display = "none";
+      await loadSyncData();
+      renderSettings();
+      setStatus("Mappings saved.");
+    } catch (err) { setStatus(err.message || "Failed to save mappings."); }
+  });
+
+  // Sync job detail
+  views.settings.querySelectorAll(".sync-view-job-btn").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      try {
+        const job = await api(`/sync/jobs/${btn.dataset.jobId}`);
+        const errHtml = (job.errors || []).map(e =>
+          `<tr><td>${escHtml(e.rowRef)}</td><td><code>${escHtml(e.errorCode)}</code></td><td>${escHtml(e.errorMessage)}</td></tr>`
+        ).join("");
+        const overlay = document.createElement("div");
+        overlay.className = "popup-overlay";
+        overlay.innerHTML = `
+          <div class="popup-box popup-box--wide" role="dialog" aria-modal="true">
+            <div class="popup-header">
+              <p class="popup-title">Sync Job Detail</p>
+              <button class="popup-close-btn" aria-label="Close">✕</button>
+            </div>
+            <div style="padding:var(--sp-3)">
+              <p><strong>Status:</strong> ${escHtml(job.status)} &nbsp; <strong>Source:</strong> ${escHtml(job.source?.sourceName ?? "—")} &nbsp; <strong>Type:</strong> ${escHtml(job.runType)}</p>
+              <p><strong>Started:</strong> ${new Date(job.startedAt).toLocaleString()} ${job.finishedAt ? " — <strong>Finished:</strong> " + new Date(job.finishedAt).toLocaleString() : ""}</p>
+              ${errHtml ? `
+                <h5 style="margin-top:var(--sp-3)">Errors</h5>
+                <table class="data-table" style="font-size:0.82rem">
+                  <thead><tr><th>Row</th><th>Code</th><th>Message</th></tr></thead>
+                  <tbody>${errHtml}</tbody>
+                </table>
+              ` : '<p class="muted" style="margin-top:var(--sp-3)">No errors.</p>'}
+            </div>
+          </div>`;
+        document.body.appendChild(overlay);
+        overlay.querySelector(".popup-close-btn").addEventListener("click", () => overlay.remove());
+        overlay.addEventListener("click", (ev) => { if (ev.target === overlay) overlay.remove(); });
+      } catch (err) { setStatus(err.message); }
     });
   });
 
@@ -6097,6 +6652,173 @@ function renderSettings() {
     setStatus("Refreshing…");
     await loadSettings();
     setStatus("");
+  });
+
+  // ── Invite User (S4) ───────────────────────────────────────────
+  qs("#rp-invite-btn")?.addEventListener("click", () => {
+    const teamOpts = (state.cache.teams || []).map(t =>
+      `<option value="${t.id}">${escHtml(t.teamName)}</option>`
+    ).join("");
+
+    const overlay = document.createElement("div");
+    overlay.className = "popup-overlay";
+    overlay.innerHTML = `
+      <div class="popup-box popup-box--wide" role="dialog" aria-modal="true">
+        <div class="popup-header">
+          <p class="popup-title">Invite User</p>
+          <button class="popup-close-btn" aria-label="Close">✕</button>
+        </div>
+        <form id="invite-user-form" style="display:flex;flex-direction:column;gap:var(--sp-3);padding:var(--sp-3) 0">
+          <label class="form-label">Email <input class="form-input" name="email" type="email" required placeholder="colleague@company.com" /></label>
+          <label class="form-label">Role
+            <select class="form-input" name="role">
+              <option value="REP">Sales Rep</option>
+              <option value="SUPERVISOR">Supervisor</option>
+              <option value="MANAGER">Sales Manager</option>
+              <option value="ADMIN">Admin</option>
+            </select>
+          </label>
+          <label class="form-label">Team (optional)
+            <select class="form-input" name="teamId">
+              <option value="">— No team —</option>
+              ${teamOpts}
+            </select>
+          </label>
+          <p class="invite-form-msg muted small" style="min-height:1.2em"></p>
+          <div class="popup-actions">
+            <button type="button" class="popup-cancel-btn">Cancel</button>
+            <button type="submit">Send Invite</button>
+          </div>
+        </form>
+      </div>`;
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add("popup-visible"));
+
+    const close = () => {
+      overlay.classList.remove("popup-visible");
+      overlay.addEventListener("transitionend", () => overlay.remove(), { once: true });
+    };
+    overlay.querySelector(".popup-close-btn").addEventListener("click", close);
+    overlay.querySelector(".popup-cancel-btn").addEventListener("click", close);
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+
+    overlay.querySelector("#invite-user-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const form = e.target;
+      const msg = overlay.querySelector(".invite-form-msg");
+      const btn = form.querySelector('button[type="submit"]');
+      const email = form.email.value.trim();
+      const role = form.role.value;
+      const teamId = form.teamId.value || undefined;
+      btn.disabled = true;
+      msg.textContent = "Sending…";
+      msg.className = "invite-form-msg muted small";
+      try {
+        const res = await api("/users/invite", { method: "POST", body: { email, role, teamId } });
+        msg.textContent = res.emailSent
+          ? `Invite sent to ${email}.`
+          : `Invite created (email delivery not configured). Share this link: ${res.acceptUrl || ""}`;
+        msg.style.color = "var(--clr-success)";
+        btn.textContent = "Done";
+        btn.disabled = true;
+        setTimeout(() => { close(); loadSettings(); }, 1500);
+      } catch (err) {
+        msg.textContent = err.message || "Failed to send invite.";
+        msg.style.color = "var(--clr-danger)";
+        btn.disabled = false;
+      }
+    });
+  });
+
+  // ── Import Users (S12) ──────────────────────────────────────────
+  qs("#rp-import-btn")?.addEventListener("click", () => {
+    const overlay = document.createElement("div");
+    overlay.className = "popup-overlay";
+    overlay.innerHTML = `
+      <div class="popup-box popup-box--wide" role="dialog" aria-modal="true">
+        <div class="popup-header">
+          <p class="popup-title">Import Users</p>
+          <button class="popup-close-btn" aria-label="Close">✕</button>
+        </div>
+        <div style="padding:var(--sp-3) 0;display:flex;flex-direction:column;gap:var(--sp-3)">
+          <p class="muted small">Upload a JSON file with an array of users. Each user needs: <code>email</code>, <code>fullName</code>, <code>role</code> (REP, SUPERVISOR, MANAGER, ADMIN). Optional: <code>teamId</code>.</p>
+          <pre class="small" style="background:var(--clr-surface);padding:var(--sp-2);border-radius:6px;overflow-x:auto">[
+  { "email": "rep@co.com", "fullName": "John Doe", "role": "REP" },
+  { "email": "mgr@co.com", "fullName": "Jane Mgr", "role": "MANAGER" }
+]</pre>
+          <input type="file" id="import-file-input" accept=".json" style="font-size:0.85rem" />
+          <p class="import-form-msg muted small" style="min-height:1.2em"></p>
+          <div class="import-results" hidden></div>
+          <div class="popup-actions">
+            <button class="popup-cancel-btn">Cancel</button>
+            <button class="import-submit-btn" disabled>Import</button>
+          </div>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add("popup-visible"));
+
+    const close = () => {
+      overlay.classList.remove("popup-visible");
+      overlay.addEventListener("transitionend", () => overlay.remove(), { once: true });
+    };
+    overlay.querySelector(".popup-close-btn").addEventListener("click", close);
+    overlay.querySelector(".popup-cancel-btn").addEventListener("click", close);
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+
+    let parsedUsers = null;
+    const fileInput = overlay.querySelector("#import-file-input");
+    const submitBtn = overlay.querySelector(".import-submit-btn");
+    const msg = overlay.querySelector(".import-form-msg");
+    const resultsDiv = overlay.querySelector(".import-results");
+
+    fileInput.addEventListener("change", () => {
+      const file = fileInput.files[0];
+      if (!file) { submitBtn.disabled = true; return; }
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          let data = JSON.parse(reader.result);
+          if (data && !Array.isArray(data) && Array.isArray(data.users)) data = data.users;
+          if (!Array.isArray(data)) throw new Error("File must contain a JSON array.");
+          parsedUsers = data;
+          msg.textContent = `${data.length} user(s) found in file.`;
+          msg.style.color = "";
+          submitBtn.disabled = false;
+        } catch (err) {
+          msg.textContent = err.message;
+          msg.style.color = "var(--clr-danger)";
+          submitBtn.disabled = true;
+          parsedUsers = null;
+        }
+      };
+      reader.readAsText(file);
+    });
+
+    submitBtn.addEventListener("click", async () => {
+      if (!parsedUsers) return;
+      submitBtn.disabled = true;
+      msg.textContent = "Importing…";
+      msg.style.color = "";
+      try {
+        const res = await api("/users/import", { method: "POST", body: { users: parsedUsers } });
+        msg.textContent = `Done — ${res.created} created, ${res.errors} error(s).`;
+        msg.style.color = res.errors ? "var(--clr-warning)" : "var(--clr-success)";
+        if (res.errorDetails?.length) {
+          resultsDiv.hidden = false;
+          resultsDiv.innerHTML = `<div class="small" style="max-height:200px;overflow:auto;background:var(--clr-surface);padding:var(--sp-2);border-radius:6px">`
+            + res.errorDetails.map(e => `<div style="color:var(--clr-danger)">Row ${e.row}: ${escHtml(e.error)}</div>`).join("")
+            + `</div>`;
+        }
+        if (res.created > 0) {
+          setTimeout(() => loadSettings(), 1000);
+        }
+      } catch (err) {
+        msg.textContent = err.message || "Import failed.";
+        msg.style.color = "var(--clr-danger)";
+        submitBtn.disabled = false;
+      }
+    });
   });
 
   views.settings.querySelectorAll(".rp-role-select").forEach((sel) => {
@@ -6212,6 +6934,35 @@ function renderSettings() {
       await loadSettings();
     } catch (error) {
       setStatus(error.message, true);
+    }
+  });
+
+  qs("#extend-trial-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const msgEl = qs("#extend-trial-msg");
+    const btn   = event.currentTarget.querySelector("button[type='submit']");
+    const days  = parseInt(qs("#extend-trial-days")?.value || "0", 10);
+    if (!days || days < 1 || days > 90) {
+      msgEl.textContent = "Enter a number between 1 and 90.";
+      msgEl.style.color = "var(--danger)";
+      return;
+    }
+    btn.disabled = true;
+    try {
+      const res = await api(`/tenants/${tenantId}/extend-trial`, { method: "PATCH", body: { days } });
+      msgEl.textContent = res.message;
+      msgEl.style.color = "var(--success)";
+      // Update in-memory subscription so the banner refreshes
+      if (state.user?.subscription) {
+        state.user.subscription.trialEndsAt = res.trialEndsAt;
+        showTrialBanner(state.user.subscription);
+      }
+      await loadSettings();
+    } catch (error) {
+      msgEl.textContent = error.message;
+      msgEl.style.color = "var(--danger)";
+    } finally {
+      btn.disabled = false;
     }
   });
 
@@ -6758,12 +7509,13 @@ function dealsForCustomer(customerId) {
 }
 
 function c360Initials(name) {
-  return (name || "?")
+  const initials = (name || "?")
     .split(/\s+/)
     .filter(Boolean)
     .slice(0, 2)
     .map((w) => w[0].toUpperCase())
     .join("");
+  return escHtml(initials);
 }
 
 // Deterministic avatar background from name — always dark enough for white text
@@ -6792,7 +7544,9 @@ function repAvatarHtml(name, avatarUrl) {
   if (avatarUrl) {
     return `<img src="${escHtml(avatarUrl)}" alt="${escHtml(name || "")}" style="width:100%;height:100%;object-fit:cover;display:block">`;
   }
-  return (name || "?").split(" ").filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join("");
+  // Escape initials — a name starting with '<' would otherwise inject raw HTML.
+  const initials = (name || "?").split(" ").filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join("");
+  return escHtml(initials);
 }
 
 // ── Shared popup helpers ───────────────────────────────────────────────────
@@ -7649,6 +8403,25 @@ function escHtml(str) {
     .replace(/"/g, "&quot;");
 }
 
+/** Render a single field mapping editor row. */
+function syncMappingRowHtml(idx, m) {
+  const d = m || {};
+  return `
+    <div class="sync-mapping-row" style="display:flex;gap:var(--sp-2);align-items:center;margin-bottom:var(--sp-2);flex-wrap:wrap">
+      <select name="entityType" class="form-control" style="width:120px">
+        <option value="CUSTOMER" ${d.entityType === "CUSTOMER" ? "selected" : ""}>Customer</option>
+        <option value="ITEM" ${d.entityType === "ITEM" ? "selected" : ""}>Item</option>
+        <option value="PAYMENT_TERM" ${d.entityType === "PAYMENT_TERM" ? "selected" : ""}>Payment Term</option>
+      </select>
+      <input type="text" name="sourceField" placeholder="ERP field (e.g. cust_code)" value="${escHtml(d.sourceField || "")}" class="form-control" style="width:150px">
+      <span>→</span>
+      <input type="text" name="targetField" placeholder="CRM field (e.g. customerCode)" value="${escHtml(d.targetField || "")}" class="form-control" style="width:150px">
+      <input type="text" name="transformRule" placeholder="Transform (trim/upper/lower/number)" value="${escHtml(d.transformRule || "")}" class="form-control" style="width:140px">
+      <label style="display:flex;align-items:center;gap:4px;font-size:0.82rem"><input type="checkbox" name="isRequired" ${d.isRequired ? "checked" : ""}> Required</label>
+      <button type="button" class="ghost small" onclick="this.closest('.sync-mapping-row').remove()">✕</button>
+    </div>`;
+}
+
 /** Translate a cron expression into a human-readable string showing the timezone. */
 function describeCron(expr, tz) {
   if (!expr) return "";
@@ -7756,12 +8529,12 @@ function renderC360TabContent(c360) {
             <div class="c360-deal-body">
               <div class="c360-deal-name">${escHtml(d.dealName)}</div>
               <div class="c360-deal-meta">
-                ${stageName(d)} · Follow-up ${d.followUpAt ? new Date(d.followUpAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "—"}
+                ${escHtml(stageName(d))} · Follow-up ${d.followUpAt ? new Date(d.followUpAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "—"}
                 ${d.closedAt ? ` · Closed ${new Date(d.closedAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : ""}
               </div>
             </div>
             <div class="c360-deal-right">
-              <span class="badge badge--${(stageName(d).toLowerCase().includes("won") ? "won" : stageName(d).toLowerCase().includes("lost") ? "lost" : "open")}">${stageName(d)}</span>
+              <span class="badge badge--${(stageName(d).toLowerCase().includes("won") ? "won" : stageName(d).toLowerCase().includes("lost") ? "lost" : "open")}">${escHtml(stageName(d))}</span>
               <span class="c360-deal-value">${asMoney(d.estimatedValue)}</span>
             </div>
           </div>`).join("")}
@@ -8606,6 +9379,21 @@ async function loadIntegrations() {
   renderIntegrationLogs(data);
 }
 
+async function loadSyncData() {
+  try {
+    const [apiKeys, sources, jobs] = await Promise.all([
+      api("/sync/api-keys"),
+      api("/integrations/master-data/sources"),
+      api("/sync/jobs?limit=20")
+    ]);
+    state.cache.syncApiKeys = apiKeys;
+    state.cache.syncSources = sources;
+    state.cache.syncJobs = jobs;
+  } catch {
+    // Sync endpoints may not exist yet in older deployments
+  }
+}
+
 async function loadSettings() {
   const tenantId = state.user?.tenantId;
   if (!tenantId) return;
@@ -8634,6 +9422,10 @@ async function loadSettings() {
   state.cache.allUsers = tenantSummary?.users || [];
   state.cache.tenantInfo = tenantSummary ? { id: tenantSummary.id, name: tenantSummary.name, slug: tenantSummary.slug, timezone: tenantSummary.timezone ?? "Asia/Bangkok" } : null;
   if (branding) applyBrandingTheme(branding);
+  // Load sync data only for admins on the data-sync page
+  if (isAdmin && state.settingsPage === "data-sync") {
+    await loadSyncData();
+  }
   renderSettings();
 }
 
@@ -8662,6 +9454,7 @@ loginForm.addEventListener("submit", async (event) => {
     state.calendarFilters.ownerIds = [result.user.id];
     localStorage.setItem("thinkcrm_token", state.token);
     showApp();
+    showTrialBanner(result.user.subscription);
     updateUserMeta();
     const onMasterRoute = syncMasterPageFromLocation();
     const onSimpleViewRoute = !onMasterRoute && syncSimpleViewFromLocation();
@@ -8672,6 +9465,7 @@ loginForm.addEventListener("submit", async (event) => {
     } else if (onSimpleViewRoute) {
       switchView(onSimpleViewRoute);
       if (onSimpleViewRoute === "repHub") paintRepHubFull();
+      if (onSimpleViewRoute === "dashboard") await loadOnboardingWizard();
     } else {
       window.history.replaceState({ view: "repHub" }, "", "/task");
       switchView("repHub");
@@ -8681,6 +9475,328 @@ loginForm.addEventListener("submit", async (event) => {
     authMessage.textContent = error.message;
   }
 });
+
+// ── Forgot / Reset password (H10) ────────────────────────────────────────────
+(function initPasswordReset() {
+  const loginPanel = qs(".login-form");
+  const forgotPanel = qs("#forgot-password-panel");
+  const resetPanel = qs("#reset-password-panel");
+  const forgotLink = qs("#forgot-password-link");
+  const backLink = qs("#back-to-login-link");
+  const forgotForm = qs("#forgot-password-form");
+  const resetForm = qs("#reset-password-form");
+  const forgotMsg = qs("#forgot-message");
+  const resetMsg = qs("#reset-message");
+
+  if (!forgotPanel || !resetPanel) return;
+
+  // If the URL has ?token=, show the reset-password panel instead of login.
+  const urlParams = new URLSearchParams(window.location.search);
+  const resetToken = urlParams.get("token");
+  if (resetToken && window.location.pathname === "/reset-password") {
+    loginPanel.hidden = true;
+    resetPanel.hidden = false;
+    qs("#reset-token-input").value = resetToken;
+  }
+
+  forgotLink?.addEventListener("click", (e) => {
+    e.preventDefault();
+    loginPanel.hidden = true;
+    forgotPanel.hidden = false;
+    // Pre-fill workspace from login form
+    const slug = loginForm.querySelector('[name="tenantSlug"]')?.value;
+    if (slug) forgotPanel.querySelector('[name="tenantSlug"]').value = slug;
+    forgotMsg.textContent = "";
+  });
+
+  backLink?.addEventListener("click", (e) => {
+    e.preventDefault();
+    forgotPanel.hidden = true;
+    loginPanel.hidden = false;
+  });
+
+  forgotForm?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    forgotMsg.textContent = "";
+    forgotMsg.className = "login-error";
+    const btn = forgotForm.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    btn.textContent = "Sending…";
+    try {
+      const fd = new FormData(forgotForm);
+      await fetch("/api/v1/auth/forgot-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(Object.fromEntries(fd.entries()))
+      });
+      // Always show success regardless of server response to prevent enumeration.
+      forgotMsg.className = "login-error login-success";
+      forgotMsg.textContent = "If that account exists, a reset link has been sent to your email.";
+      forgotForm.reset();
+    } catch {
+      forgotMsg.textContent = "Something went wrong. Please try again.";
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Send reset link";
+    }
+  });
+
+  resetForm?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    resetMsg.textContent = "";
+    resetMsg.className = "login-error";
+    const fd = new FormData(resetForm);
+    const newPw = fd.get("newPassword");
+    const confirmPw = fd.get("confirmPassword");
+    if (newPw !== confirmPw) {
+      resetMsg.textContent = "Passwords do not match.";
+      return;
+    }
+    if (String(newPw).length < 12) {
+      resetMsg.textContent = "Password must be at least 12 characters.";
+      return;
+    }
+    const btn = resetForm.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    btn.textContent = "Resetting…";
+    try {
+      const res = await fetch("/api/v1/auth/reset-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: fd.get("token"), newPassword: newPw })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Reset failed.");
+      resetMsg.className = "login-error login-success";
+      resetMsg.textContent = "Password reset successfully. Redirecting to login…";
+      resetForm.reset();
+      setTimeout(() => { window.location.href = "/"; }, 2000);
+    } catch (err) {
+      resetMsg.textContent = err.message || "Invalid or expired reset link.";
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Reset password";
+    }
+  });
+})();
+
+// ── Self-service signup (S3) ──────────────────────────────────────────────────
+(function initSignup() {
+  const loginPanel       = qs(".login-form");
+  const signupPanel      = qs("#signup-panel");
+  const createLink       = qs("#create-workspace-link");
+  const backLink         = qs("#back-to-login-from-signup");
+  const signupForm       = qs("#signup-form");
+  const signupMsg        = qs("#signup-message");
+  const slugInput        = signupForm?.querySelector('[name="slug"]');
+  const slugStatus       = qs("#slug-status");
+  const slugHint         = qs("#slug-hint");
+  const companyInput     = signupForm?.querySelector('[name="companyName"]');
+
+  if (!signupPanel) return;
+
+  // Show signup panel if URL is /signup
+  if (window.location.pathname === "/signup") {
+    loginPanel.hidden = true;
+    signupPanel.hidden = false;
+  }
+
+  createLink?.addEventListener("click", (e) => {
+    e.preventDefault();
+    loginPanel.hidden = true;
+    signupPanel.hidden = false;
+    signupMsg.textContent = "";
+    history.replaceState(null, "", "/signup");
+  });
+
+  backLink?.addEventListener("click", (e) => {
+    e.preventDefault();
+    signupPanel.hidden = true;
+    loginPanel.hidden = false;
+    history.replaceState(null, "", "/");
+  });
+
+  // Auto-generate slug from company name
+  companyInput?.addEventListener("input", () => {
+    if (!slugInput || slugInput.dataset.edited === "true") return;
+    const raw = companyInput.value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    slugInput.value = raw.slice(0, 60);
+    if (raw) checkSlug(raw);
+  });
+
+  // Mark as manually edited once the user types in slug directly
+  slugInput?.addEventListener("input", () => {
+    slugInput.dataset.edited = "true";
+    const slug = slugInput.value.trim();
+    if (slug.length >= 2) checkSlug(slug);
+    else { slugStatus.textContent = ""; slugStatus.className = "signup-slug-status"; slugHint.textContent = ""; }
+  });
+
+  let slugTimer = null;
+  function checkSlug(slug) {
+    if (!slugStatus) return;
+    clearTimeout(slugTimer);
+    slugStatus.textContent = "…";
+    slugStatus.className = "signup-slug-status checking";
+    slugHint.textContent = "";
+    slugTimer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/v1/tenants/check-slug?slug=${encodeURIComponent(slug)}`);
+        const data = await res.json();
+        if (data.available) {
+          slugStatus.textContent = "✓ Available";
+          slugStatus.className = "signup-slug-status available";
+          slugHint.textContent = `Your workspace URL: ${location.hostname}/${slug}`;
+        } else {
+          slugStatus.textContent = "✗ Taken";
+          slugStatus.className = "signup-slug-status taken";
+          slugHint.textContent = "Try adding your company initials or a number.";
+        }
+      } catch {
+        slugStatus.textContent = "";
+        slugStatus.className = "signup-slug-status";
+      }
+    }, 400);
+  }
+
+  signupForm?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    signupMsg.textContent = "";
+    const btn = signupForm.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    btn.textContent = "Creating…";
+    try {
+      const fd = new FormData(signupForm);
+      const body = {
+        companyName:   fd.get("companyName"),
+        slug:          fd.get("slug"),
+        adminFullName: fd.get("adminFullName"),
+        adminEmail:    fd.get("adminEmail"),
+        adminPassword: fd.get("adminPassword")
+      };
+      const res  = await fetch("/api/v1/tenants/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Signup failed.");
+
+      // Auto-login: store token and reload as authenticated user
+      localStorage.setItem("jwt", data.token);
+      localStorage.setItem("tenantSlug", data.tenantSlug);
+      window.location.href = "/dashboard";
+    } catch (err) {
+      signupMsg.textContent = err.message || "Something went wrong. Please try again.";
+      btn.disabled = false;
+      btn.textContent = "Create workspace";
+    }
+  });
+})();
+
+// ── Accept invite (S4) ──────────────────────────────────────────────────────────
+(function initAcceptInvite() {
+  const loginPanel   = qs(".login-form");
+  const invitePanel  = qs("#accept-invite-panel");
+  const inviteForm   = qs("#accept-invite-form");
+  const inviteMsg    = qs("#invite-message");
+
+  if (!invitePanel) return;
+
+  const urlParams   = new URLSearchParams(window.location.search);
+  const inviteToken = urlParams.get("token");
+  if (inviteToken && window.location.pathname === "/accept-invite") {
+    loginPanel.hidden  = true;
+    invitePanel.hidden = false;
+    qs("#invite-token-input").value = inviteToken;
+  }
+
+  inviteForm?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    inviteMsg.textContent = "";
+    inviteMsg.className   = "login-error";
+    const fd        = new FormData(inviteForm);
+    const pw        = fd.get("password");
+    const confirmPw = fd.get("confirmPassword");
+    if (pw !== confirmPw) { inviteMsg.textContent = "Passwords do not match."; return; }
+    if (String(pw).length < 12) { inviteMsg.textContent = "Password must be at least 12 characters."; return; }
+
+    const btn = inviteForm.querySelector('button[type="submit"]');
+    btn.disabled    = true;
+    btn.textContent = "Creating account…";
+    try {
+      const res = await fetch("/api/v1/auth/accept-invite", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: fd.get("token"), fullName: fd.get("fullName"), password: pw })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Could not accept invite.");
+
+      // Auto-login: store token and redirect to dashboard.
+      localStorage.setItem("jwt", data.token);
+      localStorage.setItem("tenantSlug", data.user.tenantSlug);
+      window.location.href = "/dashboard";
+    } catch (err) {
+      inviteMsg.textContent = err.message || "Invalid or expired invite link.";
+      btn.disabled    = false;
+      btn.textContent = "Create account";
+    }
+  });
+})();
+
+// ── Onboarding wizard (S11) ───────────────────────────────────────────────────
+async function loadOnboardingWizard() {
+  const wizard = qs("#onboarding-wizard");
+  if (!wizard) return;
+  // Only show to admins
+  if (state.user?.role !== "ADMIN") { wizard.hidden = true; return; }
+  // Respect dismissed state
+  const tenantId = state.user?.tenantId;
+  if (!tenantId) { wizard.hidden = true; return; }
+  const dismissKey = `onboarding_dismissed_${tenantId}`;
+  if (localStorage.getItem(dismissKey) === "1") { wizard.hidden = true; return; }
+
+  try {
+    const data = await api(`/tenants/${tenantId}/onboarding-status`);
+    if (!data?.steps) { wizard.hidden = true; return; }
+
+    const { teamCreated, userInvited, integrationSetup, customerImported, dealCreated } = data.steps;
+    const allDone = teamCreated && userInvited && integrationSetup && customerImported && dealCreated;
+    if (allDone) { wizard.hidden = true; return; }
+
+    const steps = [
+      { key: "teamCreated",      label: "Set up your team structure",   link: "/settings/teams",        done: teamCreated },
+      { key: "userInvited",      label: "Invite your first sales rep",   link: "/settings/users",        done: userInvited },
+      { key: "integrationSetup", label: "Configure integrations",        link: "/settings/integrations", done: integrationSetup },
+      { key: "customerImported", label: "Import your customers",         link: "/master/customers",      done: customerImported },
+      { key: "dealCreated",      label: "Create your first deal",        link: "/deals",                 done: dealCreated }
+    ];
+
+    const list = qs("#onboarding-steps-list");
+    if (!list) return;
+    list.innerHTML = steps.map(s => `
+      <li class="onboarding-step${s.done ? " done" : ""}">
+        <span class="onboarding-step-check">${s.done ? "&#10003;" : ""}</span>
+        <span class="onboarding-step-label">${escHtml(s.label)}</span>
+        ${!s.done ? `<a class="onboarding-step-link" href="${escHtml(s.link)}">Go &rarr;</a>` : ""}
+      </li>
+    `).join("");
+
+    const wasHidden = wizard.hidden;
+    wizard.hidden = false;
+
+    // Only (re-)attach the dismiss listener when we first reveal the wizard
+    if (wasHidden) {
+      qs("#onboarding-dismiss-btn")?.addEventListener("click", () => {
+        wizard.hidden = true;
+        localStorage.setItem(dismissKey, "1");
+      }, { once: true });
+    }
+  } catch {
+    wizard.hidden = true;
+  }
+}
 
 // ── Customer autocomplete for modal forms ─────────────────────────────────────
 function initCustomerAutocomplete(inputEl, listEl, hiddenEl, onSelect) {
@@ -9250,7 +10366,7 @@ document.querySelectorAll(".nav-btn").forEach((btn) => {
         await loadDeals();
         paintRepHubFull();
       }
-      if (target === "dashboard") await loadDashboard();
+      if (target === "dashboard") { await loadDashboard(); await loadOnboardingWizard(); }
       if (target === "deals") await loadDeals();
       if (target === "visits") await loadVisits();
       if (target === "calendar") await loadCalendar();
@@ -9445,7 +10561,7 @@ window.addEventListener("popstate", async () => {
         await loadDeals();
         paintRepHubFull();
       }
-      if (simpleView === "dashboard") await loadDashboard();
+      if (simpleView === "dashboard") { await loadDashboard(); await loadOnboardingWizard(); }
       if (simpleView === "deals") await loadDeals();
       if (simpleView === "visits") await loadVisits();
       if (simpleView === "calendar") await loadCalendar();
@@ -9459,11 +10575,13 @@ async function bootstrap() {
   try {
     fetch("/api/v1/config/public").then(r => r.ok ? r.json() : {}).then(cfg => {
       state.googleMapsApiKey = cfg.googleMapsApiKey ?? null;
+      if (cfg.baseDomain) window.__BASE_DOMAIN = cfg.baseDomain;
     }).catch(() => {});
     const me = await api("/auth/me");
     state.user = me;
     updateUserMeta();
     showApp();
+    showTrialBanner(me.subscription);
     const userEditId = syncUserEditFromLocation();
     const c360Id = !userEditId && syncC360FromLocation();
     const deal360No = !userEditId && !c360Id && syncDeal360FromLocation();
@@ -9501,6 +10619,7 @@ async function bootstrap() {
     } else if (onSimpleViewRoute) {
       switchView(onSimpleViewRoute);
       if (onSimpleViewRoute === "repHub") paintRepHubFull();
+      if (onSimpleViewRoute === "dashboard") await loadOnboardingWizard();
     } else {
       window.history.replaceState({ view: "repHub" }, "", "/task");
       switchView("repHub");
@@ -9821,15 +10940,15 @@ async function bootstrap() {
     }
 
     results.innerHTML = groups.map((group) => `
-      <div class="qs-group-label">${group.label}</div>
+      <div class="qs-group-label">${escHtml(group.label)}</div>
       ${group.items.map((item) => `
         <button class="qs-item qs-item--${item.type}" type="button" role="option">
           ${iconHTML(item.type)}
           <div class="qs-item-body">
-            <div class="qs-item-name">${item.name}</div>
-            ${item.meta ? `<div class="qs-item-meta">${item.meta}</div>` : ""}
+            <div class="qs-item-name">${escHtml(item.name)}</div>
+            ${item.meta ? `<div class="qs-item-meta">${escHtml(item.meta)}</div>` : ""}
           </div>
-          ${item.badge ? `<span class="qs-item-badge">${item.badge}</span>` : ""}
+          ${item.badge ? `<span class="qs-item-badge">${escHtml(item.badge)}</span>` : ""}
         </button>
       `).join("")}
     `).join("");

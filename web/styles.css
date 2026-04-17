@@ -321,6 +321,64 @@ body {
   font-weight: 500;
 }
 
+/* Forgot / Reset password */
+.login-forgot-row {
+  margin-top: var(--sp-3);
+  text-align: right;
+}
+
+.login-forgot-link {
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: var(--accent);
+  text-decoration: none;
+  transition: opacity 0.15s;
+}
+.login-forgot-link:hover { opacity: 0.75; }
+
+.login-subtitle {
+  margin: 0 0 var(--sp-5);
+  font-size: 0.88rem;
+  color: var(--muted-color);
+  line-height: 1.5;
+}
+
+.login-success {
+  margin: var(--sp-3) 0 0;
+  font-size: 0.85rem;
+  color: var(--success);
+  min-height: 1.2em;
+  font-weight: 500;
+}
+
+/* Signup — slug availability row */
+.signup-slug-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.signup-slug-input { flex: 1; }
+
+.signup-slug-status {
+  flex-shrink: 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  min-width: 64px;
+  text-align: right;
+}
+.signup-slug-status.available  { color: var(--success); }
+.signup-slug-status.taken      { color: var(--danger); }
+.signup-slug-status.checking   { color: var(--muted-color); }
+
+.signup-slug-hint {
+  display: block;
+  margin-top: var(--sp-1);
+  font-size: 0.78rem;
+  color: var(--muted-color);
+  margin-bottom: 0;
+}
+
 @media (max-width: 600px) {
   .login-brand  { display: none; }
   .login-panel  { width: 100%; padding: var(--sp-8) var(--sp-6); }
@@ -749,6 +807,107 @@ body {
 .user-dropdown-item--danger:hover { background: oklch(97% 0.015 25); color: var(--danger); }
 :root[data-theme="dark"] .user-dropdown-item--danger:hover { background: oklch(22% 0.04 25); }
 
+/* ── ONBOARDING WIZARD ────────────────────────────────────── */
+.onboarding-wizard {
+  margin: var(--sp-6) var(--sp-6) 0;
+  background: var(--surface);
+  border: 1.5px solid var(--accent-subtle);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+
+.onboarding-wizard-inner {
+  padding: var(--sp-5) var(--sp-6);
+}
+
+.onboarding-wizard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--sp-2);
+}
+
+.onboarding-wizard-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.onboarding-wizard-dismiss {
+  background: none;
+  border: none;
+  color: var(--muted-color);
+  font-size: 1rem;
+  cursor: pointer;
+  padding: var(--sp-1);
+  line-height: 1;
+  border-radius: var(--r);
+  transition: color 0.15s;
+}
+.onboarding-wizard-dismiss:hover { color: var(--text); }
+
+.onboarding-wizard-subtitle {
+  margin: 0 0 var(--sp-4);
+  font-size: 0.85rem;
+  color: var(--muted-color);
+}
+
+.onboarding-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.onboarding-step {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  font-size: 0.88rem;
+}
+
+.onboarding-step-check {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid var(--border-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  color: transparent;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
+}
+
+.onboarding-step.done .onboarding-step-check {
+  background: var(--success);
+  border-color: var(--success);
+  color: #fff;
+}
+
+.onboarding-step-label {
+  color: var(--text);
+}
+.onboarding-step.done .onboarding-step-label {
+  color: var(--muted-color);
+  text-decoration: line-through;
+}
+
+.onboarding-step-link {
+  margin-left: auto;
+  font-size: 0.78rem;
+  color: var(--accent);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.onboarding-step-link:hover { opacity: 0.75; }
+.onboarding-step.done .onboarding-step-link { display: none; }
+
 /* ── APP BODY ─────────────────────────────────────────────── */
 
 .app-body {
@@ -770,6 +929,20 @@ body {
   color: var(--accent-dim);
   letter-spacing: 0.01em;
 }
+
+/* S10: Trial banner */
+.trial-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-4);
+  border-radius: var(--r);
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+.trial-banner--info    { background: var(--info-bg);    color: var(--info); }
+.trial-banner--warning { background: var(--warning-bg); color: var(--warning); }
+.trial-banner--danger  { background: var(--danger-bg);  color: var(--danger); font-weight: 600; }
 
 /* ── VIEWS ────────────────────────────────────────────────── */
 
@@ -859,7 +1032,7 @@ body {
 
 button { font-family: 'Kanit', sans-serif; cursor: pointer; }
 
-button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-logout-btn):not(.topnav-user):not(.login-submit):not(.sp-close-btn):not(.sp-text-btn):not(.sp-view-all-btn):not(.spi):not(.master-page-btn):not(.user-dropdown-item):not(.cal-filter-apply):not(.cal-filter-reset):not(.cal-autocomplete-clear):not(.cal-autocomplete-item):not(.ms-dropdown-btn):not(.ms-select-all):not(.ms-clear):not(.vp-chip):not(.vn-lang-btn):not(.section-info-btn):not(.modal-close-btn):not(.deal-detail-btn):not(.deal-menu-btn):not(.lr-confirm-btn):not(.intg-info-btn):not(.oauth-btn):not(.profile-avatar-btn):not(.team-ch-toggle-btn):not(.cron-run-now-btn):not(.cron-save-btn):not(.cron-load-more-btn):not(.cron-history-toggle):not(.cron-help-btn):not(.notif-channel-help-btn):not(.teams-app-pkg-btn):not(.notif-teams-dm-test-btn):not(.teams-push-all-btn) {
+button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-logout-btn):not(.topnav-user):not(.login-submit):not(.sp-close-btn):not(.sp-text-btn):not(.sp-view-all-btn):not(.spi):not(.master-page-btn):not(.user-dropdown-item):not(.cal-filter-apply):not(.cal-filter-reset):not(.cal-autocomplete-clear):not(.cal-autocomplete-item):not(.ms-dropdown-btn):not(.ms-select-all):not(.ms-clear):not(.vp-chip):not(.vn-lang-btn):not(.section-info-btn):not(.modal-close-btn):not(.deal-detail-btn):not(.deal-menu-btn):not(.lr-confirm-btn):not(.intg-info-btn):not(.oauth-btn):not(.profile-avatar-btn):not(.team-ch-toggle-btn):not(.cron-run-now-btn):not(.cron-save-btn):not(.cron-load-more-btn):not(.cron-history-toggle):not(.cron-help-btn):not(.notif-channel-help-btn):not(.teams-app-pkg-btn):not(.notif-teams-dm-test-btn):not(.teams-push-all-btn):not(.onboarding-wizard-dismiss) {
   background: linear-gradient(135deg, var(--accent-bright) 0%, var(--accent-dim) 100%);
   color: var(--accent-text);
   border: none;
@@ -873,12 +1046,12 @@ button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-l
   box-shadow: 0 2px 8px oklch(60% 0.23 278 / 0.22);
 }
 
-button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-logout-btn):not(.topnav-user):not(.login-submit):not(.sp-close-btn):not(.sp-text-btn):not(.sp-view-all-btn):not(.spi):not(.master-page-btn):not(.user-dropdown-item):not(.cal-filter-apply):not(.cal-filter-reset):not(.cal-autocomplete-clear):not(.cal-autocomplete-item):not(.ms-dropdown-btn):not(.ms-select-all):not(.ms-clear):not(.vp-chip):not(.vn-lang-btn):not(.section-info-btn):not(.modal-close-btn):not(.deal-detail-btn):not(.deal-menu-btn):not(.cron-run-now-btn):not(.cron-save-btn):not(.cron-load-more-btn):not(.cron-history-toggle):not(.cron-help-btn):not(.notif-channel-help-btn):not(.teams-app-pkg-btn):not(.notif-teams-dm-test-btn):not(.teams-push-all-btn):hover {
+button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-logout-btn):not(.topnav-user):not(.login-submit):not(.sp-close-btn):not(.sp-text-btn):not(.sp-view-all-btn):not(.spi):not(.master-page-btn):not(.user-dropdown-item):not(.cal-filter-apply):not(.cal-filter-reset):not(.cal-autocomplete-clear):not(.cal-autocomplete-item):not(.ms-dropdown-btn):not(.ms-select-all):not(.ms-clear):not(.vp-chip):not(.vn-lang-btn):not(.section-info-btn):not(.modal-close-btn):not(.deal-detail-btn):not(.deal-menu-btn):not(.cron-run-now-btn):not(.cron-save-btn):not(.cron-load-more-btn):not(.cron-history-toggle):not(.cron-help-btn):not(.notif-channel-help-btn):not(.teams-app-pkg-btn):not(.notif-teams-dm-test-btn):not(.teams-push-all-btn):not(.onboarding-wizard-dismiss):hover {
   opacity: 0.88;
   box-shadow: 0 4px 12px oklch(60% 0.23 278 / 0.32);
 }
 
-button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-logout-btn):not(.topnav-user):not(.login-submit):not(.sp-close-btn):not(.sp-text-btn):not(.sp-view-all-btn):not(.spi):not(.master-page-btn):not(.user-dropdown-item):not(.cal-filter-apply):not(.cal-filter-reset):not(.cal-autocomplete-clear):not(.cal-autocomplete-item):not(.ms-dropdown-btn):not(.ms-select-all):not(.ms-clear):not(.vp-chip):not(.vn-lang-btn):not(.section-info-btn):not(.modal-close-btn):not(.notif-channel-help-btn):not(.teams-app-pkg-btn):not(.notif-teams-dm-test-btn):not(.teams-push-all-btn):disabled {
+button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-logout-btn):not(.topnav-user):not(.login-submit):not(.sp-close-btn):not(.sp-text-btn):not(.sp-view-all-btn):not(.spi):not(.master-page-btn):not(.user-dropdown-item):not(.cal-filter-apply):not(.cal-filter-reset):not(.cal-autocomplete-clear):not(.cal-autocomplete-item):not(.ms-dropdown-btn):not(.ms-select-all):not(.ms-clear):not(.vp-chip):not(.vn-lang-btn):not(.section-info-btn):not(.modal-close-btn):not(.notif-channel-help-btn):not(.teams-app-pkg-btn):not(.notif-teams-dm-test-btn):not(.teams-push-all-btn):not(.onboarding-wizard-dismiss):disabled {
   opacity: 0.5;
   cursor: default;
 }

@@ -11,6 +11,9 @@
 
 import { ChannelType, IntegrationPlatform, UserRole } from "@prisma/client";
 import { prisma } from "./prisma.js";
+import { decryptCredential } from "./secrets.js";
+import { smtpPort } from "./smtp-port.js";
+import { fmtThaiDate, fmtThaiMonthYear, fmtBaht } from "./format.js";
 
 // ── Date helpers ─────────────────────────────────────────────────────────────
 
@@ -30,27 +33,7 @@ function prevWeekRange(): { from: Date; to: Date; label: string } {
   lastSun.setDate(lastMon.getDate() + 6);
   lastSun.setHours(23, 59, 59, 999);
 
-  const fmt = (d: Date) =>
-    d.toLocaleDateString("th-TH", {
-      day: "2-digit",
-      month: "2-digit",
-      year: "numeric",
-      timeZone: "Asia/Bangkok"
-    });
-
-  return { from: lastMon, to: lastSun, label: `${fmt(lastMon)} – ${fmt(lastSun)}` };
-}
-
-function thaiMonthShort(date: Date): string {
-  return date.toLocaleDateString("th-TH", {
-    month: "long",
-    year: "numeric",
-    timeZone: "Asia/Bangkok"
-  });
-}
-
-function fmtBaht(value: number): string {
-  return new Intl.NumberFormat("th-TH", { style: "decimal", minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(value);
+  return { from: lastMon, to: lastSun, label: `${fmtThaiDate(lastMon)} – ${fmtThaiDate(lastSun)}` };
 }
 
 // ── Message builders ──────────────────────────────────────────────────────────
@@ -284,11 +267,11 @@ async function deliverToTeamChannels(opts: {
     prisma.tenantIntegrationCredential.findUnique({
       where: { tenantId_platform: { tenantId, platform: IntegrationPlatform.LINE } },
       select: { apiKeyRef: true }
-    }),
+    }).then(r => decryptCredential(r)),
     prisma.tenantIntegrationCredential.findUnique({
       where: { tenantId_platform: { tenantId, platform: IntegrationPlatform.EMAIL } },
       select: { clientIdRef: true, clientSecretRef: true, apiKeyRef: true, webhookTokenRef: true }
-    })
+    }).then(r => decryptCredential(r))
   ]);
 
   for (const ch of channels) {
@@ -310,7 +293,7 @@ async function deliverToTeamChannels(opts: {
         const { sendEmailCard } = await import("./email-notify.js");
         const emailConfig = {
           host: emailCredential.clientIdRef,
-          port: parseInt(emailCredential.clientSecretRef ?? "587", 10),
+          port: smtpPort(emailCredential.clientSecretRef),
           fromAddress: emailCredential.webhookTokenRef,
           password: emailCredential.apiKeyRef
         };

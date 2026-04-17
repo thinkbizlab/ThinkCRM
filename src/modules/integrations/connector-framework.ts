@@ -8,6 +8,18 @@ import {
 } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../../lib/prisma.js";
+import { validateCustomFields } from "../../lib/custom-fields.js";
+
+/**
+ * Lightweight shim so `validateCustomFields` (which expects `app.httpErrors.badRequest`)
+ * works outside a Fastify request context.  Errors thrown here are caught by the
+ * connector run loop and recorded as sync errors.
+ */
+const connectorAppShim = {
+  httpErrors: {
+    badRequest(msg: string) { return new Error(msg); }
+  }
+} as Parameters<typeof validateCustomFields>[0];
 
 const customerMappedSchema = z.object({
   customerCode: z.string().min(1),
@@ -150,7 +162,7 @@ function readPath(input: ConnectorRecord, path: string): unknown {
   return current;
 }
 
-function buildMappedRecord(
+export function buildMappedRecord(
   record: ConnectorRecord,
   mappings: Array<{
     sourceField: string;
@@ -235,6 +247,14 @@ async function upsertEntity(
   if (entityType === EntityType.CUSTOMER) {
     const payload = customerMappedSchema.parse(mapped);
     const defaultTermId = await resolvePaymentTermId(tenantId, payload);
+    let validatedCf: Prisma.InputJsonValue | undefined;
+    if (payload.customFields && Object.keys(payload.customFields).length > 0) {
+      const cfDefs = await prisma.customFieldDefinition.findMany({
+        where: { tenantId, entityType: EntityType.CUSTOMER, isActive: true },
+        select: { fieldKey: true, dataType: true, isRequired: true, isActive: true, optionsJson: true }
+      });
+      validatedCf = validateCustomFields(connectorAppShim, cfDefs, payload.customFields as Record<string, unknown>);
+    }
     await prisma.customer.upsert({
       where: {
         tenantId_customerCode: {
@@ -246,7 +266,7 @@ async function upsertEntity(
         name: payload.name,
         ownerId: payload.ownerId ?? undefined,
         defaultTermId,
-        customFields: (payload.customFields as Prisma.InputJsonValue | undefined) ?? undefined
+        customFields: validatedCf ?? undefined
       },
       create: {
         tenantId,
@@ -254,7 +274,7 @@ async function upsertEntity(
         name: payload.name,
         ownerId: payload.ownerId ?? undefined,
         defaultTermId,
-        customFields: (payload.customFields as Prisma.InputJsonValue | undefined) ?? undefined
+        customFields: validatedCf ?? undefined
       }
     });
     return;
@@ -262,6 +282,14 @@ async function upsertEntity(
 
   if (entityType === EntityType.ITEM) {
     const payload = itemMappedSchema.parse(mapped);
+    let validatedCf: Prisma.InputJsonValue | undefined;
+    if (payload.customFields && Object.keys(payload.customFields).length > 0) {
+      const cfDefs = await prisma.customFieldDefinition.findMany({
+        where: { tenantId, entityType: EntityType.ITEM, isActive: true },
+        select: { fieldKey: true, dataType: true, isRequired: true, isActive: true, optionsJson: true }
+      });
+      validatedCf = validateCustomFields(connectorAppShim, cfDefs, payload.customFields as Record<string, unknown>);
+    }
     await prisma.item.upsert({
       where: {
         tenantId_itemCode: {
@@ -272,14 +300,14 @@ async function upsertEntity(
       update: {
         name: payload.name,
         unitPrice: payload.unitPrice,
-        customFields: (payload.customFields as Prisma.InputJsonValue | undefined) ?? undefined
+        customFields: validatedCf ?? undefined
       },
       create: {
         tenantId,
         itemCode: payload.itemCode,
         name: payload.name,
         unitPrice: payload.unitPrice,
-        customFields: (payload.customFields as Prisma.InputJsonValue | undefined) ?? undefined
+        customFields: validatedCf ?? undefined
       }
     });
     return;
