@@ -1239,6 +1239,7 @@ function showTrialBanner(subscription) {
 function showAuth() {
   appScreen.classList.remove("active");
   authScreen.classList.add("active");
+  window.history.replaceState(null, "", "/");
 }
 
 function syncMasterPageFromLocation() {
