@@ -9485,6 +9485,7 @@ loginForm.addEventListener("submit", async (event) => {
       switchView(onSimpleViewRoute);
       if (onSimpleViewRoute === "repHub") paintRepHubFull();
       if (onSimpleViewRoute === "dashboard") await loadOnboardingWizard();
+      if (onSimpleViewRoute === "superAdmin" && window._loadSuperAdmin) window._loadSuperAdmin();
     } else {
       window.history.replaceState({ view: "repHub" }, "", "/task");
       switchView("repHub");
@@ -10720,6 +10721,7 @@ async function bootstrap() {
       switchView(onSimpleViewRoute);
       if (onSimpleViewRoute === "repHub") paintRepHubFull();
       if (onSimpleViewRoute === "dashboard") await loadOnboardingWizard();
+      if (onSimpleViewRoute === "superAdmin" && window._loadSuperAdmin) window._loadSuperAdmin();
     } else {
       window.history.replaceState({ view: "repHub" }, "", "/task");
       switchView("repHub");
@@ -11176,6 +11178,11 @@ applyThemeMode("LIGHT");
     window.history.pushState({ view: "superAdmin" }, "", "/super-admin");
     if (!loaded) { loaded = true; loadSuperAdminDashboard(); }
   });
+
+  // Expose loader so bootstrap can trigger it on direct URL navigation
+  window._loadSuperAdmin = function () {
+    if (!loaded) { loaded = true; loadSuperAdminDashboard(); }
+  };
 
   async function loadSuperAdminDashboard() {
     panel.innerHTML = '<div style="padding:24px;color:#64748b">Loading...</div>';
