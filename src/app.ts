@@ -137,7 +137,7 @@ export async function buildApp() {
   // M4: Only create and serve uploads dir when R2 is not configured.
   // When R2 is active, local disk is unused — no need to create the directory.
   const isR2Configured = config.R2_ACCOUNT_ID !== "local-account";
-  if (!isR2Configured) {
+  if (!isR2Configured && !process.env.VERCEL) {
     const uploadsDir = join(process.cwd(), "uploads");
     mkdirSync(uploadsDir, { recursive: true });
     await app.register(fastifyStatic, {
