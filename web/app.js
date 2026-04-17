@@ -1237,6 +1237,7 @@ function showTrialBanner(subscription) {
 }
 
 function showAuth() {
+  document.documentElement.classList.remove("has-token");
   appScreen.classList.remove("active");
   authScreen.classList.add("active");
   window.history.replaceState(null, "", "/");

@@ -5,6 +5,9 @@
    Layout: Horizontal topnav · Light-first · Slide panels
    ============================================================ */
 
+/* Prevent login flash when a stored token exists */
+html.has-token #auth-screen { display: none !important; }
+
 /* ── TOKENS ───────────────────────────────────────────────── */
 
 :root {

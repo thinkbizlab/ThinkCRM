@@ -13,6 +13,12 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
+    <script>
+      // Prevent login flash: if a token exists, hide auth screen until JS validates it
+      if (localStorage.getItem("thinkcrm_token")) {
+        document.documentElement.classList.add("has-token");
+      }
+    </script>
     <div class="app-shell">
 
       <!-- ─── AUTH SCREEN ─────────────────────────────────── -->
