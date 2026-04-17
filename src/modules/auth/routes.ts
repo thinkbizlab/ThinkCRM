@@ -118,7 +118,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       tenantId: tenant.id,
       role: user.role,
       email: user.email
-    }, { expiresIn: "7d" });  // C1
+    }, { expiresIn: "1h" });
 
     await logAuditEvent(user.tenantId, user.id, "LOGIN", { email: user.email, method: "password" }, request.ip);
 
@@ -389,7 +389,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       }
       if (avatarUrl) await prisma.user.update({ where: { id: user.id }, data: { avatarUrl } });
 
-      const jwt = await app.jwt.sign({ userId: user.id, tenantId: tenant.id, role: user.role, email: user.email }, { expiresIn: "7d" });  // C1
+      const jwt = await app.jwt.sign({ userId: user.id, tenantId: tenant.id, role: user.role, email: user.email }, { expiresIn: "1h" });
       const exchangeCode = await createExchangeCode(jwt);
       return reply.redirect(`${base}/?oauth_code=${encodeURIComponent(exchangeCode)}`);
     } catch (err) {
@@ -453,7 +453,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         await prisma.user.update({ where: { id: user.id }, data: { avatarUrl: picture } });
       }
 
-      const jwt = await app.jwt.sign({ userId: user.id, tenantId: tenant.id, role: user.role, email: user.email }, { expiresIn: "7d" });  // C1
+      const jwt = await app.jwt.sign({ userId: user.id, tenantId: tenant.id, role: user.role, email: user.email }, { expiresIn: "1h" });
       const exchangeCode = await createExchangeCode(jwt);
       return reply.redirect(`${base}/?oauth_code=${encodeURIComponent(exchangeCode)}`);
     } catch (err) {
@@ -1052,7 +1052,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
           }
         );
       } else {
-        app.log.warn(`[forgot-password] No SMTP configured (tenant or system) — password reset email for ${user.email} could not be sent. Token: ${token}`);
+        app.log.warn(`[forgot-password] No SMTP configured (tenant or system) — password reset email for ${user.email} could not be sent.`);
       }
     } catch { /* never surface email errors */ }
 
@@ -1245,7 +1245,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     // Issue JWT so the user is immediately logged in.
     const token = await app.jwt.sign(
       { userId: user.id, tenantId: user.tenantId, role: user.role, email: user.email },
-      { expiresIn: "7d" }
+      { expiresIn: "1h" }
     );
 
     return reply.code(201).send({

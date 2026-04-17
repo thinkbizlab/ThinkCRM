@@ -94,15 +94,15 @@ export async function requireSelfOrManagerAccess(
   throw request.server.httpErrors.forbidden("No hierarchy access to target user.");
 }
 
-type UserHierarchyNode = {
+export type UserHierarchyNode = {
   id: string;
   managerUserId: string | null;
 };
 
-function resolveVisibleUserIdsByHierarchy(
+export function resolveVisibleUserIds(
   users: UserHierarchyNode[],
   requesterId: string,
-  requesterRole: UserRole
+  requesterRole: UserRole | null | undefined
 ): Set<string> {
   if (requesterRole === UserRole.ADMIN) {
     return new Set(users.map((user) => user.id));
@@ -182,7 +182,7 @@ export async function listVisibleUserIds(request: FastifyRequest): Promise<Set<s
     select: { id: true, managerUserId: true }
   });
 
-  const visible = resolveVisibleUserIdsByHierarchy(users, requesterId, requesterRole);
+  const visible = resolveVisibleUserIds(users, requesterId, requesterRole);
   if (!visible.has(requesterId)) {
     visible.add(requesterId);
   }

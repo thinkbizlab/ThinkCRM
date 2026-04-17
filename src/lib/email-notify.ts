@@ -35,11 +35,15 @@ export interface EmailCardOptions {
   detailUrl?: string;
 }
 
+function escHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
 function buildHtml(opts: EmailCardOptions): string {
   const rows = opts.facts.map(f => `
     <tr>
-      <td style="padding:6px 12px 6px 0;color:#64748b;font-size:13px;white-space:nowrap;vertical-align:top">${f.label}</td>
-      <td style="padding:6px 0;font-size:13px;color:#0f172a;vertical-align:top">${f.value}</td>
+      <td style="padding:6px 12px 6px 0;color:#64748b;font-size:13px;white-space:nowrap;vertical-align:top">${escHtml(f.label)}</td>
+      <td style="padding:6px 0;font-size:13px;color:#0f172a;vertical-align:top">${escHtml(f.value)}</td>
     </tr>`).join("");
 
   return `<!DOCTYPE html>
@@ -52,7 +56,7 @@ function buildHtml(opts: EmailCardOptions): string {
         <!-- Header -->
         <tr>
           <td style="background:#6d28d9;padding:20px 28px">
-            <p style="margin:0;color:#ffffff;font-size:17px;font-weight:700">${opts.title}</p>
+            <p style="margin:0;color:#ffffff;font-size:17px;font-weight:700">${escHtml(opts.title)}</p>
           </td>
         </tr>
         <!-- Facts -->
@@ -74,7 +78,7 @@ function buildHtml(opts: EmailCardOptions): string {
         <!-- Footer -->
         <tr>
           <td style="padding:12px 28px 20px;border-top:1px solid #e2e8f0">
-            <p style="margin:0;color:#94a3b8;font-size:12px">${opts.footer}</p>
+            <p style="margin:0;color:#94a3b8;font-size:12px">${escHtml(opts.footer)}</p>
           </td>
         </tr>` : ""}
       </table>

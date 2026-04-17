@@ -1,7 +1,7 @@
 import { DealStatus, UserRole, VisitStatus } from "@prisma/client";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { requireTenantId } from "../../lib/http.js";
+import { requireTenantId, resolveVisibleUserIds } from "../../lib/http.js";
 import { prisma } from "../../lib/prisma.js";
 
 const monthQuerySchema = z.object({
@@ -27,51 +27,6 @@ function resolveMonthWindow(month?: string): { monthKey: string; dateFrom: Date;
     dateFrom,
     dateTo
   };
-}
-
-type UserLite = {
-  id: string;
-  role: UserRole;
-  managerUserId: string | null;
-  teamId: string | null;
-  fullName: string;
-};
-
-function resolveVisibleUserIds(users: UserLite[], requesterId: string, requesterRole?: UserRole): Set<string> {
-  if (requesterRole === UserRole.ADMIN) {
-    return new Set(users.map((user) => user.id));
-  }
-
-  const requester = users.find((user) => user.id === requesterId);
-  if (!requester) {
-    return new Set();
-  }
-
-  if (requesterRole === UserRole.REP) {
-    return new Set([requesterId]);
-  }
-
-  const reportsByManager = users.reduce<Map<string, string[]>>((acc, user) => {
-    if (!user.managerUserId) return acc;
-    const list = acc.get(user.managerUserId) ?? [];
-    list.push(user.id);
-    acc.set(user.managerUserId, list);
-    return acc;
-  }, new Map());
-
-  const visible = new Set<string>([requesterId]);
-  const queue = [requesterId];
-  while (queue.length) {
-    const current = queue.shift();
-    if (!current) continue;
-    const reportIds = reportsByManager.get(current) ?? [];
-    for (const reportId of reportIds) {
-      if (visible.has(reportId)) continue;
-      visible.add(reportId);
-      queue.push(reportId);
-    }
-  }
-  return visible;
 }
 
 export const dashboardRoutes: FastifyPluginAsync = async (app) => {
@@ -123,20 +78,17 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
     }
     const visibleUserIdList = [...visibleUserIds];
 
-    const [deals, visits, targets] = await Promise.all([
-      prisma.deal.findMany({ where: { tenantId } }),
-      prisma.visit.findMany({ where: { tenantId } }),
+    const [scopedDeals, scopedVisits, scopedTargets] = await Promise.all([
+      prisma.deal.findMany({ where: { tenantId, ownerId: { in: visibleUserIdList } } }),
+      prisma.visit.findMany({ where: { tenantId, repId: { in: visibleUserIdList } } }),
       prisma.salesKpiTarget.findMany({
         where: {
           tenantId,
-          targetMonth: monthKey
+          targetMonth: monthKey,
+          userId: { in: visibleUserIdList }
         }
       })
     ]);
-
-    const scopedDeals = deals.filter((deal) => visibleUserIds.has(deal.ownerId));
-    const scopedVisits = visits.filter((visit) => visibleUserIds.has(visit.repId));
-    const scopedTargets = targets.filter((target) => visibleUserIds.has(target.userId));
     const scopedUsers = users.filter((user) => visibleUserIds.has(user.id));
 
     const periodVisits = scopedVisits.filter((visit) => visit.plannedAt >= dateFrom && visit.plannedAt < dateTo);

@@ -433,6 +433,7 @@ model Deal {
   quotations     Quotation[]
   visits         Visit[]
 
+  @@unique([tenantId, dealNo])
   @@index([tenantId, ownerId, status, closedAt])
   @@index([tenantId, stageId])
   @@index([tenantId, followUpAt])
@@ -556,6 +557,7 @@ model Visit {
   customer      Customer    @relation(fields: [customerId], references: [id], onDelete: Restrict)
   deal          Deal?       @relation(fields: [dealId], references: [id], onDelete: SetNull)
 
+  @@unique([tenantId, visitNo])
   @@index([tenantId, repId, checkInAt])
   @@index([tenantId, status, plannedAt])
 }

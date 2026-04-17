@@ -500,7 +500,9 @@ async function runPlatformConnectionTest(
 
     case IntegrationPlatform.GEMINI: {
       if (!cred.apiKeyRef) return err("API Key is required.");
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(cred.apiKeyRef)}`);
+      const res = await fetch("https://generativelanguage.googleapis.com/v1beta/models", {
+        headers: { "x-goog-api-key": cred.apiKeyRef }
+      });
       if (res.ok) return ok("Google Gemini API key verified.");
       const body = await res.json() as { error?: { message?: string } };
       return err(body.error?.message ?? `Gemini API error ${res.status}`);
@@ -572,18 +574,19 @@ async function ensureTeamBelongsToTenant(
 // ── PNG helper ────────────────────────────────────────────────────────────────
 // Generates a minimal valid solid-colour PNG without external dependencies.
 
+const CRC32_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c;
+  }
+  return t;
+})();
+
 function crc32(buf: Buffer): number {
-  const table = (() => {
-    const t = new Uint32Array(256);
-    for (let n = 0; n < 256; n++) {
-      let c = n;
-      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-      t[n] = c;
-    }
-    return t;
-  })();
   let crc = 0xffffffff;
-  for (let i = 0; i < buf.length; i++) crc = (table[(crc ^ buf[i]!) & 0xff]!) ^ (crc >>> 8);
+  for (let i = 0; i < buf.length; i++) crc = (CRC32_TABLE[(crc ^ buf[i]!) & 0xff]!) ^ (crc >>> 8);
   return (crc ^ 0xffffffff) >>> 0;
 }
 
@@ -943,11 +946,16 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     const params = request.params as { id: string };
     requireRoleAtLeast(request, UserRole.ADMIN);
     assertTenantPathAccess(request, params.id);
-    const body = request.body as { vatEnabled: boolean; vatRatePercent: number };
+    const taxConfigSchema = z.object({
+      vatEnabled: z.boolean(),
+      vatRatePercent: z.number().min(0).max(100)
+    });
+    const parsed = taxConfigSchema.safeParse(request.body);
+    if (!parsed.success) throw request.server.httpErrors.badRequest(parsed.error.issues[0]?.message ?? "Invalid input");
     return prisma.tenantTaxConfig.upsert({
       where: { tenantId: params.id },
-      update: body,
-      create: { tenantId: params.id, ...body }
+      update: parsed.data,
+      create: { tenantId: params.id, ...parsed.data }
     });
   });
 
@@ -1288,6 +1296,12 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
+    const fieldUpdates: Record<string, unknown> = {};
+    if (parsed.data.clientId !== undefined) fieldUpdates.clientIdRef = encryptField(parsed.data.clientId);
+    if (parsed.data.clientSecret !== undefined) fieldUpdates.clientSecretRef = encryptField(parsed.data.clientSecret);
+    if (parsed.data.apiKey !== undefined) fieldUpdates.apiKeyRef = encryptField(parsed.data.apiKey);
+    if (parsed.data.webhookToken !== undefined) fieldUpdates.webhookTokenRef = encryptField(parsed.data.webhookToken);
+
     const credential = await prisma.tenantIntegrationCredential.upsert({
       where: {
         tenantId_platform: {
@@ -1307,10 +1321,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
         lastTestResult: "Credentials saved. Run Test Connection before enabling."
       },
       update: {
-        clientIdRef: encryptField(parsed.data.clientId),
-        clientSecretRef: encryptField(parsed.data.clientSecret),
-        apiKeyRef: encryptField(parsed.data.apiKey),
-        webhookTokenRef: encryptField(parsed.data.webhookToken),
+        ...fieldUpdates,
         status: SourceStatus.DISABLED,
         lastTestStatus: null,
         lastTestedAt: null,
@@ -1526,7 +1537,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
 
     reply
       .header("Content-Type", "application/zip")
-      .header("Content-Disposition", `attachment; filename="${appName.replace(/\s+/g, "-")}-teams-app.zip"`)
+      .header("Content-Disposition", `attachment; filename="${appName.replace(/[^a-zA-Z0-9_-]/g, "-")}-teams-app.zip"`)
       .send(zipBuffer);
   });
 

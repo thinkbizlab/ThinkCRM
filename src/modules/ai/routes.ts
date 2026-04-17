@@ -14,7 +14,9 @@ import { extname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { Anthropic } from "@anthropic-ai/sdk";
-import { requireTenantId, requireUserId } from "../../lib/http.js";
+import { requireTenantId, requireUserId, resolveVisibleUserIds, type UserHierarchyNode } from "../../lib/http.js";
+
+type UserLite = UserHierarchyNode & { role: UserRole; teamId: string | null };
 import { prisma } from "../../lib/prisma.js";
 import { getPlanLimits, assertVoiceNotesAvailable } from "../../lib/plan-limits.js";
 import { decryptField } from "../../lib/secrets.js";
@@ -283,13 +285,6 @@ function normalizeRecommendation(row: {
   };
 }
 
-type UserLite = {
-  id: string;
-  role: UserRole;
-  managerUserId: string | null;
-  teamId: string | null;
-};
-
 type AnalysisContext = {
   filters: {
     dateFrom: Date;
@@ -307,38 +302,6 @@ type AnalysisFindingDraft = {
   confidenceScore: number;
   evidenceJson: Prisma.InputJsonValue;
 };
-
-function resolveVisibleUserIds(users: UserLite[], requesterId: string, requesterRole: UserRole | null): Set<string> {
-  if (requesterRole === UserRole.ADMIN) {
-    return new Set(users.map((user) => user.id));
-  }
-  if (requesterRole === UserRole.REP) {
-    return new Set([requesterId]);
-  }
-
-  const reportsByManager = users.reduce<Map<string, string[]>>((acc, user) => {
-    if (!user.managerUserId) return acc;
-    const reportIds = acc.get(user.managerUserId) ?? [];
-    reportIds.push(user.id);
-    acc.set(user.managerUserId, reportIds);
-    return acc;
-  }, new Map());
-
-  const visible = new Set<string>([requesterId]);
-  const queue = [requesterId];
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (!current) continue;
-    const reportIds = reportsByManager.get(current) ?? [];
-    for (const reportId of reportIds) {
-      if (visible.has(reportId)) continue;
-      visible.add(reportId);
-      queue.push(reportId);
-    }
-  }
-
-  return visible;
-}
 
 function buildAnalysisWindow(dateFrom?: Date, dateTo?: Date): { dateFrom: Date; dateTo: Date } {
   const now = new Date();
@@ -1308,7 +1271,7 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
 
     if (enabledAiCred?.apiKeyRef) {
       aiPlatform = enabledAiCred.platform as AiPlatform;
-      apiKey = enabledAiCred.apiKeyRef;
+      apiKey = decryptField(enabledAiCred.apiKeyRef) ?? "";
     } else {
       // Fall back to env variable (legacy)
       apiKey = process.env.ANTHROPIC_API_KEY ?? "";
@@ -1363,10 +1326,10 @@ Rules:
     async function callAiProvider(platform: AiPlatform, key: string, userPrompt: string): Promise<string> {
       if (platform === IntegrationPlatform.GEMINI) {
         const res = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(key)}`,
+          "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
           {
             method: "POST",
-            headers: { "content-type": "application/json" },
+            headers: { "content-type": "application/json", "x-goog-api-key": key },
             body: JSON.stringify({ contents: [{ parts: [{ text: userPrompt }] }] })
           }
         );

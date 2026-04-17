@@ -119,17 +119,19 @@ export async function buildApp() {
     await requireActiveTenant(request);
   });
 
-  await app.register(swagger, {
-    openapi: {
-      info: {
-        title: "ThinkCRM API",
-        version: "1.0.0"
+  if (config.NODE_ENV !== "production") {
+    await app.register(swagger, {
+      openapi: {
+        info: {
+          title: "ThinkCRM API",
+          version: "1.0.0"
+        }
       }
-    }
-  });
-  await app.register(swaggerUi, {
-    routePrefix: "/docs"
-  });
+    });
+    await app.register(swaggerUi, {
+      routePrefix: "/docs"
+    });
+  }
   await app.register(fastifyStatic, {
     root: join(__dirname, "..", "web"),
     prefix: "/"

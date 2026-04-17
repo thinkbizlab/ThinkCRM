@@ -507,7 +507,7 @@ function renderCustomFieldsSummary(values) {
       ${entries
         .map(
           ([key, value]) =>
-            `<span class="chip">${prettyLabel(key)}: ${typeof value === "boolean" ? (value ? "Yes" : "No") : value}</span>`
+            `<span class="chip">${prettyLabel(key)}: ${typeof value === "boolean" ? (value ? "Yes" : "No") : escHtml(String(value))}</span>`
         )
         .join("")}
     </div>

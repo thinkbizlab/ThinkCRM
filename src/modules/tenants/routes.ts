@@ -4,7 +4,7 @@ import { randomBytes } from "node:crypto";
 import { promises as dns } from "node:dns";
 import { z } from "zod";
 import { config } from "../../config.js";
-import { assertTenantPathAccess, requireRoleAtLeast } from "../../lib/http.js";
+import { assertTenantPathAccess, requireRoleAtLeast, requireSuperAdmin } from "../../lib/http.js";
 import { sendEmailCard, type EmailConfig } from "../../lib/email-notify.js";
 import { hashPassword } from "../../lib/password.js";
 import { prisma } from "../../lib/prisma.js";
@@ -179,8 +179,9 @@ export const tenantRoutes: FastifyPluginAsync = async (app) => {
     });
   });
 
-  // ── Admin-facing onboard endpoint (internal / super-admin use) ────────────
+  // ── Admin-facing onboard endpoint (super-admin only) ──────────────────────
   app.post("/tenants/onboard", async (request, reply) => {
+    requireSuperAdmin(request);
     const parsed = onboardTenantSchema.safeParse(request.body);
     if (!parsed.success) {
       throw app.httpErrors.badRequest(parsed.error.message);

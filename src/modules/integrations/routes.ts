@@ -414,7 +414,8 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
         status: query.status,
         operationType: query.operationType
       },
-      orderBy: { startedAt: "desc" }
+      orderBy: { startedAt: "desc" },
+      take: 200
     });
   });
 };

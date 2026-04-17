@@ -206,11 +206,17 @@ export const superAdminRoutes: FastifyPluginAsync = async (app) => {
   });
 
   // ── R2 storage usage per tenant ──────────────────────────────────────────
-  app.get("/super-admin/storage", async () => {
+  app.get("/super-admin/storage", async (request) => {
     if (!isR2Configured) return { configured: false, tenants: [] };
+
+    const q = request.query as { skip?: string; take?: string };
+    const skip = Math.max(0, parseInt(q.skip ?? "0", 10) || 0);
+    const take = Math.min(50, Math.max(1, parseInt(q.take ?? "20", 10) || 20));
 
     const tenants = await prisma.tenant.findMany({
       orderBy: { createdAt: "desc" },
+      skip,
+      take,
       select: {
         id: true,
         name: true,

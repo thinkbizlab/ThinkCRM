@@ -52,14 +52,15 @@ export async function recordStripeWebhookAndSyncSubscription(
   subscriptionId?: string | null;
   statusApplied?: SubscriptionStatus | null;
 }> {
-  // When Stripe webhook secret is configured, verify the signature.
-  // This prevents replay attacks and forged webhook payloads.
+  // Verify webhook signature. Required in production to prevent forged payloads.
   if (config.STRIPE_WEBHOOK_SECRET && stripeSignature && typeof rawBody === "string") {
     try {
       getStripe().webhooks.constructEvent(rawBody, stripeSignature, config.STRIPE_WEBHOOK_SECRET);
     } catch {
       throw new Error("INVALID_WEBHOOK_BODY");
     }
+  } else if (config.NODE_ENV === "production" && !config.STRIPE_WEBHOOK_SECRET) {
+    throw new Error("STRIPE_WEBHOOK_SECRET is required in production.");
   }
 
   // Parse the verified (or unverified-dev) body as JSON if it arrived as a string.
