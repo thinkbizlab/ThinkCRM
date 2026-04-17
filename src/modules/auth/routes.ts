@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { config } from "../../config.js";
-import { requireAuth, requireTenantId, requireUserId } from "../../lib/http.js";
+import { requireAuth, requireTenantId, requireUserId, isSuperAdmin } from "../../lib/http.js";
 import { hashPassword, verifyPassword } from "../../lib/password.js";
 
 // JWKS sets are created once and cached (jose handles key rotation internally)
@@ -898,6 +898,12 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         seatCount: subscription.seatCount
       } : null
     };
+  });
+
+  // Returns whether the current user has super-admin privileges (used by frontend to show admin UI).
+  app.get("/auth/me/super-admin", async (request) => {
+    requireAuth(request);
+    return { isSuperAdmin: isSuperAdmin(request) };
   });
 
   // ── Avatar upload / remove ───────────────────────────────────────────────────

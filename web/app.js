@@ -271,7 +271,8 @@ const views = {
   visits: qs("#view-visits"),
   calendar: qs("#view-calendar"),
   integrations: qs("#view-integrations"),
-  settings: qs("#view-settings")
+  settings: qs("#view-settings"),
+  superAdmin: qs("#view-superAdmin")
 };
 
 // Delegated listener for integration setup guide buttons (survives renderSettings() re-renders)
@@ -327,7 +328,8 @@ const pageTitleMap = {
   visits: "Visit Execution",
   calendar: "Sales Calendar",
   integrations: "Integration Logs",
-  settings: "Admin Settings"
+  settings: "Admin Settings",
+  superAdmin: "Super Admin"
 };
 
 const customFieldEntityApiMap = {
@@ -1329,7 +1331,8 @@ const simpleViewRouteMap = {
   deals: "/deals",
   visits: "/visits",
   calendar: "/calendar",
-  integrations: "/integrations"
+  integrations: "/integrations",
+  superAdmin: "/super-admin"
 };
 
 function navigateToView(view) {
@@ -9469,6 +9472,7 @@ loginForm.addEventListener("submit", async (event) => {
     localStorage.setItem("thinkcrm_token", state.token);
     showApp();
     showTrialBanner(result.user.subscription);
+    if (window._checkSuperAdmin) window._checkSuperAdmin();
     updateUserMeta();
     const onMasterRoute = syncMasterPageFromLocation();
     const onSimpleViewRoute = !onMasterRoute && syncSimpleViewFromLocation();
@@ -10676,6 +10680,7 @@ async function bootstrap() {
     updateUserMeta();
     showApp();
     showTrialBanner(me.subscription);
+    if (window._checkSuperAdmin) window._checkSuperAdmin();
     const userEditId = syncUserEditFromLocation();
     const c360Id = !userEditId && syncC360FromLocation();
     const deal360No = !userEditId && !c360Id && syncDeal360FromLocation();
@@ -11144,4 +11149,256 @@ new MutationObserver(() => decorateFormLabels(document)).observe(document.body, 
 
 bindVoiceNoteModal();
 applyThemeMode("LIGHT");
+
+// ── Super Admin ────────────────────────────────────────────────────────────────
+(function initSuperAdmin() {
+  const navBtn = qs("#super-admin-nav-btn");
+  const panel  = views.superAdmin;
+  if (!panel) return;
+
+  let loaded = false;
+
+  // Check super admin status after login
+  window._checkSuperAdmin = async function () {
+    try {
+      const res = await api("/auth/me/super-admin");
+      if (res.isSuperAdmin) {
+        if (navBtn) navBtn.hidden = false;
+        state._isSuperAdmin = true;
+      }
+    } catch { /* not super admin */ }
+  };
+
+  // Nav button click
+  navBtn?.addEventListener("click", () => {
+    switchView("superAdmin");
+    window.history.pushState({ view: "superAdmin" }, "", "/super-admin");
+    if (!loaded) { loaded = true; loadSuperAdminDashboard(); }
+  });
+
+  async function loadSuperAdminDashboard() {
+    panel.innerHTML = '<div style="padding:24px;color:#64748b">Loading...</div>';
+    try {
+      const [stats, tenants] = await Promise.all([
+        api("/super-admin/stats"),
+        api("/super-admin/tenants"),
+      ]);
+      renderSuperAdmin(stats, tenants);
+    } catch (err) {
+      panel.innerHTML = `<div style="padding:24px;color:#ef4444">Failed to load: ${escHtml(err.message)}</div>`;
+    }
+  }
+
+  function renderSuperAdmin(stats, tenants) {
+    panel.innerHTML = `
+      <div class="sa-wrap">
+        <div class="sa-stats">
+          <div class="sa-stat"><div class="sa-stat-val">${stats.tenantCount}</div><div class="sa-stat-lbl">Workspaces</div></div>
+          <div class="sa-stat"><div class="sa-stat-val">${stats.activeCount}</div><div class="sa-stat-lbl">Active</div></div>
+          <div class="sa-stat"><div class="sa-stat-val">${stats.trialCount}</div><div class="sa-stat-lbl">Trial</div></div>
+          <div class="sa-stat"><div class="sa-stat-val">${stats.userCount}</div><div class="sa-stat-lbl">Total Users</div></div>
+          <div class="sa-stat"><div class="sa-stat-val">${stats.dealCount}</div><div class="sa-stat-lbl">Total Deals</div></div>
+        </div>
+        <div class="sa-toolbar">
+          <input class="sa-search" id="sa-search" type="text" placeholder="Search workspaces..." />
+          <select class="sa-filter" id="sa-status-filter">
+            <option value="">All</option>
+            <option value="active">Active</option>
+            <option value="inactive">Inactive</option>
+          </select>
+          <button class="sa-btn sa-btn--refresh" id="sa-refresh">Refresh</button>
+        </div>
+        <div class="sa-table-wrap">
+          <table class="sa-table">
+            <thead>
+              <tr>
+                <th>Workspace</th>
+                <th>Slug</th>
+                <th>Status</th>
+                <th>Subscription</th>
+                <th>Users</th>
+                <th>Deals</th>
+                <th>Customers</th>
+                <th>Created</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="sa-tenants-body"></tbody>
+          </table>
+        </div>
+        <div id="sa-detail-modal" class="sa-modal" hidden>
+          <div class="sa-modal-backdrop"></div>
+          <div class="sa-modal-content"></div>
+        </div>
+      </div>`;
+
+    renderTenantRows(tenants);
+    qs("#sa-refresh")?.addEventListener("click", () => { loaded = false; loadSuperAdminDashboard(); });
+    qs("#sa-search")?.addEventListener("input", (e) => filterTenants(e.target.value, qs("#sa-status-filter")?.value));
+    qs("#sa-status-filter")?.addEventListener("change", (e) => filterTenants(qs("#sa-search")?.value, e.target.value));
+    qs("#sa-detail-modal .sa-modal-backdrop")?.addEventListener("click", closeSAModal);
+    panel._tenants = tenants;
+  }
+
+  function filterTenants(search, status) {
+    const tenants = panel._tenants || [];
+    const s = (search || "").toLowerCase();
+    const filtered = tenants.filter(t => {
+      const matchSearch = !s || t.name.toLowerCase().includes(s) || t.slug.toLowerCase().includes(s);
+      const matchStatus = !status || (status === "active" ? t.isActive : !t.isActive);
+      return matchSearch && matchStatus;
+    });
+    renderTenantRows(filtered);
+  }
+
+  function renderTenantRows(tenants) {
+    const tbody = qs("#sa-tenants-body");
+    if (!tbody) return;
+    if (!tenants.length) {
+      tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#94a3b8;padding:24px">No workspaces found</td></tr>';
+      return;
+    }
+    tbody.innerHTML = tenants.map(t => {
+      const sub = t.subscription;
+      const subLabel = sub ? sub.status : "None";
+      const subClass = sub?.status === "ACTIVE" ? "sa-badge--green" : sub?.status === "TRIALING" ? "sa-badge--yellow" : "sa-badge--gray";
+      const statusClass = t.isActive ? "sa-badge--green" : "sa-badge--red";
+      const created = new Date(t.createdAt).toLocaleDateString();
+      return `<tr data-tenant-id="${escHtml(t.id)}">
+        <td class="sa-cell-name">${escHtml(t.name)}</td>
+        <td><code>${escHtml(t.slug)}</code></td>
+        <td><span class="sa-badge ${statusClass}">${t.isActive ? "Active" : "Inactive"}</span></td>
+        <td><span class="sa-badge ${subClass}">${escHtml(subLabel)}</span></td>
+        <td>${t.userCount}</td>
+        <td>${t.dealCount}</td>
+        <td>${t.customerCount}</td>
+        <td>${created}</td>
+        <td class="sa-actions">
+          <button class="sa-btn sa-btn--sm" data-sa-action="detail" data-sa-id="${escHtml(t.id)}">View</button>
+          <button class="sa-btn sa-btn--sm sa-btn--warn" data-sa-action="toggle" data-sa-id="${escHtml(t.id)}" data-sa-active="${t.isActive}">${t.isActive ? "Deactivate" : "Activate"}</button>
+          <button class="sa-btn sa-btn--sm sa-btn--primary" data-sa-action="impersonate" data-sa-id="${escHtml(t.id)}">Login as</button>
+          <button class="sa-btn sa-btn--sm sa-btn--danger" data-sa-action="delete" data-sa-id="${escHtml(t.id)}" data-sa-name="${escHtml(t.name)}">Delete</button>
+        </td>
+      </tr>`;
+    }).join("");
+
+    // Delegate action clicks
+    tbody.onclick = async (e) => {
+      const btn = e.target.closest("[data-sa-action]");
+      if (!btn) return;
+      const action = btn.dataset.saAction;
+      const id = btn.dataset.saId;
+      if (action === "detail") await showTenantDetail(id);
+      if (action === "toggle") await toggleTenant(id, btn.dataset.saActive === "true");
+      if (action === "impersonate") await impersonateTenant(id);
+      if (action === "delete") await deleteTenant(id, btn.dataset.saName);
+    };
+  }
+
+  async function showTenantDetail(tenantId) {
+    const modal = qs("#sa-detail-modal");
+    const content = modal?.querySelector(".sa-modal-content");
+    if (!modal || !content) return;
+    content.innerHTML = '<div style="padding:24px;color:#64748b">Loading...</div>';
+    modal.hidden = false;
+    try {
+      const t = await api(`/super-admin/tenants/${tenantId}`);
+      const sub = t.subscriptions?.[0];
+      const domain = t.customDomain;
+      content.innerHTML = `
+        <div class="sa-detail">
+          <div class="sa-detail-header">
+            <h3>${escHtml(t.name)}</h3>
+            <button class="sa-btn sa-btn--sm sa-modal-close">&times;</button>
+          </div>
+          <div class="sa-detail-grid">
+            <div class="sa-detail-item"><span class="sa-detail-label">ID</span><code>${escHtml(t.id)}</code></div>
+            <div class="sa-detail-item"><span class="sa-detail-label">Slug</span><code>${escHtml(t.slug)}</code></div>
+            <div class="sa-detail-item"><span class="sa-detail-label">Status</span><span class="sa-badge ${t.isActive ? "sa-badge--green" : "sa-badge--red"}">${t.isActive ? "Active" : "Inactive"}</span></div>
+            <div class="sa-detail-item"><span class="sa-detail-label">Timezone</span>${escHtml(t.timezone)}</div>
+            <div class="sa-detail-item"><span class="sa-detail-label">Created</span>${new Date(t.createdAt).toLocaleString()}</div>
+            <div class="sa-detail-item"><span class="sa-detail-label">Subscription</span>${sub ? `${sub.status} / ${sub.seatCount} seats / ${sub.billingCycle}` : "None"}</div>
+            <div class="sa-detail-item"><span class="sa-detail-label">Custom Domain</span>${domain ? `${escHtml(domain.domain)} (${domain.status})` : "None"}</div>
+            <div class="sa-detail-item"><span class="sa-detail-label">Deals</span>${t._count.deals}</div>
+            <div class="sa-detail-item"><span class="sa-detail-label">Customers</span>${t._count.customers}</div>
+            <div class="sa-detail-item"><span class="sa-detail-label">Visits</span>${t._count.visits}</div>
+            <div class="sa-detail-item"><span class="sa-detail-label">Quotations</span>${t._count.quotations}</div>
+          </div>
+          <h4 style="margin:16px 0 8px">Users (${t.users.length})</h4>
+          <table class="sa-table sa-table--compact">
+            <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Verified</th><th>Active</th></tr></thead>
+            <tbody>${t.users.map(u => `<tr>
+              <td>${escHtml(u.fullName)}</td>
+              <td>${escHtml(u.email)}</td>
+              <td><span class="sa-badge sa-badge--gray">${u.role}</span></td>
+              <td>${u.emailVerified ? "Yes" : '<span style="color:#ef4444">No</span>'}</td>
+              <td>${u.isActive ? "Yes" : '<span style="color:#ef4444">No</span>'}</td>
+            </tr>`).join("")}</tbody>
+          </table>
+          <div class="sa-detail-footer">
+            <button class="sa-btn sa-btn--primary" data-sa-action="impersonate" data-sa-id="${escHtml(t.id)}">Login as Admin</button>
+            <button class="sa-btn sa-modal-close">Close</button>
+          </div>
+        </div>`;
+      content.querySelectorAll(".sa-modal-close").forEach(b => b.addEventListener("click", closeSAModal));
+      content.querySelector("[data-sa-action=impersonate]")?.addEventListener("click", () => { closeSAModal(); impersonateTenant(tenantId); });
+    } catch (err) {
+      content.innerHTML = `<div style="padding:24px;color:#ef4444">${escHtml(err.message)}</div>`;
+    }
+  }
+
+  function closeSAModal() {
+    const modal = qs("#sa-detail-modal");
+    if (modal) modal.hidden = true;
+  }
+
+  async function toggleTenant(tenantId, currentlyActive) {
+    const action = currentlyActive ? "deactivate" : "activate";
+    if (!confirm(`Are you sure you want to ${action} this workspace?`)) return;
+    try {
+      await api(`/super-admin/tenants/${tenantId}`, {
+        method: "PATCH",
+        body: { isActive: !currentlyActive }
+      });
+      loaded = false;
+      loadSuperAdminDashboard();
+    } catch (err) { alert("Failed: " + err.message); }
+  }
+
+  async function impersonateTenant(tenantId) {
+    try {
+      const res = await api(`/super-admin/tenants/${tenantId}/impersonate`, { method: "POST" });
+      // Open in a new tab with the impersonated token
+      const url = new URL(window.location.origin);
+      url.searchParams.set("impersonate_token", res.token);
+      url.searchParams.set("impersonate_slug", res.tenantSlug);
+      window.open(url.toString(), "_blank");
+    } catch (err) { alert("Failed: " + err.message); }
+  }
+
+  async function deleteTenant(tenantId, name) {
+    const confirmed = prompt(`Type "${name}" to confirm deletion:`);
+    if (confirmed !== name) return;
+    try {
+      await api(`/super-admin/tenants/${tenantId}`, { method: "DELETE" });
+      loaded = false;
+      loadSuperAdminDashboard();
+    } catch (err) { alert("Failed: " + err.message); }
+  }
+})();
+
+// Handle impersonation token from URL (opened from super admin "Login as" button)
+(function handleImpersonation() {
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get("impersonate_token");
+  const slug = params.get("impersonate_slug");
+  if (token && slug) {
+    localStorage.setItem("thinkcrm_token", token);
+    localStorage.setItem("tenantSlug", slug);
+    state.token = token;
+    // Clean the URL
+    window.history.replaceState({}, "", "/dashboard");
+  }
+})();
+
 bootstrap();

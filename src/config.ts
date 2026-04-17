@@ -62,6 +62,8 @@ const configSchema = z.object({
   // Create a token at vercel.com/account/tokens (scope: project-level or team-level).
   VERCEL_PROJECT_ID: z.preprocess(v => (v === "" ? undefined : v), z.string().optional()),
   VERCEL_API_TOKEN: z.preprocess(v => (v === "" ? undefined : v), z.string().optional()),
+  // Comma-separated list of emails that have super-admin access (cross-tenant management).
+  SUPER_ADMIN_EMAILS: z.preprocess(v => (v === "" ? undefined : v), z.string().optional()),
 });
 
 export type AppConfig = z.infer<typeof configSchema>;

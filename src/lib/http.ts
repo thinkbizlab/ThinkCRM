@@ -1,6 +1,11 @@
 import { UserRole } from "@prisma/client";
 import type { FastifyRequest } from "fastify";
+import { config } from "../config.js";
 import { prisma } from "./prisma.js";
+
+const superAdminEmails: Set<string> = new Set(
+  (config.SUPER_ADMIN_EMAILS ?? "").split(",").map(e => e.trim().toLowerCase()).filter(Boolean)
+);
 
 const roleRank: Record<UserRole, number> = {
   REP: 1,
@@ -47,6 +52,19 @@ export function requireRoleAtLeast(request: FastifyRequest, minimumRole: UserRol
     throw request.server.httpErrors.forbidden(
       `Insufficient role. Requires ${minimumRole} or higher.`
     );
+  }
+}
+
+export function isSuperAdmin(request: FastifyRequest): boolean {
+  if (!request.requestContext.authenticated) return false;
+  const email = request.requestContext.email;
+  return Boolean(email && superAdminEmails.has(email.toLowerCase()));
+}
+
+export function requireSuperAdmin(request: FastifyRequest): void {
+  requireAuth(request);
+  if (!isSuperAdmin(request)) {
+    throw request.server.httpErrors.forbidden("Super admin access required.");
   }
 }
 

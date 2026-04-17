@@ -6,6 +6,7 @@ declare module "fastify" {
       tenantId: string | null;
       userId: string | null;
       role: UserRole | null;
+      email: string | null;
       authenticated: boolean;
     };
   }

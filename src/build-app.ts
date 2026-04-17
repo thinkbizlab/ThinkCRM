@@ -33,6 +33,7 @@ import { authRoutes } from "./modules/auth/routes.js";
 import { billingRoutes } from "./modules/billing/routes.js";
 import { syncRoutes } from "./modules/sync/routes.js";
 import { cronRoutes } from "./modules/cron/routes.js";
+import { superAdminRoutes } from "./modules/super-admin/routes.js";
 import { startScheduler, WORKER_TAG } from "./lib/scheduler.js";
 import { prisma } from "./lib/prisma.js";
 import { decryptField, migrateCredentialsEncryption } from "./lib/secrets.js";
@@ -178,6 +179,7 @@ export async function buildApp() {
   await app.register(apiFirstRoutes, { prefix: "/api/v1" });
   await app.register(syncRoutes, { prefix: "/api/v1" });
   await app.register(cronRoutes, { prefix: "/api/v1" });
+  await app.register(superAdminRoutes, { prefix: "/api/v1" });
 
   app.get("/api/v1/config/public", async () => ({
     googleMapsApiKey: config.GOOGLE_MAPS_API_KEY ?? null,

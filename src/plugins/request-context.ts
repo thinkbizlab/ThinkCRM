@@ -15,11 +15,13 @@ export const requestContextPlugin = fp(async (app) => {
           tenantId: string;
           userId: string;
           role: UserRole;
+          email?: string;
         }>(token);
         request.requestContext = {
           tenantId: payload.tenantId,
           userId: payload.userId,
           role: payload.role,
+          email: payload.email ?? null,
           authenticated: true
         };
         return;
@@ -32,6 +34,7 @@ export const requestContextPlugin = fp(async (app) => {
       tenantId: null,
       userId: null,
       role: null,
+      email: null,
       authenticated: false
     };
   });
