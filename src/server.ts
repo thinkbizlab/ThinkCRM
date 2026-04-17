@@ -1,3 +1,4 @@
+import "fastify"; // Vercel Fastify auto-detection requires this import in the entrypoint
 import { buildApp } from "./build-app.js";
 import { config } from "./config.js";
 
