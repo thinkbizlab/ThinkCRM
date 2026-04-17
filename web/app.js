@@ -5742,7 +5742,7 @@ function renderSettings() {
             <label class="form-label">Domain
               <input class="form-input" name="domain" type="text" placeholder="crm.yourcompany.com" required pattern="^(?:[a-z0-9](?:[a-z0-9\\-]{0,61}[a-z0-9])?\\.)+[a-z]{2,}$" />
             </label>
-            <p class="muted small">Enter a subdomain of your company domain (e.g. <code>crm.yourcompany.com</code>). You will need to add a CNAME DNS record.</p>
+            <p class="muted small">Enter a subdomain of your company domain (e.g. <code>crm.yourcompany.com</code>). You will need to add an A record and a TXT verification record.</p>
             <button type="submit">Add Domain</button>
             <p id="cd-msg" class="small" style="min-height:1.2em;margin-top:var(--sp-2)"></p>
           </form>
@@ -5758,7 +5758,7 @@ function renderSettings() {
                 <p style="margin-bottom:var(--sp-2)"><strong>Step 1:</strong> Add these DNS records at your domain registrar:</p>
                 <div class="cd-dns-table" style="display:grid;grid-template-columns:auto auto 1fr;gap:var(--sp-1) var(--sp-3);font-family:var(--font-mono);font-size:0.82rem;margin-bottom:var(--sp-2)">
                   <span class="muted">Type</span><span class="muted">Name</span><span class="muted">Value</span>
-                  <span>CNAME</span><span>${escHtml(cd.domain)}</span><span>app.thinkbizcrm.com</span>
+                  <span>A</span><span>${escHtml(cd.domain)}</span><span>76.76.21.21</span>
                   <span>TXT</span><span>_thinkcrm-verify.${escHtml(cd.domain)}</span><span>${escHtml(cd.verificationToken)}</span>
                 </div>
                 <p class="muted small">DNS changes can take up to 48 hours to propagate.</p>
