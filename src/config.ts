@@ -54,6 +54,9 @@ const configSchema = z.object({
   APNS_KEY_PATH: z.preprocess(v => (v === "" ? undefined : v), z.string().optional()),
   // Set to "production" for App Store builds; defaults to "development" for TestFlight/dev.
   APNS_ENVIRONMENT: z.enum(["development", "production"]).default("development"),
+  // Optional: Vercel Cron secret — protects /api/v1/cron/* endpoints.
+  // Auto-set by Vercel when you add cron jobs. Generate your own for non-Vercel deployments.
+  CRON_SECRET: z.preprocess(v => (v === "" ? undefined : v), z.string().min(16).optional()),
 });
 
 export type AppConfig = z.infer<typeof configSchema>;

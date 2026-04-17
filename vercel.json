@@ -1,0 +1,17 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "crons": [
+    {
+      "path": "/api/v1/cron/weekly-digest",
+      "schedule": "0 23 * * 0"
+    },
+    {
+      "path": "/api/v1/cron/kpi-alert",
+      "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/v1/cron/trial-expiry",
+      "schedule": "5 0 * * *"
+    }
+  ]
+}

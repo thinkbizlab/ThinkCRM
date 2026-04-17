@@ -32,6 +32,7 @@ import { config } from "./config.js";
 import { authRoutes } from "./modules/auth/routes.js";
 import { billingRoutes } from "./modules/billing/routes.js";
 import { syncRoutes } from "./modules/sync/routes.js";
+import { cronRoutes } from "./modules/cron/routes.js";
 import { startScheduler, WORKER_TAG } from "./lib/scheduler.js";
 import { prisma } from "./lib/prisma.js";
 import { decryptField, migrateCredentialsEncryption } from "./lib/secrets.js";
@@ -176,6 +177,7 @@ export async function buildApp() {
   await app.register(settingsRoutes, { prefix: "/api/v1" });
   await app.register(apiFirstRoutes, { prefix: "/api/v1" });
   await app.register(syncRoutes, { prefix: "/api/v1" });
+  await app.register(cronRoutes, { prefix: "/api/v1" });
 
   app.get("/api/v1/config/public", async () => ({
     googleMapsApiKey: config.GOOGLE_MAPS_API_KEY ?? null,
@@ -285,7 +287,11 @@ export async function buildApp() {
     .then(() => app.log.info("[startup] Integration credential encryption check complete"))
     .catch(err => app.log.error({ err }, "[startup] Credential encryption migration failed"));
 
-  startScheduler().catch(err => app.log.error({ err }, "[scheduler] startup error"));
+  // On Vercel, cron jobs are triggered via HTTP endpoints (cronRoutes) instead
+  // of in-process node-cron timers which don't persist between invocations.
+  if (!process.env.VERCEL) {
+    startScheduler().catch(err => app.log.error({ err }, "[scheduler] startup error"));
+  }
 
   app.get("/openapi.json", async () => app.swagger());
   app.get("/", async (_, reply) => reply.sendFile("index.html"));
