@@ -13,7 +13,7 @@ import type { FastifyPluginAsync, FastifyRequest } from "fastify";
 import { extname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import Anthropic from "@anthropic-ai/sdk";
+import { Anthropic } from "@anthropic-ai/sdk";
 import { requireTenantId, requireUserId } from "../../lib/http.js";
 import { prisma } from "../../lib/prisma.js";
 import { getPlanLimits, assertVoiceNotesAvailable } from "../../lib/plan-limits.js";
