@@ -1,86 +1,40 @@
-const state = {
-  token: localStorage.getItem("thinkcrm_token") || "",
-  user: null,
-  googleMapsApiKey: null,
-  cache: {
-    paymentTerms: [],
-    customers: [],
-    items: [],
-    customFieldDefinitions: {
-      "payment-terms": [],
-      customers: [],
-      items: []
-    },
-    kanban: null,
-    dealStages: [],
-    visits: [],
-    notifPrefs: undefined,
-    cronJobs: undefined,
-    myIntegrations: null,
-    calendar: null,
-    logs: [],
-    kpiTargets: [],
-    salesReps: [],
-    taxConfig: null,
-    visitConfig: null,
-    branding: null,
-    integrationCredentials: [],
-    teams: [],
-    allUsers: [],
-    tenantInfo: null
-  },
-  masterPage: "payment-terms",
-  customerListQuery: "",
-  customerListPage: 1,
-  customerScope: "mine",   // "mine" | "team" | "all"
-  customerCreateOpen: false,
-  c360: null,
-  settingsPage: "my-profile",
-  openIntgSections: new Set(),
-  openCronHistories: new Set(),
-  rolePageQuery: "",
-  rolePageTeam: "",
-  roleInfoExpanded: false,
-  settingsNavCollapsed: false,
-  calendarFilters: {
-    view: "month",
-    eventTypes: ["visit", "deal"],
-    anchorDate: new Date().toISOString(),
-    query: "",
-    ownerIds: [],
-    customerId: "",
-    customerName: "",
-    visitStatuses: ["PLANNED", "CHECKED_IN", "CHECKED_OUT"],
-    dealStageIds: [],
-    dealStatuses: ["OPEN"]
-  },
-  dashboardMonth: new Date().toISOString().slice(0, 7),
-  dashboardTeamId: "",
-  dashboardRepId: "",
-  visitPage: (() => {
-    const now = new Date();
-    const y = now.getFullYear(), m = now.getMonth();
-    const pad = n => String(n).padStart(2, "0");
-    const lastDay = new Date(y, m + 1, 0).getDate();
-    return {
-      query: "",
-      status: "",
-      repIds: [],
-      dateFrom: `${y}-${pad(m + 1)}-01`,
-      dateTo:   `${y}-${pad(m + 1)}-${pad(lastDay)}`
-    };
-  })(),
-  repHubTab: "visits"
-};
+import {
+  escHtml,
+  base64urlToBuffer, bufferToBase64url,
+  normalizeHex, darkenHex, lightenHex, tintHex,
+  prettyLabel,
+  asDate, asDateInput, asPercent,
+  shiftAnchorDate,
+  fmtDateTime
+} from "./modules/utils.js";
+import { state, THEME_OVERRIDE_KEY } from "./modules/state.js";
+import { api } from "./modules/api.js";
+import {
+  qs,
+  authScreen, appScreen, statusBar, pageTitle,
+  views, pageTitleMap,
+  switchView, showApp, showAppLoading, hideAppLoading, showAuth, showTrialBanner,
+  setStatus
+} from "./modules/dom.js";
+import { openVoiceNoteModal, bindVoiceNoteModal, setVoiceNoteOnClose } from "./modules/voice-note.js";
+import { passkeyLogin, openAdminPasskeyModal, initPasskeySection } from "./modules/passkey.js";
+import { loadOAuthProviderButtons, wireOAuthProviderButtons, consumeOAuthCallback } from "./modules/oauth.js";
+import { loadOnboardingWizard, initOnboardingWizard } from "./modules/onboarding-wizard.js";
+import { loadDemoDataStatus, renderDemoDataBanner, initDemoDataModals } from "./modules/demo-data.js";
+import { initQuickSearch } from "./modules/quick-search.js";
+import { loadCalendar, renderCalendar, setCalendarDeps } from "./modules/calendar.js";
+import { openCustomer360, renderCustomer360, setCustomer360Deps } from "./modules/customer-360.js";
+import { openDeal360, renderDeal360, navigateToDeal360, syncDeal360FromLocation, setDeal360Deps } from "./modules/deal-360.js";
+import { loadDashboard, renderDashboard, setDashboardDeps } from "./modules/dashboard.js";
+import {
+  loadVisits, renderVisits,
+  openVisitCreateModal, closeVisitCreateModal,
+  openVisitEditModal, closeVisitEditModal,
+  syncVisitPlannedAtRequired,
+  showEventDetail,
+  setVisitsDeps
+} from "./modules/visits.js";
 
-const THEME_OVERRIDE_KEY = "thinkcrm_theme_override";
-state.themeOverride = localStorage.getItem(THEME_OVERRIDE_KEY) || "AUTO";
-state.tenantThemeMode = "LIGHT";
-
-const qs = (selector) => document.querySelector(selector);
-
-const authScreen = qs("#auth-screen");
-const appScreen = qs("#app-screen");
 const loginForm = qs("#login-form");
 const authMessage = qs("#auth-message");
 
@@ -153,81 +107,95 @@ async function fetchLoginBranding(slug) {
   });
 })();
 
-// Load and show OAuth provider buttons for the current workspace
-async function loadOAuthProviderButtons() {
-  const panel = qs("#oauth-providers");
-  const ms365Btn  = qs("#oauth-ms365-btn");
-  const googleBtn = qs("#oauth-google-btn");
-  if (!panel || !ms365Btn || !googleBtn) return;
+wireOAuthProviderButtons({
+  getTenantSlug: () => loginForm.querySelector('[name="tenantSlug"]')?.value?.trim(),
+  onMissingSlug: (msg) => { authMessage.textContent = msg; }
+});
+
+// Login screen "Sign in with passkey" — runs the WebAuthn dance via the passkey
+// module, then funnels the result into the same post-login flow as password login.
+async function loginWithPasskey() {
+  const slug = loginForm.querySelector('[name="tenantSlug"]')?.value?.trim();
+  const email = loginForm.querySelector('[name="email"]')?.value?.trim();
+  if (!slug) { authMessage.textContent = "Please enter your workspace first."; return; }
+  if (!email) { authMessage.textContent = "Please enter your email first."; return; }
+
+  authMessage.textContent = "";
+  const passkeyBtn = qs("#oauth-passkey-btn");
+  if (passkeyBtn) { passkeyBtn.disabled = true; passkeyBtn.textContent = "Verifying..."; }
+
   try {
-    const res = await fetch("/api/v1/auth/oauth/providers");
-    if (!res.ok) return;
-    const { ms365, google } = await res.json();
-    ms365Btn.hidden  = !ms365;
-    googleBtn.hidden = !google;
-    panel.hidden     = !ms365 && !google;
-  } catch { /* ignore — OAuth buttons are optional */ }
-}
+    const result = await passkeyLogin({ tenantSlug: slug, email });
 
-// Wire OAuth provider buttons
-(function () {
-  qs("#oauth-ms365-btn")?.addEventListener("click", () => {
-    const slug = loginForm.querySelector('[name="tenantSlug"]')?.value?.trim();
-    if (!slug) { authMessage.textContent = "Please enter your workspace first."; return; }
-    window.location.href = `/api/v1/auth/oauth/ms365?tenantSlug=${encodeURIComponent(slug)}`;
-  });
-  qs("#oauth-google-btn")?.addEventListener("click", () => {
-    const slug = loginForm.querySelector('[name="tenantSlug"]')?.value?.trim();
-    if (!slug) { authMessage.textContent = "Please enter your workspace first."; return; }
-    window.location.href = `/api/v1/auth/oauth/google?tenantSlug=${encodeURIComponent(slug)}`;
-  });
-})();
+    if (result.needsEmailVerification) {
+      const loginPanel = qs(".login-form");
+      if (loginPanel) loginPanel.hidden = true;
+      const pendingPanel = qs("#verify-pending-panel");
+      const pendingEmail = qs("#verify-pending-email");
+      if (pendingPanel) { pendingPanel.hidden = false; pendingPanel._tenantSlug = slug; pendingPanel._email = email; }
+      if (pendingEmail) pendingEmail.textContent = email;
+      return;
+    }
 
-// Handle OAuth redirect-back: ?oauth_code=xxx or ?oauth_error=xxx
-// The JWT never appears in the URL (C5 fix). The server issues a one-time exchange
-// code; we POST it here to retrieve the JWT over the API.
-(async function handleOAuthReturn() {
-  const params = new URLSearchParams(window.location.search);
-  const oauthCode  = params.get("oauth_code");
-  const oauthError = params.get("oauth_error");
-  if (!oauthCode && !oauthError) return;
-  // Clean URL immediately so the code doesn't linger in history
-  window.history.replaceState({}, "", window.location.pathname);
-  if (oauthError) {
-    authMessage.textContent = oauthError;
-    return;
-  }
-  try {
-    // Exchange the one-time code for the JWT
-    const exchangeRes = await fetch("/api/v1/auth/oauth/exchange", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code: oauthCode })
-    });
-    if (!exchangeRes.ok) throw new Error("Login succeeded but the session code was invalid. Please try again.");
-    const { token: oauthToken } = await exchangeRes.json();
-
-    // Fetch user info using the OAuth-issued JWT
-    const meRes = await fetch("/api/v1/auth/me", {
-      headers: { Authorization: `Bearer ${oauthToken}` }
-    });
-    if (!meRes.ok) throw new Error("Login succeeded but could not load your profile. Please try again.");
-    const user = await meRes.json();
-    state.token = oauthToken;
-    state.user  = user;
-    state.calendarFilters.ownerIds = [user.id];
-    localStorage.setItem("thinkcrm_token", oauthToken);
+    state.token = result.accessToken;
+    state.user = result.user;
+    state.calendarFilters.ownerIds = [result.user.id];
+    localStorage.setItem("thinkcrm_token", state.token);
     showApp();
-    showTrialBanner(user.subscription);
+    showTrialBanner(result.user.subscription);
+    if (window._checkSuperAdmin) window._checkSuperAdmin();
     updateUserMeta();
+    const onMasterRoute = syncMasterPageFromLocation();
+    const onSimpleViewRoute = !onMasterRoute && syncSimpleViewFromLocation();
     await loadAllViews();
     applyBrandingTheme(state.cache.branding);
-    window.history.replaceState({ view: "repHub" }, "", "/task");
-    switchView("repHub");
-    paintRepHubFull();
-  } catch (e) {
-    authMessage.textContent = e.message;
+    if (onMasterRoute) {
+      switchView("master");
+    } else if (onSimpleViewRoute) {
+      switchView(onSimpleViewRoute);
+      if (onSimpleViewRoute === "repHub") paintRepHubFull();
+      if (onSimpleViewRoute === "superAdmin" && window._loadSuperAdmin) window._loadSuperAdmin();
+    } else {
+      window.history.replaceState({ view: "repHub" }, "", "/task");
+      switchView("repHub");
+      paintRepHubFull();
+    }
+    hideAppLoading();
+    await loadDemoDataStatus();
+    loadOnboardingWizard();
+  } catch (err) {
+    if (err.name === "NotAllowedError") {
+      authMessage.textContent = "Passkey sign-in was cancelled.";
+    } else {
+      authMessage.textContent = err.message || "Passkey sign-in failed.";
+    }
+  } finally {
+    if (passkeyBtn) { passkeyBtn.disabled = false; passkeyBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 18v3c0 .6.4 1 1 1h4v-3h3v-3h2l1.4-1.4a6.5 6.5 0 1 0-4-4Z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/></svg> Passkey'; }
   }
+}
+
+qs("#oauth-passkey-btn")?.addEventListener("click", loginWithPasskey);
+
+// On page load, complete any in-flight OAuth login (?oauth_code=…). The token
+// arrives via a one-time exchange code, never the URL hash (C5 fix).
+(async () => {
+  const result = await consumeOAuthCallback({
+    onError: (msg) => { authMessage.textContent = msg; }
+  });
+  if (!result) return;
+  const { token, user } = result;
+  state.token = token;
+  state.user  = user;
+  state.calendarFilters.ownerIds = [user.id];
+  localStorage.setItem("thinkcrm_token", token);
+  showApp();
+  showTrialBanner(user.subscription);
+  updateUserMeta();
+  await loadAllViews();
+  applyBrandingTheme(state.cache.branding);
+  window.history.replaceState({ view: "repHub" }, "", "/task");
+  switchView("repHub");
+  paintRepHubFull();
 })();
 // Handle platform Connect redirect-backs (?xxx_connected=1 or ?xxx_error=…)
 // Stash params before app loads; act on them once the shell is ready.
@@ -256,24 +224,10 @@ const _slackConnectParams = (() => {
   return { connected: !!connected, error: error || null };
 })();
 
-const statusBar = qs("#status-bar");
 const userMeta = qs("#user-meta");
-const pageTitle = qs("#page-title");
 const brandMark = qs("#brand-mark");
 const brandTitle = qs("#brand-title");
 const themeToggleBtn = qs("#theme-toggle-btn");
-
-const views = {
-  repHub: qs("#view-rep-hub"),
-  dashboard: qs("#view-dashboard"),
-  master: qs("#view-master"),
-  deals: qs("#view-deals"),
-  visits: qs("#view-visits"),
-  calendar: qs("#view-calendar"),
-  integrations: qs("#view-integrations"),
-  settings: qs("#view-settings"),
-  superAdmin: qs("#view-superAdmin")
-};
 
 // Delegated listener for integration setup guide buttons (survives renderSettings() re-renders)
 views.settings?.addEventListener("click", (e) => {
@@ -306,30 +260,10 @@ function getActiveCurrency() {
     || "THB";
 }
 
-const dateTime = new Intl.DateTimeFormat("en-GB", {
-  year: "numeric",
-  month: "short",
-  day: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit"
-});
-
 const masterPageRouteMap = {
   "payment-terms": "/master/payment-terms",
   customers: "/master/customers",
   items: "/master/items"
-};
-
-const pageTitleMap = {
-  repHub: "My Tasks",
-  dashboard: "Dashboard",
-  master: "Master Data",
-  deals: "Deals Pipeline",
-  visits: "Visit Execution",
-  calendar: "Sales Calendar",
-  integrations: "Integration Logs",
-  settings: "Admin Settings",
-  superAdmin: "Super Admin"
 };
 
 const customFieldEntityApiMap = {
@@ -369,39 +303,6 @@ function asMoney(value) {
   }
 }
 
-function asDate(value) {
-  if (!value) return "-";
-  return dateTime.format(new Date(value));
-}
-
-function asDateInput(value) {
-  if (!value) return "";
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toISOString().slice(0, 10);
-}
-
-function asPercent(value) {
-  if (value == null || Number.isNaN(Number(value))) return "0.00";
-  return Number(value).toFixed(2);
-}
-
-function shiftAnchorDate(anchorDate, view, direction) {
-  const d = new Date(anchorDate || new Date().toISOString());
-  const amount = direction === "next" ? 1 : -1;
-  if (view === "year") d.setUTCFullYear(d.getUTCFullYear() + amount);
-  if (view === "month") d.setUTCMonth(d.getUTCMonth() + amount);
-  if (view === "day") d.setUTCDate(d.getUTCDate() + amount);
-  return d.toISOString();
-}
-
-function prettyLabel(value) {
-  return String(value)
-    .replace(/[_-]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/\b\w/g, (char) => char.toUpperCase());
-}
 
 function getCustomFieldDefinitions(pageKey) {
   return state.cache.customFieldDefinitions[pageKey] || [];
@@ -514,40 +415,6 @@ function renderCustomFieldsSummary(values) {
   `;
 }
 
-function normalizeHex(value, fallback) {
-  if (typeof value !== "string") return fallback;
-  const trimmed = value.trim();
-  if (/^#[0-9a-fA-F]{6}$/.test(trimmed)) return trimmed;
-  if (/^#[0-9a-fA-F]{3}$/.test(trimmed)) {
-    return `#${trimmed[1]}${trimmed[1]}${trimmed[2]}${trimmed[2]}${trimmed[3]}${trimmed[3]}`;
-  }
-  return fallback;
-}
-
-function darkenHex(hex, amount = 26) {
-  const parsed = normalizeHex(hex, "#2563eb").slice(1);
-  const r = Math.max(0, parseInt(parsed.slice(0, 2), 16) - amount);
-  const g = Math.max(0, parseInt(parsed.slice(2, 4), 16) - amount);
-  const b = Math.max(0, parseInt(parsed.slice(4, 6), 16) - amount);
-  return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
-}
-
-function lightenHex(hex, amount = 26) {
-  const parsed = normalizeHex(hex, "#2563eb").slice(1);
-  const r = Math.min(255, parseInt(parsed.slice(0, 2), 16) + amount);
-  const g = Math.min(255, parseInt(parsed.slice(2, 4), 16) + amount);
-  const b = Math.min(255, parseInt(parsed.slice(4, 6), 16) + amount);
-  return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
-}
-
-function tintHex(hex, ratio) {
-  const parsed = normalizeHex(hex, "#2563eb").slice(1);
-  const r = Math.round(parseInt(parsed.slice(0, 2), 16) + (255 - parseInt(parsed.slice(0, 2), 16)) * ratio);
-  const g = Math.round(parseInt(parsed.slice(2, 4), 16) + (255 - parseInt(parsed.slice(2, 4), 16)) * ratio);
-  const b = Math.round(parseInt(parsed.slice(4, 6), 16) + (255 - parseInt(parsed.slice(4, 6), 16)) * ratio);
-  return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
-}
-
 function updateThemeToggleLabel() {
   if (!themeToggleBtn) return;
   const text =
@@ -657,47 +524,6 @@ function updateUserMeta() {
     : (state.user.role ?? "—");
 }
 
-function setStatus(text, isError = false, isWarning = false) {
-  if (!text) return;
-  const container = qs("#toast-container") || (() => {
-    const el = document.createElement("div");
-    el.id = "toast-container";
-    document.body.appendChild(el);
-    return el;
-  })();
-
-  const type = isError ? "error" : isWarning ? "warn" : "success";
-  const toast = document.createElement("div");
-  toast.className = `toast toast--${type}`;
-  toast.setAttribute("role", "alert");
-
-  const icon = type === "error"
-    ? `<svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`
-    : type === "warn"
-    ? `<svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`
-    : `<svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
-
-  toast.innerHTML = `
-    <span class="toast-icon">${icon}</span>
-    <span class="toast-msg">${escHtml(text)}</span>
-    <button class="toast-close" aria-label="Dismiss">
-      <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-    </button>`;
-
-  container.appendChild(toast);
-  requestAnimationFrame(() => toast.classList.add("toast--visible"));
-
-  const dismiss = () => {
-    toast.classList.remove("toast--visible");
-    toast.addEventListener("transitionend", () => toast.remove(), { once: true });
-  };
-
-  toast.querySelector(".toast-close").addEventListener("click", dismiss);
-  const timer = setTimeout(dismiss, type === "error" ? 6000 : 4000);
-  toast.addEventListener("mouseenter", () => clearTimeout(timer));
-  toast.addEventListener("mouseleave", () => setTimeout(dismiss, 2000));
-}
-
 function showNotifWarnings(warnings) {
   if (!warnings?.length) return;
   const labels = { LINE: "LINE", MS_TEAMS: "MS Teams", EMAIL: "Email" };
@@ -708,308 +534,6 @@ function showNotifWarnings(warnings) {
     `${channels} notification failed. Check that the integration is enabled and configured correctly in Settings → Integrations.`,
     true
   ), 100);
-}
-
-async function api(path, options = {}) {
-  const isFormData = options.body instanceof FormData;
-  const hasBody = options.body !== undefined && options.body !== null;
-  const headers = {
-    ...(hasBody && !isFormData ? { "content-type": "application/json" } : {}),
-    ...(options.headers || {})
-  };
-  if (state.token) headers.Authorization = `Bearer ${state.token}`;
-
-  const response = await fetch(`/api/v1${path}`, {
-    method: options.method || "GET",
-    headers,
-    body: hasBody ? (isFormData ? options.body : JSON.stringify(options.body)) : undefined
-  });
-
-  const text = await response.text();
-  const data = text ? JSON.parse(text) : null;
-
-  if (!response.ok) {
-    throw new Error(data?.message || `API ${response.status}`);
-  }
-  return data;
-}
-
-const voiceNoteState = {
-  onClose: null,
-  entityType: null,
-  entityId: null,
-  jobId: null,
-  mediaRecorder: null,
-  chunks: [],
-  stream: null,
-  initBound: false,
-  aiAvailable: null,   // null = not yet checked, true/false = cached result
-  recognition: null,   // SpeechRecognition instance
-  transcript: "",      // accumulated browser speech-to-text transcript
-  outputLang: "TH",    // "TH" | "EN" — default Thai
-  processing: false    // true while upload/summarize is in flight
-};
-
-function getVoiceNoteEls() {
-  const root = qs("#voice-note-modal");
-  if (!root) return null;
-  return {
-    root,
-    subtitle: qs("#voice-note-modal-subtitle"),
-    aiWarning: qs("#voice-note-ai-warning"),
-    recordBtn: qs("#voice-note-record"),
-    stopBtn: qs("#voice-note-stop"),
-    status: qs("#voice-note-status"),
-    review: qs("#voice-note-review"),
-    transcript: qs("#voice-note-transcript"),
-    summary: qs("#voice-note-summary"),
-    confirmBtn: qs("#voice-note-confirm"),
-    fileInput: qs("#voice-note-file")
-  };
-}
-
-function setVoiceNoteStatus(text, isError = false) {
-  const els = getVoiceNoteEls();
-  if (!els?.status) return;
-  els.status.textContent = text || "";
-  els.status.style.color = isError ? "#b91c1c" : "";
-}
-
-function stopVoiceNoteMedia() {
-  if (voiceNoteState.mediaRecorder && voiceNoteState.mediaRecorder.state !== "inactive") {
-    try {
-      voiceNoteState.mediaRecorder.stop();
-    } catch {
-      /* ignore */
-    }
-  }
-  voiceNoteState.mediaRecorder = null;
-  voiceNoteState.chunks = [];
-  if (voiceNoteState.stream) {
-    voiceNoteState.stream.getTracks().forEach((t) => t.stop());
-    voiceNoteState.stream = null;
-  }
-  if (voiceNoteState.recognition) {
-    try { voiceNoteState.recognition.abort(); } catch { /* ignore */ }
-    voiceNoteState.recognition = null;
-  }
-}
-
-function resetVoiceNoteModal() {
-  const els = getVoiceNoteEls();
-  if (!els) return;
-  stopVoiceNoteMedia();
-  voiceNoteState.jobId = null;
-  voiceNoteState.transcript = "";
-  voiceNoteState.processing = false;
-  els.review.hidden = true;
-  els.transcript.value = "";
-  els.transcript.disabled = false;
-  els.summary.value = "";
-  els.fileInput.value = "";
-  els.recordBtn.disabled = false;
-  els.stopBtn.disabled = true;
-  els.confirmBtn.disabled = false;
-  setVoiceNoteStatus("");
-}
-
-async function openVoiceNoteModal(entityType, entityId, subtitle) {
-  const els = getVoiceNoteEls();
-  if (!els) return;
-  resetVoiceNoteModal();
-  voiceNoteState.entityType = entityType;
-  voiceNoteState.entityId = entityId;
-  els.subtitle.textContent = subtitle ? `${entityType} · ${subtitle}` : entityType;
-  els.root.hidden = false;
-
-  // Check AI availability (cached after first call)
-  if (voiceNoteState.aiAvailable === null) {
-    try {
-      const status = await api("/ai/status");
-      voiceNoteState.aiAvailable = status.transcriptionAvailable === true;
-    } catch {
-      voiceNoteState.aiAvailable = false;
-    }
-  }
-  els.aiWarning.hidden = voiceNoteState.aiAvailable !== false;
-}
-
-function closeVoiceNoteModal() {
-  if (voiceNoteState.processing) return;   // block close while upload/summarize is in flight
-  const els = getVoiceNoteEls();
-  if (!els) return;
-  resetVoiceNoteModal();
-  els.root.hidden = true;
-  const cb = voiceNoteState.onClose;
-  voiceNoteState.onClose = null;
-  if (cb) cb();
-}
-
-function _lockVoiceNoteModal() {
-  voiceNoteState.processing = true;
-  const els = getVoiceNoteEls();
-  if (!els) return;
-  els.recordBtn.disabled = true;
-  els.stopBtn.disabled = true;
-  els.confirmBtn.disabled = true;
-  els.fileInput.disabled = true;
-  els.root.querySelectorAll("[data-voice-note-close]").forEach(el => el.setAttribute("disabled", "true"));
-}
-
-function _unlockVoiceNoteModal() {
-  voiceNoteState.processing = false;
-  const els = getVoiceNoteEls();
-  if (!els) return;
-  els.confirmBtn.disabled = false;
-  els.fileInput.disabled = false;
-  els.root.querySelectorAll("[data-voice-note-close]").forEach(el => el.removeAttribute("disabled"));
-}
-
-async function uploadVoiceNoteAudio(blob, filename) {
-  if (!voiceNoteState.entityType || !voiceNoteState.entityId) return;
-  const aiReady = voiceNoteState.aiAvailable === true;
-  const hasTranscript = Boolean(voiceNoteState.transcript);
-  _lockVoiceNoteModal();
-  setVoiceNoteStatus(aiReady && hasTranscript ? "Uploading and summarizing…" : "Uploading audio…");
-  try {
-    const form = new FormData();
-    form.append("entityType", voiceNoteState.entityType);
-    form.append("entityId", voiceNoteState.entityId);
-    form.append("audio", blob, filename || "voice-note.webm");
-    if (voiceNoteState.transcript) form.append("transcriptText", voiceNoteState.transcript);
-    form.append("outputLang", voiceNoteState.outputLang);
-    const job = await api("/voice-notes", { method: "POST", body: form });
-    const els2 = getVoiceNoteEls();
-    if (els2) {
-      voiceNoteState.jobId = job.id;
-      els2.transcript.value = job.transcript?.transcriptText ?? "";
-      els2.transcript.disabled = false;
-      els2.summary.value = job.transcript?.summaryText ?? "";
-      els2.review.hidden = false;
-    }
-    setVoiceNoteStatus(
-      aiReady && hasTranscript
-        ? "Review and edit, then confirm to save."
-        : aiReady
-          ? "No speech detected. Enter notes manually and confirm to save."
-          : "Audio uploaded. Enter visit notes and confirm to save."
-    );
-  } catch (error) {
-    setVoiceNoteStatus(error.message, true);
-    const els2 = getVoiceNoteEls();
-    if (els2) els2.recordBtn.disabled = false;
-  } finally {
-    _unlockVoiceNoteModal();
-  }
-}
-
-async function startVoiceNoteRecording() {
-  const els = getVoiceNoteEls();
-  if (!els || !navigator.mediaDevices?.getUserMedia) {
-    setVoiceNoteStatus("Recording is not available in this browser. Use “Upload file”.", true);
-    return;
-  }
-  if (!window.MediaRecorder) {
-    setVoiceNoteStatus("MediaRecorder is not supported. Use “Upload file”.", true);
-    return;
-  }
-  try {
-    voiceNoteState.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    // Probe in priority order: MP4/AAC first (universal playback incl. Safari/iOS)
-    const PREFERRED_TYPES = [
-      "audio/mp4;codecs=mp4a.40.2",
-      "audio/mp4",
-      "audio/webm;codecs=opus",
-      "audio/webm",
-      "audio/ogg;codecs=opus"
-    ];
-    const mime = PREFERRED_TYPES.find(t => MediaRecorder.isTypeSupported(t)) || "";
-    voiceNoteState.chunks = [];
-    try {
-      voiceNoteState.mediaRecorder = new MediaRecorder(voiceNoteState.stream, ...(mime ? [{ mimeType: mime }] : []));
-    } catch {
-      voiceNoteState.mediaRecorder = new MediaRecorder(voiceNoteState.stream);
-    }
-    voiceNoteState.mediaRecorder.ondataavailable = (ev) => {
-      if (ev.data && ev.data.size > 0) voiceNoteState.chunks.push(ev.data);
-    };
-    voiceNoteState.mediaRecorder.start();
-
-    // Start browser speech-to-text in parallel (if supported and AI is available)
-    voiceNoteState.transcript = "";
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (SpeechRecognition && voiceNoteState.aiAvailable) {
-      try {
-        const recog = new SpeechRecognition();
-        recog.continuous = true;
-        recog.interimResults = false;
-        recog.lang = voiceNoteState.outputLang === "TH" ? "th-TH" : "en-US";
-        recog.onresult = (ev) => {
-          for (let i = ev.resultIndex; i < ev.results.length; i++) {
-            if (ev.results[i].isFinal) {
-              voiceNoteState.transcript += (voiceNoteState.transcript ? " " : "") + ev.results[i][0].transcript.trim();
-            }
-          }
-        };
-        recog.onerror = () => { /* silently ignore — audio still uploads */ };
-        recog.start();
-        voiceNoteState.recognition = recog;
-      } catch {
-        voiceNoteState.recognition = null;
-      }
-    }
-
-    // Lock all controls except the Stop button while recording
-    els.recordBtn.disabled = true;
-    els.confirmBtn.disabled = true;
-    els.fileInput.disabled = true;
-    els.root.querySelectorAll("[data-voice-note-close]").forEach(el => el.setAttribute("disabled", "true"));
-    els.stopBtn.disabled = false;
-    els.stopBtn.textContent = voiceNoteState.aiAvailable ? "Stop & transcribe" : "Stop & upload";
-    setVoiceNoteStatus("Recording… click Stop when finished.");
-  } catch (error) {
-    setVoiceNoteStatus(error.message || "Could not access microphone.", true);
-    stopVoiceNoteMedia();
-    // Re-enable controls if mic access failed
-    _unlockVoiceNoteModal();
-    els.recordBtn.disabled = false;
-  }
-}
-
-function stopVoiceNoteRecording() {
-  const els = getVoiceNoteEls();
-  if (!els || !voiceNoteState.mediaRecorder) return;
-  const mr = voiceNoteState.mediaRecorder;
-  if (mr.state === "inactive") return;
-  els.stopBtn.disabled = true;
-  setVoiceNoteStatus("Processing recording…");
-  // Stop speech recognition so its final results are committed before upload
-  if (voiceNoteState.recognition) {
-    try { voiceNoteState.recognition.stop(); } catch { /* ignore */ }
-    voiceNoteState.recognition = null;
-  }
-  mr.addEventListener(
-    "stop",
-    async () => {
-      voiceNoteState.stream?.getTracks().forEach((t) => t.stop());
-      voiceNoteState.stream = null;
-      const blob = new Blob(voiceNoteState.chunks, { type: mr.mimeType || "audio/webm" });
-      voiceNoteState.chunks = [];
-      voiceNoteState.mediaRecorder = null;
-      if (!blob.size) {
-        setVoiceNoteStatus("No audio captured. Try again or upload a file.", true);
-        els.recordBtn.disabled = false;
-        return;
-      }
-      const ext = blob.type.includes("webm") ? "webm"
-        : blob.type.includes("mp4")  ? "mp4"
-        : blob.type.includes("ogg")  ? "ogg"
-        : "audio";
-      await uploadVoiceNoteAudio(blob, `note.${ext}`);
-    },
-    { once: true }
-  );
-  mr.stop();
 }
 
 // ── Integration Setup Guide Modal ─────────────────────────────────────────────
@@ -1129,119 +653,6 @@ function requestLostReason(dealName) {
   closeBtn?.addEventListener("click", close);
   modal.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
 })();
-
-function bindVoiceNoteModal() {
-  if (voiceNoteState.initBound) return;
-  const els = getVoiceNoteEls();
-  if (!els) return;
-  voiceNoteState.initBound = true;
-  els.root.addEventListener("click", (event) => {
-    if (event.target?.closest?.("[data-voice-note-close]")) closeVoiceNoteModal();
-    const langBtn = event.target?.closest?.(".vn-lang-btn");
-    if (langBtn) {
-      voiceNoteState.outputLang = langBtn.dataset.lang || "TH";
-      els.root.querySelectorAll(".vn-lang-btn").forEach(b => b.classList.toggle("vn-lang-btn--active", b === langBtn));
-    }
-  });
-  els.recordBtn.addEventListener("click", () => {
-    void startVoiceNoteRecording();
-  });
-  els.stopBtn.addEventListener("click", () => {
-    stopVoiceNoteRecording();
-  });
-  els.fileInput.addEventListener("change", () => {
-    const file = els.fileInput.files?.[0];
-    if (!file) return;
-    void uploadVoiceNoteAudio(file, file.name);
-    els.fileInput.value = "";
-  });
-  els.confirmBtn.addEventListener("click", async () => {
-    if (!voiceNoteState.jobId) return;
-    setVoiceNoteStatus("Saving…");
-    els.confirmBtn.disabled = true;
-    try {
-      await api(`/voice-notes/${voiceNoteState.jobId}/confirm`, {
-        method: "POST",
-        body: {
-          transcriptText: els.transcript.value,
-          summaryText: els.summary.value
-        }
-      });
-      const reloadAs   = voiceNoteState.entityType;
-      const reloadId   = voiceNoteState.entityId;
-      const savedSummary = els.summary.value.trim();
-      setStatus("Voice note confirmed and saved.");
-      closeVoiceNoteModal();
-      if (reloadAs === "DEAL") {
-        await loadDeals();
-        await loadDashboard();
-      } else if (reloadAs === "VISIT") {
-        // If the checkout popup is still open, pre-fill its result field with the voice note summary
-        // so the user sees the text and it gets included in the check-out submission.
-        if (savedSummary) {
-          const checkoutResultEl = qs("#mt-checkout-result");
-          if (checkoutResultEl && !checkoutResultEl.value.trim()) {
-            checkoutResultEl.value = savedSummary;
-          }
-        }
-        await loadVisits();
-        if (reloadId && visitDetailBody && !visitDetailBody.closest("[hidden]")) {
-          openVisitDetail(reloadId);
-        }
-      }
-    } catch (error) {
-      setVoiceNoteStatus(error.message, true);
-      els.confirmBtn.disabled = false;
-    }
-  });
-}
-
-function switchView(target) {
-  Object.entries(views).forEach(([key, el]) => {
-    const isActive = key === target;
-    el.classList.toggle("active", isActive);
-    if (isActive) {
-      el.classList.remove("view-enter");
-      requestAnimationFrame(() => el.classList.add("view-enter"));
-    }
-  });
-  document.querySelectorAll(".nav-btn").forEach((btn) => {
-    btn.classList.toggle("active", btn.dataset.view === target);
-  });
-  if (pageTitle) pageTitle.textContent = pageTitleMap[target] || "ThinkCRM";
-  // Hide onboarding wizard when leaving dashboard
-  const wizard = qs("#onboarding-wizard");
-  if (wizard && target !== "dashboard") wizard.hidden = true;
-}
-
-function showApp() {
-  authScreen.classList.remove("active");
-  appScreen.classList.add("active");
-}
-
-// S10: Trial banner — shown in the status-bar when subscription is TRIALING.
-function showTrialBanner(subscription) {
-  if (!statusBar || !subscription) return;
-  if (subscription.status !== "TRIALING" || !subscription.trialEndsAt) {
-    statusBar.style.display = "none";
-    statusBar.removeAttribute("aria-hidden");
-    return;
-  }
-  const daysLeft = Math.max(0, Math.ceil((new Date(subscription.trialEndsAt) - Date.now()) / 86400000));
-  const urgency  = daysLeft <= 3 ? "danger" : daysLeft <= 7 ? "warning" : "info";
-  statusBar.innerHTML = `<span class="trial-banner trial-banner--${escHtml(urgency)}">
-    ⏳ Trial: <strong>${daysLeft} day${daysLeft === 1 ? "" : "s"} left</strong> — upgrade to keep access after your trial ends.
-  </span>`;
-  statusBar.style.display = "";
-  statusBar.removeAttribute("aria-hidden");
-}
-
-function showAuth() {
-  document.documentElement.classList.remove("has-token");
-  appScreen.classList.remove("active");
-  authScreen.classList.add("active");
-  window.history.replaceState(null, "", "/");
-}
 
 function syncMasterPageFromLocation() {
   const path = window.location.pathname;
@@ -1376,389 +787,6 @@ function syncUserEditFromLocation() {
   return match ? match[1] : null;
 }
 
-function renderDashboard(data) {
-  const completion = Number(data.kpis.visitCompletionRate || 0);
-  const periodMonth = data?.period?.month || state.dashboardMonth;
-  state.dashboardMonth = periodMonth;
-  const topGamers = Array.isArray(data.gamification) ? data.gamification.slice(0, 5) : [];
-  const teams = Array.isArray(data.teamPerformance) ? data.teamPerformance : [];
-  const role = state.user?.role ?? "REP";
-  const canFilterReps = role !== "REP";
-  const allReps = state.cache.salesReps || [];
-  const allTeams = state.cache.teams || [];
-
-  // Filter rep list to selected team
-  const visibleReps = state.dashboardTeamId
-    ? allReps.filter(r => r.teamId === state.dashboardTeamId)
-    : allReps;
-
-  const teamSelectHtml = (canFilterReps && allTeams.length > 0) ? `
-    <label class="dashboard-filter-label">Team
-      <select id="dashboard-team-select" class="dashboard-rep-select">
-        <option value="">All Teams</option>
-        ${allTeams.map(t => `<option value="${t.id}" ${state.dashboardTeamId === t.id ? "selected" : ""}>${escHtml(t.teamName)}</option>`).join("")}
-      </select>
-    </label>` : "";
-
-  const repSelectHtml = (canFilterReps && visibleReps.length > 0) ? `
-    <label class="dashboard-filter-label">Sales Rep
-      <select id="dashboard-rep-select" class="dashboard-rep-select">
-        <option value="">All Reps</option>
-        ${visibleReps.map(r => `<option value="${r.id}" ${state.dashboardRepId === r.id ? "selected" : ""}>${escHtml(r.fullName)}</option>`).join("")}
-      </select>
-    </label>` : "";
-
-  views.dashboard.innerHTML = `
-    <div class="dash-view">
-      <div class="dash-filter-bar">
-        <form id="dashboard-month-form" class="inline-actions dashboard-filter-form">
-          <label class="dashboard-filter-label">
-            <input type="month" name="month" value="${periodMonth}" required />
-          </label>
-          ${teamSelectHtml}
-          ${repSelectHtml}
-          <button type="submit">Apply</button>
-        </form>
-        <div class="inline-actions wrap dashboard-chip-row">
-          <span class="chip">👥 ${data.kpis.usersInScope} reps</span>
-          <span class="chip">✨ ${data.kpis.dealsCreatedInPeriod} new deals</span>
-          <span class="chip">📅 ${data.kpis.visitsPlannedInPeriod} visits planned</span>
-        </div>
-      </div>
-
-      <div class="kpi-strip">
-        <article class="kpi">
-          <div class="kpi-icon">📊</div>
-          <h4>Active Deals</h4>
-          <strong>${data.kpis.activeDeals}</strong>
-          <div class="muted">Open in pipeline</div>
-        </article>
-        <article class="kpi kpi--pipeline">
-          <div class="kpi-icon">💰</div>
-          <h4>Pipeline</h4>
-          <strong>${asMoney(data.kpis.pipelineValue)}</strong>
-          <div class="muted">Potential revenue</div>
-        </article>
-        <article class="kpi kpi--won">
-          <div class="kpi-icon">🏆</div>
-          <h4>Won</h4>
-          <strong>${asMoney(data.kpis.wonValue)}</strong>
-          <div class="muted">Closed &amp; collected 🎉</div>
-        </article>
-        <article class="kpi kpi--lost">
-          <div class="kpi-icon">📉</div>
-          <h4>Lost</h4>
-          <strong>${asMoney(data.kpis.lostValue)}</strong>
-          <div class="muted">Learn &amp; bounce back 💪</div>
-        </article>
-        <article class="kpi kpi--visits">
-          <div class="kpi-icon">🚀</div>
-          <h4>Visit Rate</h4>
-          <strong>${completion}%</strong>
-          <div class="progress kpi-progress"><span style="width:${Math.min(completion, 100)}%"></span></div>
-          <div class="muted">Completed visits</div>
-        </article>
-      </div>
-
-      <div class="dash-grid">
-        <div class="dash-section">
-          <h3 class="section-title">🎯 Target Achievement</h3>
-          ${
-            data.targetVsActual.length
-              ? data.targetVsActual.map((t) => {
-                  const pv = Number(t.progress.visits || 0);
-                  const pd = Number(t.progress.newDealValue || 0);
-                  const pr = Number(t.progress.revenue || 0);
-                  const barCls = (p) => p >= 100 ? "progress-bar--great" : p >= 70 ? "progress-bar--good" : p >= 40 ? "progress-bar--warn" : "progress-bar--low";
-                  const valCls = (p) => p >= 100 ? "metric-val--great" : p >= 70 ? "metric-val--good" : "";
-                  return `
-                <div class="target-rep">
-                  <div class="target-rep-head">
-                    <h4>${escHtml(t.userName)}</h4>
-                    <span class="chip">${escHtml(t.teamName)}</span>
-                    <span class="muted">${t.month}</span>
-                  </div>
-                  <div class="target-metric">
-                    <span class="target-metric-label">🏃 Visits</span>
-                    <div class="progress"><span class="${barCls(pv)}" style="width:${Math.min(pv, 100)}%"></span></div>
-                    <span class="target-metric-val ${valCls(pv)}">${t.actual.visits}/${t.target.visits}</span>
-                  </div>
-                  <div class="target-metric">
-                    <span class="target-metric-label">💼 New Deal</span>
-                    <div class="progress"><span class="${barCls(pd)}" style="width:${Math.min(pd, 100)}%"></span></div>
-                    <span class="target-metric-val ${valCls(pd)}">${asPercent(t.progress.newDealValue)}%</span>
-                  </div>
-                  <div class="target-metric">
-                    <span class="target-metric-label">💵 Revenue</span>
-                    <div class="progress"><span class="${barCls(pr)}" style="width:${Math.min(pr, 100)}%"></span></div>
-                    <span class="target-metric-val ${valCls(pr)}">${asPercent(t.progress.revenue)}%</span>
-                  </div>
-                </div>`;
-                }).join("")
-              : '<div class="empty-state compact"><div class="empty-icon">🎯</div><div><strong>No KPI targets yet</strong><p>Set monthly targets in Settings.</p></div></div>'
-          }
-        </div>
-
-        <div class="dash-section">
-          <div class="section-title-row">
-            <h3 class="section-title" style="margin:0">🏅 Leaderboard</h3>
-            <button type="button" class="section-info-btn" id="leaderboard-info-btn" aria-label="How scoring works">
-              <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="8"/><polyline points="11 12 12 12 12 16"/></svg>
-            </button>
-          </div>
-          ${
-            topGamers.length
-              ? (() => {
-                  const isRep = (state.user?.role ?? "") === "REP";
-                  const myUserId = state.user?.id ?? "";
-                  return topGamers.map((g) => {
-                    const rankLabel = g.rank === 1 ? "🥇" : g.rank === 2 ? "🥈" : g.rank === 3 ? "🥉" : `#${g.rank}`;
-                    const badgeEmoji = g.badge === "Legend" ? "🌟" : g.badge === "Gold" ? "🏅" : g.badge === "Silver" ? "🥈" : "🎖";
-                    const momentumHtml = g.momentum === "up"
-                      ? `<span class="lb-momentum lb-momentum--up"><svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="18 15 12 9 6 15"/></svg>UP</span>`
-                      : g.momentum === "steady"
-                      ? `<span class="lb-momentum lb-momentum--steady"><svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="5 12 19 12"/><polyline points="14 7 19 12 14 17"/></svg>STEADY</span>`
-                      : `<span class="lb-momentum lb-momentum--down"><svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>DOWN</span>`;
-
-                    const isMe = g.userId === myUserId;
-                    const masked = isRep && !isMe;
-
-                    if (masked) {
-                      return `
-                      <div class="leaderboard-item leaderboard-item--masked${g.rank <= 3 ? " leaderboard-item--top" : ""}">
-                        <div class="lb-rank">${rankLabel}</div>
-                        <div class="leaderboard-info">
-                          <h4 class="lb-masked-name">Competitor</h4>
-                          <div class="lb-sub"><span class="lb-masked-badge">———</span></div>
-                        </div>
-                        <div class="leaderboard-score">
-                          <strong>${asPercent(g.score)}</strong>
-                          ${momentumHtml}
-                        </div>
-                      </div>`;
-                    }
-
-                    return `
-                    <div class="leaderboard-item${g.rank <= 3 ? " leaderboard-item--top" : ""}${isMe ? " leaderboard-item--me" : ""}">
-                      <div class="lb-rank">${rankLabel}</div>
-                      <div class="lb-avatar" style="${g.avatarUrl ? "overflow:hidden" : "background:" + avatarColor(g.userName)}">${repAvatarHtml(g.userName, g.avatarUrl)}</div>
-                      <div class="leaderboard-info">
-                        <h4>${escHtml(g.userName)}${isMe ? ' <span class="lb-you-badge">You</span>' : ""}</h4>
-                        <div class="lb-sub">
-                          <span class="lb-badge-pill lb-badge--${g.badge.toLowerCase()}">${badgeEmoji} ${g.badge}</span>
-                          <span class="lb-streak">🔥 ${g.streakDays}d</span>
-                          <span class="lb-team muted">${escHtml(g.teamName)}</span>
-                        </div>
-                      </div>
-                      <div class="leaderboard-score">
-                        <strong>${asPercent(g.score)}</strong>
-                        ${momentumHtml}
-                      </div>
-                    </div>`;
-                  }).join("");
-                })()
-              : '<div class="empty-state compact"><div class="empty-icon">🏆</div><div><strong>No leaderboard data</strong><p>Create KPI targets to generate rankings.</p></div></div>'
-          }
-        </div>
-      </div>
-
-      ${teams.length ? `
-        <div class="dash-section" style="margin-top: var(--sp-4)">
-          <h3 class="section-title">👥 Team Performance</h3>
-          ${teams.map((team) => {
-            const tvr = Number(team.visitCompletionRate || 0);
-            const barCls = tvr >= 100 ? "progress-bar--great" : tvr >= 70 ? "progress-bar--good" : tvr >= 40 ? "progress-bar--warn" : "progress-bar--low";
-            return `
-            <div class="team-row">
-              <div class="target-rep-head">
-                <h4>🏢 ${escHtml(team.teamName)}</h4>
-                <span class="chip">👤 ${team.memberCount} member${team.memberCount === 1 ? "" : "s"}</span>
-              </div>
-              <div class="inline-actions wrap dashboard-chip-row" style="margin-top: var(--sp-1)">
-                <span class="chip">📂 ${team.activeDeals} deals</span>
-                <span class="chip">💰 ${asMoney(team.pipelineValue)}</span>
-                <span class="chip chip-success">🏆 ${asMoney(team.wonValue)}</span>
-                <span class="chip chip-danger">📉 ${asMoney(team.lostValue)}</span>
-              </div>
-              <div class="target-metric" style="margin-top: var(--sp-2)">
-                <span class="target-metric-label">📍 Visits</span>
-                <div class="progress"><span class="${barCls}" style="width:${Math.min(tvr, 100)}%"></span></div>
-                <span class="target-metric-val">${team.checkedOutVisits}/${team.plannedVisits}</span>
-              </div>
-            </div>`;
-          }).join("")}
-        </div>
-      ` : ""}
-
-      <!-- ── AI Lost Deals Insights ─────────────────────────── -->
-      <div class="dash-section ai-insights-section" style="margin-top: var(--sp-4)">
-        <div class="ai-insights-header">
-          <div class="ai-insights-title-row">
-            <span class="ai-insights-icon">
-              <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 6v6l4 2"/><circle cx="19" cy="5" r="3" fill="currentColor" stroke="none"/></svg>
-            </span>
-            <h3 class="section-title" style="margin:0">AI Lost Deals Insights</h3>
-            <span class="chip">Beta</span>
-          </div>
-          <div class="ai-insights-controls">
-            <input type="month" id="ai-date-from" class="ai-date-input" title="From" />
-            <span class="muted small">to</span>
-            <input type="month" id="ai-date-to"   class="ai-date-input" title="To" />
-            <button type="button" class="ai-run-btn" id="ai-run-btn">
-              <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-              Analyze
-            </button>
-          </div>
-        </div>
-        <div id="ai-insights-body" class="ai-insights-body">
-          <p class="ai-insights-placeholder">
-            <svg width="32" height="32" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5" opacity=".35" aria-hidden="true"><path d="M9.663 17h4.673M12 3v1m6.364 1.636-.707.707M21 12h-1M4 12H3m3.343-5.657-.707-.707m2.828 9.9a5 5 0 1 1 7.072 0l-.548.547A3.374 3.374 0 0 0 14 18.469V19a2 2 0 1 1-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
-            Select a date range and click <strong>Analyze</strong> to get AI insights from your lost deal notes.
-          </p>
-        </div>
-      </div>
-    </div>
-  `;
-
-  qs("#dashboard-month-form")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const fd = new FormData(event.currentTarget);
-    const month = String(fd.get("month") || "");
-    if (!month) return;
-    state.dashboardRepId = String(fd.get("repId") || "");
-    await loadDashboard(month);
-  });
-
-  qs("#dashboard-team-select")?.addEventListener("change", async (e) => {
-    state.dashboardTeamId = e.target.value;
-    state.dashboardRepId = "";
-    await loadDashboard();
-  });
-
-  qs("#dashboard-rep-select")?.addEventListener("change", async (e) => {
-    state.dashboardRepId = e.target.value;
-    await loadDashboard();
-  });
-
-  // Pre-fill date range to last 3 months
-  const now = new Date();
-  const toMonth   = now.toISOString().slice(0, 7);
-  const fromMonth = new Date(now.getFullYear(), now.getMonth() - 2, 1).toISOString().slice(0, 7);
-  const aiFromEl = qs("#ai-date-from");
-  const aiToEl   = qs("#ai-date-to");
-  if (aiFromEl) aiFromEl.value = fromMonth;
-  if (aiToEl)   aiToEl.value   = toMonth;
-
-  qs("#ai-run-btn")?.addEventListener("click", async () => {
-    const body = qs("#ai-insights-body");
-    const runBtn = qs("#ai-run-btn");
-    if (!body || !runBtn) return;
-
-    const dateFrom = aiFromEl?.value ? `${aiFromEl.value}-01T00:00:00.000Z` : undefined;
-    const dateTo   = aiToEl?.value   ? `${aiToEl.value}-31T23:59:59.999Z`   : undefined;
-    const params   = new URLSearchParams();
-    if (dateFrom) params.set("dateFrom", dateFrom);
-    if (dateTo)   params.set("dateTo",   dateTo);
-
-    runBtn.disabled = true;
-    runBtn.textContent = "Analyzing…";
-    body.innerHTML = `<div class="ai-insights-loading"><span class="ai-spinner"></span> Reading lost deal notes and finding patterns…</div>`;
-
-    try {
-      const result = await api(`/ai/lost-deals-analysis?${params}`);
-
-      if (result.configured === false) {
-        body.innerHTML = `
-          <div class="ai-not-configured">
-            <div class="ai-not-configured-icon">
-              <svg width="28" height="28" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
-              </svg>
-            </div>
-            <div class="ai-not-configured-body">
-              <strong>Anthropic API key not configured</strong>
-              <p>To use AI-powered insights, add your Anthropic API key in Organization Settings.</p>
-              <button class="primary small" id="ai-goto-settings-btn">Go to Settings → Integrations</button>
-            </div>
-          </div>`;
-        qs("#ai-goto-settings-btn")?.addEventListener("click", () => {
-          state.settingsPage = "integrations";
-          navigateToSettingsPage("integrations");
-          switchView("settings");
-        });
-        return;
-      }
-
-      if (!result.analysis || result.dealCount === 0) {
-        body.innerHTML = `<p class="ai-insights-placeholder">No lost deals with notes found for this period. Move deals to your Lost stage and add notes to start building insights.</p>`;
-        return;
-      }
-
-      const { analysis, dealCount } = result;
-      const priColor = (p) => p === "high" ? "var(--danger)" : p === "medium" ? "var(--warning)" : "var(--success)";
-      const priBg    = (p) => p === "high" ? "var(--danger-bg)" : p === "medium" ? "var(--warning-bg)" : "var(--success-bg)";
-
-      body.innerHTML = `
-        <div class="ai-insights-result">
-          <div class="ai-summary-box">
-            <p class="ai-summary-text">${escHtml(analysis.summary || "")}</p>
-            <span class="ai-summary-meta">${dealCount} lost deal${dealCount !== 1 ? "s" : ""} analyzed</span>
-          </div>
-
-          ${analysis.themes?.length ? `
-          <div class="ai-block">
-            <h4 class="ai-block-title">Key Themes</h4>
-            <div class="ai-themes">
-              ${analysis.themes.map((t) => `
-                <div class="ai-theme-row">
-                  <div class="ai-theme-bar-wrap">
-                    <div class="ai-theme-bar" style="width:${Math.min(t.percentage || 0, 100)}%"></div>
-                  </div>
-                  <div class="ai-theme-body">
-                    <div class="ai-theme-head">
-                      <strong>${escHtml(t.name)}</strong>
-                      <span class="ai-theme-pct">${t.count} deal${t.count !== 1 ? "s" : ""} · ${t.percentage || 0}%</span>
-                    </div>
-                    <p class="ai-theme-desc">${escHtml(t.description || "")}</p>
-                    ${t.examples?.length ? `<div class="ai-theme-quotes">${t.examples.slice(0, 2).map((q) => `<span class="ai-quote">"${escHtml(q)}"</span>`).join("")}</div>` : ""}
-                  </div>
-                </div>
-              `).join("")}
-            </div>
-          </div>` : ""}
-
-          ${analysis.trends?.length ? `
-          <div class="ai-block">
-            <h4 class="ai-block-title">Trends</h4>
-            <ul class="ai-trend-list">
-              ${analysis.trends.map((t) => `<li>${escHtml(t)}</li>`).join("")}
-            </ul>
-          </div>` : ""}
-
-          ${analysis.recommendations?.length ? `
-          <div class="ai-block">
-            <h4 class="ai-block-title">Recommendations</h4>
-            <div class="ai-recs">
-              ${analysis.recommendations.map((r) => `
-                <div class="ai-rec-row">
-                  <span class="ai-rec-badge" style="color:${priColor(r.priority)};background:${priBg(r.priority)}">${r.priority}</span>
-                  <div class="ai-rec-body">
-                    <strong>${escHtml(r.title)}</strong>
-                    <p>${escHtml(r.detail)}</p>
-                  </div>
-                </div>
-              `).join("")}
-            </div>
-          </div>` : ""}
-        </div>`;
-    } catch (err) {
-      body.innerHTML = `<p class="ai-insights-placeholder" style="color:var(--danger)">${escHtml(err.message || "Analysis failed. Check that ANTHROPIC_API_KEY is set on the server.")}</p>`;
-    } finally {
-      runBtn.disabled = false;
-      runBtn.innerHTML = `<svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"/></svg> Analyze`;
-    }
-  });
-}
 
 function renderMasterData(paymentTerms) {
   const termOptions = paymentTerms
@@ -3156,7 +2184,7 @@ function openCheckOutModal(visitId, customerName) {
   // Hide (not remove) the checkout modal so it's restored when voice note closes.
   voiceBtn.addEventListener("click", () => {
     modal.style.display = "none";
-    voiceNoteState.onClose = () => { modal.style.display = ""; };
+    setVoiceNoteOnClose(() => { modal.style.display = ""; });
     void openVoiceNoteModal("VISIT", visitId, `Check-out · ${customerName || ""}`);
   });
 
@@ -3661,243 +2689,7 @@ function renderVisitDetailContent(visit, changelogs) {
   }
 }
 
-function renderVisits(visits) {
-  const f         = state.visitPage;
-  const isAdmin   = state.user?.role === "ADMIN";
-  const canFilterReps = state.user?.role !== "REP";
-  const allReps   = state.cache.salesReps || [];
-  const q         = (f.query || "").toLowerCase();
-  const statusLabel = { PLANNED: "Planned", CHECKED_IN: "Active", CHECKED_OUT: "Completed" };
 
-  const total   = visits.length;
-  const planned = visits.filter(v => v.status === "PLANNED").length;
-  const active  = visits.filter(v => v.status === "CHECKED_IN").length;
-  const done    = visits.filter(v => v.status === "CHECKED_OUT").length;
-
-  const chevron = `<svg class="ms-dropdown-chevron" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M2 4l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
-
-  const repMsHtml = (canFilterReps && allReps.length > 0) ? (() => {
-    const sel = f.repIds || [];
-    const allSel = sel.length === 0 || sel.length === allReps.length;
-    const btnLabel = allSel ? "All Reps" : sel.length === 1
-      ? escHtml(allReps.find(r => r.id === sel[0])?.fullName || "1 rep")
-      : `${sel.length} reps`;
-    const items = allReps.map(r => `
-      <label class="ms-dropdown-item">
-        <input type="checkbox" name="repIds" value="${r.id}" ${sel.includes(r.id) ? "checked" : ""}>
-        <span class="ms-item-label">${escHtml(r.fullName)}</span>
-      </label>`).join("");
-    return `<div class="ms-dropdown" id="vp-rep-ms">
-      <button type="button" class="ms-dropdown-btn" id="vp-rep-btn">
-        <span class="ms-dropdown-label" id="vp-rep-label">${btnLabel}</span>${chevron}
-      </button>
-      <div class="ms-dropdown-panel" id="vp-rep-panel" hidden>
-        <div class="ms-dropdown-header">
-          <button type="button" class="ms-select-all" id="vp-rep-select-all">Select all</button>
-          <button type="button" class="ms-clear" id="vp-rep-clear">Clear</button>
-        </div>
-        <div class="ms-dropdown-list">${items}</div>
-      </div>
-    </div>`;
-  })() : "";
-
-  views.visits.innerHTML = `
-    <div class="visits-page-header">
-      <h3 class="visits-title">📍 Visits</h3>
-      <button type="button" id="add-visit-btn">
-        📍 Plan Visit
-      </button>
-    </div>
-
-    <div class="vp-stats-bar">
-      <div class="vp-stat"><span class="vp-stat-value">${total}</span><span class="vp-stat-label">📋 Total</span></div>
-      <div class="vp-stat"><span class="vp-stat-value">${planned}</span><span class="vp-stat-label">🗓️ Planned</span></div>
-      <div class="vp-stat vp-stat--active"><span class="vp-stat-value">${active}</span><span class="vp-stat-label">🔥 Active</span></div>
-      <div class="vp-stat vp-stat--done"><span class="vp-stat-value">${done}</span><span class="vp-stat-label">✅ Done</span></div>
-    </div>
-
-    <div class="vp-filter-bar">
-      <div class="vp-search-wrap">
-        <svg class="vp-search-icon" width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <input class="vp-search" id="vp-search" placeholder="Search customer, rep, objective…" value="${escHtml(f.query)}" />
-      </div>
-      <div class="vp-filter-chips">
-        ${["PLANNED", "CHECKED_IN", "CHECKED_OUT"].map(s => `
-          <button class="vp-chip ${f.status === s ? "vp-chip--active" : ""}" data-vp-status="${s}">
-            ${statusLabel[s]}
-          </button>
-        `).join("")}
-      </div>
-      ${repMsHtml}
-      <div class="vp-date-range">
-        <input type="date" class="vp-date-input" id="vp-date-from" value="${f.dateFrom}" title="From" />
-        <span class="vp-date-sep">–</span>
-        <input type="date" class="vp-date-input" id="vp-date-to" value="${f.dateTo}" title="To" />
-      </div>
-    </div>
-
-    <div class="visits-outer">
-      <div id="vp-list-container">${buildVisitListHtml(visits, q, f.status)}</div>
-    </div>
-  `;
-
-  attachVisitListListeners(qs("#vp-list-container"));
-
-  // Status chips — toggle (click active to clear)
-  views.visits.querySelectorAll("[data-vp-status]").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      state.visitPage.status = state.visitPage.status === btn.dataset.vpStatus ? "" : btn.dataset.vpStatus;
-      await loadVisits();
-    });
-  });
-
-  // Text search — repaint list only
-  qs("#vp-search")?.addEventListener("input", (e) => {
-    state.visitPage.query = e.target.value;
-    const container = qs("#vp-list-container");
-    if (container) {
-      container.innerHTML = buildVisitListHtml(state.cache.visits, e.target.value.toLowerCase(), state.visitPage.status);
-      attachVisitListListeners(container);
-    }
-  });
-
-  // Date range
-  qs("#vp-date-from")?.addEventListener("change", async (e) => { state.visitPage.dateFrom = e.target.value; await loadVisits(); });
-  qs("#vp-date-to")?.addEventListener("change",   async (e) => { state.visitPage.dateTo   = e.target.value; await loadVisits(); });
-
-  // Rep multiselect
-  if (canFilterReps && allReps.length > 0) {
-    const btn   = qs("#vp-rep-btn");
-    const panel = qs("#vp-rep-panel");
-    const label = qs("#vp-rep-label");
-
-    const updateRepLabel = () => {
-      const sel = state.visitPage.repIds;
-      const allSel = sel.length === 0 || sel.length === allReps.length;
-      label.textContent = allSel ? "All Reps" : sel.length === 1
-        ? (allReps.find(r => r.id === sel[0])?.fullName || "1 rep")
-        : `${sel.length} reps`;
-    };
-
-    btn?.addEventListener("click", (e) => { e.stopPropagation(); panel.hidden = !panel.hidden; });
-    document.addEventListener("click", function closeRepPanel(e) {
-      if (!qs("#vp-rep-ms")?.contains(e.target)) { panel.hidden = true; document.removeEventListener("click", closeRepPanel); }
-    });
-
-    qs("#vp-rep-select-all")?.addEventListener("click", async () => {
-      panel.querySelectorAll("input[type=checkbox]").forEach(cb => cb.checked = true);
-      state.visitPage.repIds = [];
-      updateRepLabel();
-      await loadVisits();
-    });
-
-    qs("#vp-rep-clear")?.addEventListener("click", async () => {
-      panel.querySelectorAll("input[type=checkbox]").forEach(cb => cb.checked = false);
-      state.visitPage.repIds = allReps.map(r => r.id);
-      updateRepLabel();
-      await loadVisits();
-    });
-
-    panel?.querySelectorAll("input[type=checkbox]").forEach(cb => {
-      cb.addEventListener("change", async () => {
-        const checked = [...panel.querySelectorAll("input[type=checkbox]:checked")].map(c => c.value);
-        state.visitPage.repIds = checked.length === allReps.length ? [] : checked;
-        updateRepLabel();
-        await loadVisits();
-      });
-    });
-  }
-
-  qs("#add-visit-btn")?.addEventListener("click", () => openVisitCreateModal());
-}
-
-function openVisitCreateModal(dateTime) {
-  const modal = qs("#visit-create-modal");
-  if (!modal) return;
-  // Reset customer autocomplete
-  const inp = modal.querySelector("#visit-customer-input");
-  const hid = modal.querySelector("#visit-customer-id");
-  const lst = modal.querySelector("#visit-customer-list");
-  if (inp) inp.value = "";
-  if (hid) hid.value = "";
-  if (lst) lst.hidden = true;
-  // Reset deal field
-  const dealLabel  = modal.querySelector("#visit-deal-label");
-  const dealSelect = modal.querySelector("#visit-deal-select");
-  if (dealLabel)  dealLabel.hidden = true;
-  if (dealSelect) dealSelect.innerHTML = `<option value="">— No deal —</option>`;
-  // Pre-fill plannedAt: use provided dateTime or default to now rounded to nearest minute
-  const now = new Date();
-  now.setSeconds(0, 0);
-  const nowLocal = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-  const base = dateTime ? new Date(dateTime) : new Date();
-  base.setSeconds(0, 0);
-  const local = new Date(base.getTime() - base.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-  const plannedAtInput = modal.querySelector("#visit-planned-at");
-  plannedAtInput.min   = nowLocal;
-  plannedAtInput.value = local < nowLocal ? nowLocal : local;
-  // Reset location field
-  const siteLat = modal.querySelector("#visit-site-lat");
-  const siteLng = modal.querySelector("#visit-site-lng");
-  const locPreview = modal.querySelector("#visit-location-preview");
-  const pickBtn = modal.querySelector("#visit-pick-location-btn");
-  if (siteLat) siteLat.value = "";
-  if (siteLng) siteLng.value = "";
-  if (locPreview) locPreview.hidden = true;
-  if (pickBtn) pickBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> Pick on Map`;
-  // Reset visit type to PLANNED and sync required state
-  const plannedRadio = modal.querySelector('[name="visitType"][value="PLANNED"]');
-  if (plannedRadio) plannedRadio.checked = true;
-  syncVisitPlannedAtRequired(modal);
-  modal.querySelector("#visit-form")?.reset && false; // intentional: keep defaults above
-  modal.hidden = false;
-}
-
-function closeVisitCreateModal() {
-  const modal = qs("#visit-create-modal");
-  if (modal) modal.hidden = true;
-}
-
-// ── Visit Edit Modal ──────────────────────────────────────────────────────────
-
-function openVisitEditModal(visit) {
-  const modal = qs("#visit-edit-modal");
-  if (!modal) return;
-  qs("#visit-edit-id").value = visit.id;
-  // Pre-fill plannedAt in local time
-  if (visit.plannedAt) {
-    const d = new Date(visit.plannedAt);
-    const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-    qs("#visit-edit-planned-at").value = local;
-  } else {
-    qs("#visit-edit-planned-at").value = "";
-  }
-  qs("#visit-edit-objective").value = visit.objective || "";
-  // Pre-fill location
-  const latEl = qs("#visit-edit-site-lat");
-  const lngEl = qs("#visit-edit-site-lng");
-  const preview = qs("#visit-edit-location-preview");
-  const locText = qs("#visit-edit-location-text");
-  const pickBtn = qs("#visit-edit-pick-location-btn");
-  if (visit.siteLat != null && visit.siteLng != null) {
-    latEl.value = visit.siteLat;
-    lngEl.value = visit.siteLng;
-    preview.hidden = false;
-    locText.textContent = `${Number(visit.siteLat).toFixed(6)}, ${Number(visit.siteLng).toFixed(6)}`;
-    pickBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> Change Location`;
-  } else {
-    latEl.value = "";
-    lngEl.value = "";
-    preview.hidden = true;
-    pickBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> Pick on Map`;
-  }
-  modal.hidden = false;
-}
-
-function closeVisitEditModal() {
-  const modal = qs("#visit-edit-modal");
-  if (modal) modal.hidden = true;
-}
 
 (function initVisitEditModal() {
   const modal = qs("#visit-edit-modal");
@@ -4031,516 +2823,9 @@ function closeDealEditModal() {
   });
 })();
 
-function syncVisitPlannedAtRequired(modal) {
-  const visitType = modal.querySelector('[name="visitType"]:checked')?.value;
-  const plannedAtInput = modal.querySelector("#visit-planned-at");
-  const label = modal.querySelector("#visit-planned-at-label");
-  if (visitType === "PLANNED") {
-    plannedAtInput.required = true;
-    if (!label.querySelector(".req-star")) {
-      const star = document.createElement("span");
-      star.className = "req-star";
-      star.textContent = " *";
-      const textSpan = label.querySelector(".form-label-text");
-      (textSpan || label).appendChild(star);
-    }
-  } else {
-    plannedAtInput.required = false;
-    label.querySelector(".req-star")?.remove();
-  }
-}
 
-function showEventDetail(ev, anchorEl) {
-  qs("#cal-event-popover")?.remove();
-
-  const at = new Date(ev.at);
-  const dateStr = at.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
-  const timeStr = at.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
-  const typeLabel = ev.type === "visit" ? "Visit" : "Deal";
-  const titleCore = ev.title.replace(/^(Visit|Deal): /, "");
-
-  const statusLabel = ev.status
-    ? { PLANNED: "Planned", CHECKED_IN: "Checked-in", CHECKED_OUT: "Checked-out",
-        OPEN: "Open", WON: "Won", LOST: "Lost" }[ev.status] ?? ev.status.replace(/_/g, " ")
-    : "";
-  const statusColor = ev.type === "deal"
-    ? ev.status === "WON" ? "green" : ev.status === "LOST" ? "red" : ev.color
-    : ev.color;
-
-  // Compute stage accent var by finding the stage's non-terminal index in the cache
-  const stageAccent = (() => {
-    if (!ev.stage) return null;
-    const stages = state.cache.dealStages || [];
-    let ntIdx = 0;
-    for (const s of stages) {
-      const v = stageAccentVar(s.stageName, ntIdx);
-      if (s.id === ev.stage.id) return v;
-      if (v !== "--stage-3" && v !== "--stage-4") ntIdx++;
-    }
-    return stageAccentVar(ev.stage.name, 0);
-  })();
-
-  const rows = [
-    `<div class="ced-row"><span class="ced-label">Date</span><span class="ced-value">${dateStr}</span></div>`,
-    `<div class="ced-row"><span class="ced-label">Time</span><span class="ced-value">${timeStr}</span></div>`,
-    ev.customer ? `<div class="ced-row"><span class="ced-label">Customer</span><span class="ced-value">${escHtml(ev.customer.name)}</span></div>` : "",
-    ev.owner    ? `<div class="ced-row"><span class="ced-label">${ev.type === "deal" ? "Owner" : "Sales Rep"}</span><span class="ced-value">${escHtml(ev.owner.name)}</span></div>` : "",
-    ev.stage && stageAccent ? `<div class="ced-row"><span class="ced-label">Stage</span><span class="ced-value"><span class="ced-stage-badge" style="--sa:var(${stageAccent})">${escHtml(ev.stage.name)}</span></span></div>` : "",
-    statusLabel ? `<div class="ced-row"><span class="ced-label">Status</span><span class="ced-value"><span class="ced-status ced-status--${statusColor}">${statusLabel}</span></span></div>` : "",
-  ].filter(Boolean).join("");
-
-  document.body.insertAdjacentHTML("beforeend", `
-    <div id="cal-event-popover" class="cal-event-popover">
-      <div class="ced-header">
-        <span class="ced-type-badge ced-type--${ev.type}">${typeLabel}</span>
-        <span class="ced-title">${escHtml(titleCore)}</span>
-        <button class="ced-close" id="ced-close-btn" aria-label="Close">✕</button>
-      </div>
-      <div class="ced-body">${rows}</div>
-      <div class="ced-footer">
-        <button class="ced-action" data-goto="${ev.type === "visit" ? "visits" : "deals"}">
-          View ${typeLabel} →
-        </button>
-      </div>
-    </div>
-  `);
-
-  const popover = qs("#cal-event-popover");
-  const rect = anchorEl.getBoundingClientRect();
-  const pw = 272;
-  const ph = 220;
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-  let left = rect.left;
-  let top  = rect.bottom + 6 + window.scrollY;
-  if (left + pw > vw - 8) left = vw - pw - 8;
-  if (rect.bottom + 6 + ph > vh) top = rect.top - ph - 6 + window.scrollY;
-  if (left < 8) left = 8;
-  popover.style.left = `${left}px`;
-  popover.style.top  = `${top}px`;
-
-  const dismiss = () => popover.remove();
-
-  qs("#ced-close-btn")?.addEventListener("click", (e) => { e.stopPropagation(); dismiss(); });
-
-  popover.querySelector(".ced-action")?.addEventListener("click", () => {
-    dismiss();
-    if (ev.type === "visit") {
-      qs(`.nav-btn[data-view="visits"]`)?.click();
-      openVisitDetail(ev.entityId);
-    } else {
-      openDeal360(ev.entityId);
-    }
-  });
-
-  setTimeout(() => {
-    document.addEventListener("click", function outsideHandler(e) {
-      if (!popover.contains(e.target)) {
-        dismiss();
-        document.removeEventListener("click", outsideHandler);
-      }
-    });
-  }, 0);
-
-  document.addEventListener("keydown", function escHandler(e) {
-    if (e.key === "Escape") { dismiss(); document.removeEventListener("keydown", escHandler); }
-  }, { once: true });
-}
 
 // Visit create modal events (wired once at module level below)
-function renderCalendar(calendarData) {
-  const filters = state.calendarFilters;
-  const events = Array.isArray(calendarData?.events) ? calendarData.events : [];
-  const view = filters.view || "month";
-
-  // Group events by local date key "YYYY-MM-DD"
-  const eventsByDate = {};
-  events.forEach((ev) => {
-    const d = new Date(ev.at);
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    if (!eventsByDate[key]) eventsByDate[key] = [];
-    eventsByDate[key].push(ev);
-  });
-
-  const anchor = new Date(filters.anchorDate || new Date().toISOString());
-  const year = anchor.getFullYear();
-  const month = anchor.getMonth();
-  const todayStr = (() => {
-    const t = new Date();
-    return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
-  })();
-
-  const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
-
-  function eventChip(ev, compact = false) {
-    const label = ev.title || ev.customer?.name || "Event";
-    return `<div class="cal-event cal-event--${ev.color || "blue"}" data-event-id="${ev.id}" title="${escHtml(label)}${ev.customer?.name ? " · " + escHtml(ev.customer.name) : ""}">
-      ${compact ? "" : `<span class="cal-event-dot"></span>`}
-      <span class="cal-event-label">${escHtml(label)}</span>
-    </div>`;
-  }
-
-  function renderMonthView() {
-    const firstDay = new Date(year, month, 1);
-    const lastDate = new Date(year, month + 1, 0).getDate();
-    const startOffset = (firstDay.getDay() + 6) % 7; // Mon=0
-    const cells = [];
-    for (let i = 0; i < startOffset; i++) cells.push(null);
-    for (let d = 1; d <= lastDate; d++) cells.push(d);
-    while (cells.length % 7 !== 0) cells.push(null);
-
-    return `
-      <div class="cal-month">
-        <div class="cal-weekdays">
-          ${["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map((d) => `<div class="cal-weekday">${d}</div>`).join("")}
-        </div>
-        <div class="cal-grid">
-          ${cells.map((day) => {
-            if (!day) return `<div class="cal-day cal-day--empty"></div>`;
-            const dateKey = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-            const dayEvs = eventsByDate[dateKey] || [];
-            const isToday = dateKey === todayStr;
-            const maxShow = 3;
-            const overflow = Math.max(0, dayEvs.length - maxShow);
-            return `
-              <div class="cal-day${isToday ? " cal-day--today" : ""}${dayEvs.length ? " cal-day--has-events" : ""}" data-date="${dateKey}">
-                <span class="cal-day-num">${day}</span>
-                <div class="cal-event-list">
-                  ${dayEvs.slice(0, maxShow).map((e) => eventChip(e)).join("")}
-                  ${overflow ? `<div class="cal-overflow">+${overflow} more</div>` : ""}
-                </div>
-              </div>
-            `;
-          }).join("")}
-        </div>
-      </div>
-    `;
-  }
-
-  function renderDayView() {
-    const dayKey = `${anchor.getFullYear()}-${String(anchor.getMonth() + 1).padStart(2, "0")}-${String(anchor.getDate()).padStart(2, "0")}`;
-    const dayEvs = eventsByDate[dayKey] || [];
-    const dayLabel = anchor.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-
-    // Group by hour
-    const byHour = {};
-    dayEvs.forEach((ev) => {
-      const h = new Date(ev.at).getHours();
-      if (!byHour[h]) byHour[h] = [];
-      byHour[h].push(ev);
-    });
-
-    const hours = Array.from({ length: 24 }, (_, i) => i);
-    return `
-      <div class="cal-day-view">
-        <div class="cal-day-header">${dayLabel}
-          ${dayEvs.length ? `<span class="cal-day-count">${dayEvs.length} event${dayEvs.length !== 1 ? "s" : ""}</span>` : ""}
-        </div>
-        <div class="cal-timeline">
-          ${hours.map((h) => {
-            const evs = byHour[h] || [];
-            const timeLabel = `${String(h).padStart(2, "0")}:00`;
-            return `
-              <div class="cal-hour-slot${evs.length ? " cal-hour-slot--has-events" : ""}" data-date="${dayKey}" data-hour="${h}">
-                <div class="cal-hour-label">${timeLabel}</div>
-                <div class="cal-hour-events">
-                  ${evs.map((ev) => `
-                    <div class="cal-tl-event cal-event--${ev.color || "blue"}" data-event-id="${ev.id}">
-                      <span class="cal-tl-title">${escHtml(ev.title)}</span>
-                      ${ev.customer?.name ? `<span class="cal-tl-meta">${escHtml(ev.customer.name)}</span>` : ""}
-                      ${ev.status ? `<span class="cal-tl-badge">${ev.status}</span>` : ""}
-                    </div>
-                  `).join("")}
-                </div>
-              </div>
-            `;
-          }).join("")}
-        </div>
-        ${!dayEvs.length ? `<div class="empty-state"><div class="empty-icon">🗓️</div><div><strong>No events on this day</strong><p class="muted">Use the arrows to navigate or switch to Month view.</p></div></div>` : ""}
-      </div>
-    `;
-  }
-
-  function renderYearView() {
-    return `
-      <div class="cal-year-view">
-        ${MONTH_NAMES.map((mName, mIdx) => {
-          const firstDay = new Date(year, mIdx, 1);
-          const lastDate = new Date(year, mIdx + 1, 0).getDate();
-          const startOffset = (firstDay.getDay() + 6) % 7;
-          const cells = [];
-          for (let i = 0; i < startOffset; i++) cells.push(null);
-          for (let d = 1; d <= lastDate; d++) cells.push(d);
-          while (cells.length % 7 !== 0) cells.push(null);
-
-          return `
-            <div class="cal-mini-month">
-              <div class="cal-mini-title">${mName}</div>
-              <div class="cal-mini-weekdays">
-                ${["M","T","W","T","F","S","S"].map((d) => `<span>${d}</span>`).join("")}
-              </div>
-              <div class="cal-mini-grid">
-                ${cells.map((day) => {
-                  if (!day) return `<span class="cal-mini-day cal-mini-day--empty"></span>`;
-                  const dateKey = `${year}-${String(mIdx + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-                  const hasEvents = (eventsByDate[dateKey] || []).length > 0;
-                  const isToday = dateKey === todayStr;
-                  return `<span class="cal-mini-day${isToday ? " cal-mini-day--today" : ""}${hasEvents ? " cal-mini-day--dot" : ""}">${day}</span>`;
-                }).join("")}
-              </div>
-            </div>
-          `;
-        }).join("")}
-      </div>
-    `;
-  }
-
-  const navTitle = view === "month"
-    ? `${MONTH_NAMES[month]} ${year}`
-    : view === "day"
-      ? anchor.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })
-      : `${year}`;
-
-  views.calendar.innerHTML = `
-    <div class="calendar-outer">
-      <div class="cal-toolbar">
-        <div class="cal-toolbar-main">
-          <div class="cal-nav-group">
-            <button class="cal-nav-btn" id="calendar-prev">‹</button>
-            <h2 class="cal-nav-title">${navTitle}</h2>
-            <button class="cal-nav-btn" id="calendar-next">›</button>
-          </div>
-          <div class="cal-view-tabs">
-            <button class="cal-view-tab${view === "month" ? " active" : ""}" data-view="month">Month</button>
-            <button class="cal-view-tab${view === "day" ? " active" : ""}" data-view="day">Day</button>
-            <button class="cal-view-tab${view === "year" ? " active" : ""}" data-view="year">Year</button>
-          </div>
-          <button class="cal-filter-toggle ghost" id="cal-filter-toggle">
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M2 3h10M4 7h6M6 11h2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-            Filters${events.length ? ` · ${events.length}` : ""}
-          </button>
-        </div>
-        <div class="cal-filter-bar" id="cal-filter-bar" hidden>
-          <form id="calendar-filter-form" class="cal-filter-grid">
-            ${(() => {
-
-              // ── Events ───────────────────────────────────────────────────
-              const eventsHtml = msDropdown({
-                id: "cal-events", fieldName: "eventTypes",
-                options: [{ value: "visit", label: "Visit" }, { value: "deal", label: "Deal" }],
-                selected: filters.eventTypes || [], allLabel: "All Events", singularUnit: "event"
-              });
-
-              // ── Sales Rep ─────────────────────────────────────────────────
-              const calReps = state.cache.salesReps || [];
-              const calCanFilterReps = state.user?.role !== "REP" && calReps.length > 0;
-              const ownerOptions = calReps.map(u => ({ value: u.id, label: u.fullName || u.id }));
-              const ownerHtml = calCanFilterReps ? msDropdown({
-                id: "cal-owner", fieldName: "ownerIds",
-                options: ownerOptions, selected: filters.ownerIds || [],
-                allLabel: "All Sales Reps", singularUnit: "rep"
-              }) : "";
-
-              // ── Status ────────────────────────────────────────────────────
-              const statusHtml = msDropdown({
-                id: "cal-status", fieldName: "visitStatuses",
-                options: [
-                  { value: "PLANNED",      label: "Planned" },
-                  { value: "CHECKED_IN",   label: "Checked-in" },
-                  { value: "CHECKED_OUT",  label: "Checked-out" }
-                ],
-                selected: filters.visitStatuses || [], allLabel: "All Statuses", singularUnit: "status"
-              });
-
-              // ── Stage ─────────────────────────────────────────────────────
-              const stageOptions = (state.cache.dealStages || []).map(s => ({ value: s.id, label: s.stageName }));
-              const stageHtml = stageOptions.length ? msDropdown({
-                id: "cal-stage", fieldName: "dealStageIds",
-                options: stageOptions, selected: filters.dealStageIds || [],
-                allLabel: "All Stages", singularUnit: "stage"
-              }) : "";
-
-              return `
-            <div class="cal-filter-field">
-              <span class="cal-filter-label">Events</span>
-              ${eventsHtml}
-            </div>
-
-            <div class="cal-filter-field">
-              <span class="cal-filter-label">Customer</span>
-              <div class="cal-autocomplete" id="cal-customer-wrap">
-                <input class="cal-autocomplete-input" id="cal-customer-input" type="text"
-                  placeholder="Name or code…" autocomplete="off"
-                  value="${filters.customerName || ""}" />
-                <button type="button" class="cal-autocomplete-clear" id="cal-customer-clear"
-                  ${filters.customerId ? "" : "hidden"} aria-label="Clear customer">✕</button>
-                <div class="cal-autocomplete-list" id="cal-customer-list" hidden></div>
-                <input type="hidden" name="customerId" id="cal-customer-id" value="${filters.customerId || ""}" />
-              </div>
-            </div>
-
-            ${calCanFilterReps ? `
-            <div class="cal-filter-field">
-              <span class="cal-filter-label">Sales Rep</span>
-              ${ownerHtml}
-            </div>` : ""}
-
-            <div class="cal-filter-field">
-              <span class="cal-filter-label">Status</span>
-              ${statusHtml}
-            </div>
-
-            ${stageOptions.length ? `
-            <div class="cal-filter-field">
-              <span class="cal-filter-label">Stage</span>
-              ${stageHtml}
-            </div>` : ""}`;
-            })()}
-
-            <div class="cal-filter-actions">
-              <button type="submit" class="cal-filter-apply">Apply</button>
-              <button type="button" id="cal-filter-reset" class="cal-filter-reset">Reset</button>
-            </div>
-          </form>
-        </div>
-      </div>
-
-      <div class="cal-legend">
-        <span class="cal-legend-item cal-event--blue">Visit</span>
-        <span class="cal-legend-item cal-event--green">Checked-out</span>
-        <span class="cal-legend-item cal-event--yellow">Checked-in</span>
-        <span class="cal-legend-item cal-event--purple">Deal</span>
-        <span class="cal-legend-item cal-event--red">Overdue</span>
-      </div>
-
-      ${view === "month" ? renderMonthView() : view === "day" ? renderDayView() : renderYearView()}
-    </div>
-  `;
-
-  // filter toggle
-  qs("#cal-filter-toggle")?.addEventListener("click", () => {
-    const bar = qs("#cal-filter-bar");
-    if (bar) bar.hidden = !bar.hidden;
-  });
-
-  // ── Click-to-create visit ────────────────────────────────────────────────
-  // Month view: click a day cell → open modal at 09:00 that day
-  views.calendar.querySelectorAll(".cal-day[data-date]").forEach((cell) => {
-    cell.addEventListener("click", (e) => {
-      if (e.target.closest(".cal-event, .cal-overflow")) return; // ignore event chip clicks
-      const dateTime = new Date(cell.dataset.date + "T09:00:00");
-      openVisitCreateModal(dateTime);
-    });
-  });
-
-  // Day view: click an hour slot → open modal at that hour
-  views.calendar.querySelectorAll(".cal-hour-slot[data-date]").forEach((slot) => {
-    slot.addEventListener("click", (e) => {
-      if (e.target.closest(".cal-tl-event")) return; // ignore event clicks
-      const dateTime = new Date(`${slot.dataset.date}T${String(slot.dataset.hour).padStart(2, "0")}:00:00`);
-      openVisitCreateModal(dateTime);
-    });
-  });
-
-  // ── Event chip click → show detail popover ──────────────────────────────
-  const eventsMap = new Map(events.map((e) => [e.id, e]));
-  views.calendar.querySelectorAll("[data-event-id]").forEach((chip) => {
-    chip.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const ev = eventsMap.get(chip.dataset.eventId);
-      if (ev) showEventDetail(ev, chip);
-    });
-  });
-
-  // ── Customer autocomplete ────────────────────────────────────────────────
-  const customerInput = qs("#cal-customer-input");
-  const customerList  = qs("#cal-customer-list");
-  const customerIdEl  = qs("#cal-customer-id");
-  const customerClear = qs("#cal-customer-clear");
-
-  customerInput?.addEventListener("input", () => {
-    const q = customerInput.value.trim().toLowerCase();
-    if (!q) { customerList.hidden = true; return; }
-    const matches = state.cache.customers.filter(
-      (c) => c.name.toLowerCase().includes(q) || (c.customerCode || "").toLowerCase().includes(q)
-    ).slice(0, 8);
-    if (!matches.length) { customerList.hidden = true; return; }
-    customerList.innerHTML = matches.map((c) =>
-      `<button type="button" class="cal-autocomplete-item" data-id="${c.id}" data-name="${escHtml(c.name)}">
-         <span class="cal-ac-name">${escHtml(c.name)}</span>
-         ${c.customerCode ? `<span class="cal-ac-code">${escHtml(c.customerCode)}</span>` : ""}
-       </button>`
-    ).join("");
-    customerList.hidden = false;
-  });
-
-  customerList?.addEventListener("click", (e) => {
-    const item = e.target.closest(".cal-autocomplete-item");
-    if (!item) return;
-    customerInput.value = item.dataset.name;
-    customerIdEl.value  = item.dataset.id;
-    customerList.hidden = true;
-    if (customerClear) customerClear.hidden = false;
-  });
-
-  customerInput?.addEventListener("blur", () => {
-    setTimeout(() => { if (customerList) customerList.hidden = true; }, 150);
-  });
-
-  customerClear?.addEventListener("click", () => {
-    customerInput.value = "";
-    customerIdEl.value  = "";
-    customerClear.hidden = true;
-  });
-
-  // ── Multiselect dropdowns ────────────────────────────────────────────────
-  ["cal-events", "cal-owner", "cal-status", "cal-stage"].forEach((id) => {
-    const allLabel = { "cal-events": "All Events", "cal-owner": "All Sales Reps", "cal-status": "All Statuses", "cal-stage": "All Stages" }[id];
-    initMsDropdown(id, allLabel);
-  });
-
-  // ── Filter form submit ───────────────────────────────────────────────────
-  const form = qs("#calendar-filter-form");
-
-  form?.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const fd = new FormData(e.currentTarget);
-    await loadCalendar({
-      eventTypes:    fd.getAll("eventTypes"),
-      ownerIds:      fd.getAll("ownerIds"),
-      visitStatuses: fd.getAll("visitStatuses"),
-      dealStageIds:  fd.getAll("dealStageIds"),
-      customerId:    fd.get("customerId") || "",
-      customerName:  customerInput?.value.trim() || "",
-    });
-  });
-
-  qs("#cal-filter-reset")?.addEventListener("click", async () => {
-    await loadCalendar({
-      eventTypes:    ["visit", "deal"],
-      ownerIds:      state.user?.id ? [state.user.id] : [],
-      visitStatuses: ["PLANNED", "CHECKED_IN", "CHECKED_OUT"],
-      dealStageIds:  [],
-      dealStatuses:  ["OPEN"],
-      customerId:    "",
-      customerName:  "",
-    });
-  });
-
-  qs("#calendar-prev")?.addEventListener("click", async () => {
-    await loadCalendar({ anchorDate: shiftAnchorDate(filters.anchorDate, filters.view, "prev") });
-  });
-
-  qs("#calendar-next")?.addEventListener("click", async () => {
-    await loadCalendar({ anchorDate: shiftAnchorDate(filters.anchorDate, filters.view, "next") });
-  });
-
-  views.calendar.querySelectorAll(".cal-view-tab").forEach((tab) => {
-    tab.addEventListener("click", async () => {
-      await loadCalendar({ view: tab.dataset.view });
-    });
-  });
-}
 
 function renderIntegrationLogs(logs) {
   views.integrations.innerHTML = `
@@ -4715,6 +3000,21 @@ function renderSettings() {
           <div><button type="submit" class="btn-primary">Change Password</button></div>
         </form>
       </section>
+
+      ${window.PublicKeyCredential ? `
+      <section class="card">
+        <h3 class="section-title">🔑 Passkeys</h3>
+        <p class="form-hint" style="margin-bottom:var(--sp-4)">Sign in securely using your fingerprint, face, or device PIN. Passkeys are phishing-resistant and work across your devices.</p>
+        <div id="passkey-list" class="passkey-list"><div class="muted">Loading passkeys…</div></div>
+        <div style="margin-top:var(--sp-4)">
+          <button type="button" class="btn-primary passkey-register-btn" id="passkey-register-btn">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:4px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Add passkey
+          </button>
+        </div>
+        <div id="passkey-msg" style="margin-top:var(--sp-2)"></div>
+      </section>
+      ` : ""}
 
     `;
   } else if (page === "notifications") {
@@ -5377,7 +3677,10 @@ function renderSettings() {
                 </div>
                 <span><span class="rp-badge ${roleCls[u.role] || ""}">${roleLabel[u.role] || u.role}</span></span>
                 <span>${reportsToOptions(u)}</span>
-                <span class="rp-role-change-cell">${roleOptions(u)}</span>
+                <span class="rp-role-change-cell">
+                  ${roleOptions(u)}
+                  ${isAdmin ? `<button type="button" class="passkey-admin-btn ghost small" data-uid="${u.id}" data-name="${escHtml(u.fullName)}" title="Manage passkeys">🔑</button>` : ""}
+                </span>
               </div>`;
             }).join("")}
           </div>
@@ -6175,6 +4478,8 @@ function renderSettings() {
     }
   });
 
+  initPasskeySection();
+
   // ── Notification channel help panel toggle ───────────────────
   views.settings.querySelectorAll(".notif-channel-help-btn").forEach(btn => {
     btn.addEventListener("click", () => {
@@ -6869,6 +5174,11 @@ function renderSettings() {
     });
   });
 
+  // ── Admin passkey management ─────────────────────────────────
+  views.settings.querySelectorAll(".passkey-admin-btn").forEach(btn => {
+    btn.addEventListener("click", () => openAdminPasskeyModal(btn.dataset.uid, btn.dataset.name));
+  });
+
   // ── Company listeners ─────────────────────────────────────────
   // Collapsible section toggles (company page)
   qs(".settings-content")?.querySelectorAll(".settings-section-toggle").forEach((btn) => {
@@ -7481,15 +5791,6 @@ function renderSettings() {
   });
 }
 
-async function loadDashboard(month = state.dashboardMonth) {
-  const params = new URLSearchParams();
-  if (month) params.set("month", month);
-  if (state.dashboardTeamId) params.set("teamId", state.dashboardTeamId);
-  if (state.dashboardRepId) params.set("repId", state.dashboardRepId);
-  const query = params.size ? `?${params}` : "";
-  const data = await api(`/dashboard/overview${query}`);
-  renderDashboard(data);
-}
 
 // ── Customer List helpers ───────────────────────────────────────────────────
 
@@ -8393,20 +6694,6 @@ function openEditCustomerModal(cust, termOptions) {
 
 // ── Customer 360 ─────────────────────────────────────────────────────────────
 
-const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-function fmtDateTime(dateOrStr) {
-  const d = dateOrStr instanceof Date ? dateOrStr : new Date(dateOrStr);
-  const pad = (n, w = 2) => String(n).padStart(w, "0");
-  return `${pad(d.getDate())}-${MONTHS_SHORT[d.getMonth()]}-${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-}
-
-function escHtml(str) {
-  return String(str ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
 
 /** Render a single field mapping editor row. */
 function syncMappingRowHtml(idx, m) {
@@ -8468,834 +6755,6 @@ function exportRows(baseName, rows, format) {
   }
 }
 
-async function openCustomer360(customerIdOrCode, customerCode) {
-  // customerCode is the human-readable code used in the URL
-  // customerIdOrCode may be a UUID (from list click) or a code (from URL/popstate)
-  const urlCode = customerCode || customerIdOrCode;
-  navigateToCustomer360(urlCode);
-  switchView("master");
-  setStatus("Loading customer…");
-  try {
-    const customer = await api(`/customers/${encodeURIComponent(customerIdOrCode)}`);
-    const [deals, visits] = await Promise.all([
-      api("/deals"),
-      api(`/visits?customerId=${encodeURIComponent(customer.id)}`)
-    ]);
-    const customerDeals = deals.filter(
-      (d) => d.customerId === customer.id || d.customer?.id === customer.id
-    );
-    state.c360 = { customer, deals: customerDeals, visits, activeTab: "deals" };
-    setStatus("");
-    renderCustomer360();
-  } catch (error) {
-    setStatus(error.message, true);
-  }
-}
-
-function renderC360TabContent(c360) {
-  const { customer, deals, visits, activeTab } = c360;
-
-  if (activeTab === "overview") {
-    const cfEntries = customer.customFields && typeof customer.customFields === "object"
-      ? Object.entries(customer.customFields)
-      : [];
-    return `
-      <div class="c360-info-grid" style="margin-top:var(--sp-4)">
-        <div class="c360-info-section">
-          <p class="c360-info-section-title">Customer Info</p>
-          <div class="c360-info-row"><span class="c360-info-key">Code</span><span class="c360-info-val">${escHtml(customer.customerCode)}</span></div>
-          <div class="c360-info-row"><span class="c360-info-key">Payment Term</span><span class="c360-info-val">${customer.paymentTerm ? escHtml(customer.paymentTerm.code + " — " + customer.paymentTerm.name) : "—"}</span></div>
-          <div class="c360-info-row"><span class="c360-info-key">Due Days</span><span class="c360-info-val">${customer.paymentTerm?.dueDays ?? "—"} days</span></div>
-          <div class="c360-info-row"><span class="c360-info-key">Created</span><span class="c360-info-val">${new Date(customer.createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</span></div>
-          ${customer.siteLat != null && customer.siteLng != null
-            ? `<div class="c360-info-row"><span class="c360-info-key">Location</span><span class="c360-info-val"><a class="c360-address-map" href="https://maps.google.com/?q=${customer.siteLat},${customer.siteLng}" target="_blank" rel="noopener">📍 Open map</a></span></div>`
-            : ""}
-        </div>
-        ${cfEntries.length > 0 ? `
-          <div class="c360-info-section">
-            <p class="c360-info-section-title">Custom Fields</p>
-            ${cfEntries.map(([k, v]) => `
-              <div class="c360-info-row">
-                <span class="c360-info-key">${escHtml(k)}</span>
-                <span class="c360-info-val">${escHtml(String(v))}</span>
-              </div>`).join("")}
-          </div>` : ""}
-      </div>`;
-  }
-
-  if (activeTab === "deals") {
-    if (!deals.length) return `<div class="c360-empty"><div class="c360-empty-icon">📋</div>No deals yet for this customer.</div>`;
-    const stageName = (d) => d.stage?.stageName ?? "Unknown";
-    return `
-      <div style="border:1px solid var(--border);border-radius:var(--r-md);overflow:hidden;margin-top:var(--sp-4)">
-        ${deals.map((d, i) => `
-          <div class="c360-deal-row">
-            <span class="c360-deal-num">${i + 1}</span>
-            <div class="c360-deal-body">
-              <div class="c360-deal-name">${escHtml(d.dealName)}</div>
-              <div class="c360-deal-meta">
-                ${escHtml(stageName(d))} · Follow-up ${d.followUpAt ? new Date(d.followUpAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "—"}
-                ${d.closedAt ? ` · Closed ${new Date(d.closedAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : ""}
-              </div>
-            </div>
-            <div class="c360-deal-right">
-              <span class="badge badge--${(stageName(d).toLowerCase().includes("won") ? "won" : stageName(d).toLowerCase().includes("lost") ? "lost" : "open")}">${escHtml(stageName(d))}</span>
-              <span class="c360-deal-value">${asMoney(d.estimatedValue)}</span>
-            </div>
-          </div>`).join("")}
-      </div>`;
-  }
-
-  if (activeTab === "visits") {
-    if (!visits.length) return `<div class="c360-empty"><div class="c360-empty-icon">📍</div>No visits recorded for this customer.</div>`;
-    return `
-      <div style="border:1px solid var(--border);border-radius:var(--r-md);overflow:hidden;margin-top:var(--sp-4)">
-        ${visits.map((v) => {
-          const vDate = new Date(v.plannedAt || v.createdAt);
-          const notes = v.voiceNoteTranscript || v.notes || "";
-          return `
-            <div class="c360-visit-row">
-              <div class="c360-visit-date">
-                <strong>${vDate.getDate()}</strong>
-                <span>${vDate.toLocaleDateString("en-GB", { month: "short", year: "2-digit" })}</span>
-              </div>
-              <div class="c360-visit-body">
-                <div class="c360-visit-rep">${escHtml(v.rep?.fullName ?? v.repName ?? "—")}</div>
-                ${notes ? `<div class="c360-visit-notes">${escHtml(notes)}</div>` : ""}
-              </div>
-              <span class="badge badge--${v.status === "COMPLETED" ? "won" : v.status === "CANCELLED" ? "lost" : "open"}">${v.status ?? "—"}</span>
-            </div>`;
-        }).join("")}
-      </div>`;
-  }
-
-  if (activeTab === "contacts") {
-    const contacts = customer.contacts ?? [];
-    if (!contacts.length) return `<div class="c360-empty"><div class="c360-empty-icon">👤</div>No contacts added yet.</div>`;
-    return `
-      <div style="border:1px solid var(--border);border-radius:var(--r-md);overflow:hidden;margin-top:var(--sp-4)">
-        ${contacts.map((c) => `
-          <div class="c360-contact-row">
-            <div class="c360-contact-avatar" style="background:${avatarColor(c.name)}">${c360Initials(c.name)}</div>
-            <div>
-              <div class="c360-contact-name">${escHtml(c.name)}</div>
-              <div class="c360-contact-pos">${escHtml(c.position)}</div>
-            </div>
-          </div>`).join("")}
-      </div>`;
-  }
-
-  if (activeTab === "addresses") {
-    const addresses = customer.addresses ?? [];
-    if (!addresses.length) return `<div class="c360-empty"><div class="c360-empty-icon">🏢</div>No addresses added yet.</div>`;
-    return `
-      <div class="c360-addresses-grid" style="margin-top:var(--sp-4)">
-        ${addresses.map((a) => `
-          <div class="c360-address-card">
-            <div class="c360-address-labels">
-              ${a.isDefaultBilling ? '<span class="c360-address-badge">Billing</span>' : ""}
-              ${a.isDefaultShipping ? '<span class="c360-address-badge">Shipping</span>' : ""}
-            </div>
-            <div class="c360-address-line">
-              ${escHtml(a.addressLine1)}${a.city ? ", " + escHtml(a.city) : ""}${a.state ? ", " + escHtml(a.state) : ""}${a.country ? ", " + escHtml(a.country) : ""}${a.postalCode ? " " + escHtml(a.postalCode) : ""}
-            </div>
-            ${a.latitude != null && a.longitude != null
-              ? `<a class="c360-address-map" href="https://maps.google.com/?q=${a.latitude},${a.longitude}" target="_blank" rel="noopener">
-                  <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
-                  Open in Maps
-                </a>`
-              : ""}
-          </div>`).join("")}
-      </div>`;
-  }
-
-  return "";
-}
-
-function renderCustomer360() {
-  const c360 = state.c360;
-  if (!c360) return;
-  const { customer, deals, visits } = c360;
-
-  const activeDealCount = deals.filter(
-    (d) => !["won","lost"].some((w) => (d.stage?.stageName ?? "").toLowerCase().includes(w))
-  ).length;
-  const pipelineValue = deals
-    .filter((d) => !["won","lost"].some((w) => (d.stage?.stageName ?? "").toLowerCase().includes(w)))
-    .reduce((sum, d) => sum + (d.estimatedValue ?? 0), 0);
-  const wonValue = deals
-    .filter((d) => (d.stage?.stageName ?? "").toLowerCase().includes("won"))
-    .reduce((sum, d) => sum + (d.estimatedValue ?? 0), 0);
-
-  const tabs = [
-    { key: "deals", label: "Deals", count: deals.length },
-    { key: "visits", label: "Visits", count: visits.length },
-    { key: "contacts", label: "Contacts", count: customer.contacts?.length ?? 0 },
-    { key: "addresses", label: "Addresses", count: customer.addresses?.length ?? 0 },
-    { key: "overview", label: "Overview", count: null }
-  ];
-
-  views.master.innerHTML = `
-    <div class="master-outer">
-      <div class="c360-wrap">
-        <div class="c360-breadcrumb">
-          <button class="c360-back-btn" id="c360-back">
-            <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
-            Customers
-          </button>
-          <span class="c360-breadcrumb-sep">›</span>
-          <span>${escHtml(customer.customerCode)} — ${escHtml(customer.name)}</span>
-        </div>
-
-        <div class="c360-header">
-          <div class="c360-header-left">
-            <div class="c360-avatar" style="background:${avatarColor(customer.name)}">${c360Initials(customer.name)}</div>
-            <div class="c360-header-info">
-              <h2 class="c360-name">${escHtml(customer.name)}</h2>
-              <div class="c360-meta">
-                <span class="c360-code">${escHtml(customer.customerCode)}</span>
-                <span class="c360-meta-sep">·</span>
-                <span class="c360-meta-item">
-                  <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
-                  ${customer.paymentTerm ? escHtml(customer.paymentTerm.code) : "No term"}
-                </span>
-                ${visits.length > 0 ? `
-                  <span class="c360-meta-sep">·</span>
-                  <span class="c360-meta-item">Last visit ${new Date(visits[0].plannedAt || visits[0].createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span>` : ""}
-              </div>
-            </div>
-          </div>
-          <div class="c360-header-actions">
-            <button class="c360-action ghost" id="c360-schedule-visit">
-              <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-              Schedule Visit
-            </button>
-            <button class="c360-action" id="c360-create-deal">
-              <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-              New Deal
-            </button>
-          </div>
-        </div>
-
-        <div class="c360-kpi-strip">
-          <div class="c360-kpi">
-            <p class="c360-kpi-label">Total Deals</p>
-            <p class="c360-kpi-value">${deals.length}</p>
-          </div>
-          <div class="c360-kpi">
-            <p class="c360-kpi-label">Active Deals</p>
-            <p class="c360-kpi-value">${activeDealCount}</p>
-          </div>
-          <div class="c360-kpi">
-            <p class="c360-kpi-label">Pipeline Value</p>
-            <p class="c360-kpi-value" style="font-size:1.1rem">${asMoney(pipelineValue)}</p>
-          </div>
-          <div class="c360-kpi">
-            <p class="c360-kpi-label">Won Value</p>
-            <p class="c360-kpi-value" style="color:oklch(55% 0.18 145);font-size:1.1rem">${asMoney(wonValue)}</p>
-          </div>
-          <div class="c360-kpi">
-            <p class="c360-kpi-label">Visits</p>
-            <p class="c360-kpi-value">${visits.length}</p>
-          </div>
-        </div>
-
-        <div class="c360-tab-bar">
-          ${tabs.map((t) => `
-            <button class="c360-tab-btn ${c360.activeTab === t.key ? "active" : ""}" data-tab="${t.key}">
-              ${t.label}
-              ${t.count !== null ? `<span class="c360-tab-count">${t.count}</span>` : ""}
-            </button>`).join("")}
-        </div>
-
-        <div class="c360-tab-content" id="c360-tab-content">
-          ${renderC360TabContent(c360)}
-        </div>
-      </div>
-    </div>
-  `;
-
-  // Back
-  views.master.querySelector("#c360-back")?.addEventListener("click", () => {
-    state.c360 = null;
-    navigateToMasterPage("customers");
-    switchView("master");
-    renderMasterData(state.cache.paymentTerms || []);
-  });
-
-  // Tabs
-  views.master.querySelectorAll(".c360-tab-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      state.c360.activeTab = btn.dataset.tab;
-      views.master.querySelectorAll(".c360-tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === btn.dataset.tab));
-      const content = views.master.querySelector("#c360-tab-content");
-      if (content) content.innerHTML = renderC360TabContent(state.c360);
-    });
-  });
-
-  // Quick actions
-  views.master.querySelector("#c360-schedule-visit")?.addEventListener("click", async () => {
-    openVisitCreateModal();
-    const modal = qs("#visit-create-modal");
-    if (!modal) return;
-    const hid = modal.querySelector("#visit-customer-id");
-    const inp = modal.querySelector("#visit-customer-input");
-    if (hid) hid.value = customer.id;
-    if (inp) inp.value = customer.name;
-    // Populate deal dropdown for this customer
-    const dealLabel  = modal.querySelector("#visit-deal-label");
-    const dealSelect = modal.querySelector("#visit-deal-select");
-    if (dealLabel && dealSelect) {
-      dealSelect.innerHTML = `<option value="">Loading…</option>`;
-      dealLabel.hidden = false;
-      try {
-        const deals = await api(`/deals?customerId=${encodeURIComponent(customer.id)}`);
-        const active = deals.filter((d) => d.status !== "WON" && d.status !== "LOST");
-        dealSelect.innerHTML = active.length
-          ? `<option value="">— No deal —</option>` + active.map((d) => `<option value="${d.id}">${escHtml(d.dealName)}${d.stage?.stageName ? " · " + escHtml(d.stage.stageName) : ""}</option>`).join("")
-          : `<option value="">— No open deals —</option>`;
-      } catch {
-        dealSelect.innerHTML = `<option value="">— Could not load deals —</option>`;
-      }
-    }
-  });
-
-  views.master.querySelector("#c360-create-deal")?.addEventListener("click", () => {
-    openDealCreateModal(state.cache.kanban);
-    const modal = qs("#deal-create-modal");
-    if (!modal) return;
-    const hid = modal.querySelector("#deal-customer-id");
-    const inp = modal.querySelector("#deal-customer-input");
-    if (hid) hid.value = customer.id;
-    if (inp) inp.value = customer.name;
-  });
-}
-
-// ── Deal 360 ──────────────────────────────────────────────────────────────────
-
-state.deal360 = null;
-
-function navigateToDeal360(dealNo) {
-  const route = `/deals/${encodeURIComponent(dealNo)}`;
-  if (window.location.pathname !== route) {
-    window.history.pushState({ dealNo }, "", route);
-  }
-}
-
-function syncDeal360FromLocation() {
-  const match = window.location.pathname.match(/^\/deals\/([^/]+)$/);
-  return match ? decodeURIComponent(match[1]) : null;
-}
-
-async function openDeal360(dealId, dealNo) {
-  const urlNo = dealNo || dealId;
-  navigateToDeal360(urlNo);
-  switchView("deals");
-  setStatus("Loading deal…");
-  try {
-    const [deal, progress, visits] = await Promise.all([
-      api(`/deals/${dealId}`),
-      api(`/deals/${dealId}/progress-updates`),
-      api(`/visits?dealId=${encodeURIComponent(dealId)}`)
-    ]);
-    let changelog = [];
-    const role = state.user?.role;
-    const canSeeChangelog = ["ADMIN", "DIRECTOR", "MANAGER"].includes(role);
-    if (canSeeChangelog) {
-      try {
-        changelog = await api(`/changelogs?entityType=DEAL&entityId=${encodeURIComponent(dealId)}&limit=50`);
-      } catch { /* role may not be permitted */ }
-    }
-    state.deal360 = { deal, progress, visits, changelog, activeTab: "progress", canSeeChangelog };
-    setStatus("");
-    renderDeal360();
-  } catch (error) {
-    setStatus(error.message, true);
-  }
-}
-
-function renderDeal360TabContent(d360) {
-  const { deal, progress, visits, changelog, activeTab } = d360;
-
-  // ── Progress Updates ────────────────────────────────────────────────────────
-  if (activeTab === "progress") {
-    const attachmentSvg = `<svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>`;
-    const renderAttachments = (urls) => {
-      const list = Array.isArray(urls) ? urls : (urls ? [urls] : []);
-      if (!list.length) return "";
-      return list.map((url) => {
-        const isR2 = url.startsWith("r2://");
-        const fileName = url.split("/").pop() || "Attachment";
-        const displayName = fileName.replace(/^\d+_/, ""); // strip timestamp prefix
-        if (isR2) {
-          return `<button class="d360-tl-attachment d360-tl-attachment--btn" data-r2ref="${escHtml(url)}" title="Download attachment">
-            ${attachmentSvg} ${escHtml(displayName)}
-          </button>`;
-        }
-        return `<a class="d360-tl-attachment" href="${escHtml(url)}" target="_blank" rel="noopener">
-          ${attachmentSvg} ${escHtml(displayName)}
-        </a>`;
-      }).join("");
-    };
-
-    const timelineHtml = progress.length
-      ? `<div class="d360-timeline">
-          ${progress.map((u) => {
-            const dt = new Date(u.createdAt);
-            return `
-              <div class="d360-tl-item">
-                <div class="d360-tl-avatar" style="background:${avatarColor(u.createdBy?.fullName || '?')}">${c360Initials(u.createdBy?.fullName || '?')}</div>
-                <div class="d360-tl-body">
-                  <div class="d360-tl-meta">
-                    <span class="d360-tl-author">${escHtml(u.createdBy?.fullName || '—')}</span>
-                    <span class="d360-tl-date">${fmtDateTime(dt)}</span>
-                  </div>
-                  <div class="d360-tl-note">${escHtml(u.note)}</div>
-                  ${renderAttachments(u.attachmentUrls)}
-                </div>
-              </div>`;
-          }).join("")}
-        </div>`
-      : `<div class="c360-empty" style="padding:var(--sp-6) 0"><div class="c360-empty-icon">📝</div>No progress updates yet.</div>`;
-
-    return `
-      <div class="d360-progress-wrap">
-        <form class="d360-update-form" id="d360-update-form" data-deal-id="${escHtml(deal.id)}">
-          <div class="d360-update-form-inner">
-            <div class="d360-update-form-avatar" style="background:${avatarColor(state.user?.fullName || '?')}">${c360Initials(state.user?.fullName || '?')}</div>
-            <div class="d360-update-form-body">
-              <textarea
-                class="d360-update-textarea"
-                id="d360-update-note"
-                placeholder="Write a progress update…"
-                rows="3"
-                required
-              ></textarea>
-              <div class="d360-update-file-row" id="d360-file-row">
-                <label class="d360-file-pick-btn" id="d360-file-pick-label" title="Attach up to 5 files">
-                  <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-                  Attach files
-                  <input type="file" id="d360-file-input" class="d360-file-input-hidden" multiple />
-                </label>
-                <div class="d360-file-chips" id="d360-file-chips"></div>
-              </div>
-              <div class="d360-update-form-actions">
-                <button type="submit" class="d360-update-submit btn-primary" id="d360-update-submit">
-                  <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-                  Post update
-                </button>
-              </div>
-            </div>
-          </div>
-        </form>
-        ${timelineHtml}
-      </div>`;
-  }
-
-  // ── Customer Info ───────────────────────────────────────────────────────────
-  if (activeTab === "customer") {
-    const c = deal.customer;
-    if (!c) return `<div class="c360-empty"><div class="c360-empty-icon">👤</div>No customer linked.</div>`;
-    const contacts = c.contacts ?? [];
-    const addresses = c.addresses ?? [];
-    return `
-      <div class="d360-customer-wrap">
-        <div class="d360-cust-header">
-          <div class="c360-avatar" style="background:${avatarColor(c.name)}">${c360Initials(c.name)}</div>
-          <div class="d360-cust-info">
-            <div class="d360-cust-name">${escHtml(c.name)}</div>
-            <div class="d360-cust-meta">
-              <span class="c360-code">${escHtml(c.customerCode)}</span>
-              ${c.taxId ? `<span class="c360-meta-sep">·</span><span class="c360-meta-item">Tax: ${escHtml(c.taxId)}</span>` : ""}
-              ${c.paymentTerm ? `<span class="c360-meta-sep">·</span><span class="c360-meta-item">${escHtml(c.paymentTerm.code)} · ${c.paymentTerm.dueDays}d</span>` : ""}
-            </div>
-          </div>
-          <button class="d360-open-cust ghost" data-id="${c.id}" data-code="${escHtml(c.customerCode)}">
-            <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-            View full profile
-          </button>
-        </div>
-
-        ${contacts.length > 0 ? `
-          <div class="d360-section-label">Contacts</div>
-          <div style="border:1px solid var(--border);border-radius:var(--r-md);overflow:hidden">
-            ${contacts.map((ct) => `
-              <div class="c360-contact-row">
-                <div class="c360-contact-avatar" style="background:${avatarColor(ct.name)}">${c360Initials(ct.name)}</div>
-                <div>
-                  <div class="c360-contact-name">${escHtml(ct.name)}</div>
-                  <div class="c360-contact-pos">${escHtml(ct.position || "")}</div>
-                  <div class="cpop-channels">
-                    ${ct.tel      ? `<span class="cpop-channel"><svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.62 3.48 2 2 0 0 1 3.62 1.27h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.91a16 16 0 0 0 6.18 6.18l.97-.97a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>${escHtml(ct.tel)}</span>` : ""}
-                    ${ct.email    ? `<span class="cpop-channel"><svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>${escHtml(ct.email)}</span>` : ""}
-                    ${ct.lineId   ? `<span class="cpop-channel">LINE: ${escHtml(ct.lineId)}</span>` : ""}
-                  </div>
-                </div>
-              </div>`).join("")}
-          </div>` : ""}
-
-        ${addresses.length > 0 ? `
-          <div class="d360-section-label">Addresses</div>
-          <div class="c360-addresses-grid">
-            ${addresses.map((a) => `
-              <div class="c360-address-card">
-                <div class="c360-address-labels">
-                  ${a.isDefaultBilling  ? '<span class="c360-address-badge">Billing</span>'  : ""}
-                  ${a.isDefaultShipping ? '<span class="c360-address-badge">Shipping</span>' : ""}
-                </div>
-                <div class="c360-address-line">
-                  ${escHtml(a.addressLine1)}${a.city ? ", " + escHtml(a.city) : ""}${a.province ? ", " + escHtml(a.province) : ""}${a.country ? ", " + escHtml(a.country) : ""}${a.postalCode ? " " + escHtml(a.postalCode) : ""}
-                </div>
-                ${a.latitude != null && a.longitude != null
-                  ? `<a class="c360-address-map" href="https://maps.google.com/?q=${a.latitude},${a.longitude}" target="_blank" rel="noopener">
-                      <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
-                      Open in Maps
-                    </a>`
-                  : ""}
-              </div>`).join("")}
-          </div>` : ""}
-      </div>`;
-  }
-
-  // ── Visits ──────────────────────────────────────────────────────────────────
-  if (activeTab === "visits") {
-    if (!visits.length) {
-      return `<div class="c360-empty"><div class="c360-empty-icon">📍</div>No visits linked to this deal yet.</div>`;
-    }
-    return `
-      <div style="border:1px solid var(--border);border-radius:var(--r-md);overflow:hidden;margin-top:var(--sp-4)">
-        ${visits.map((v) => {
-          const vDate = new Date(v.plannedAt || v.createdAt);
-          const statusColor = v.status === "CHECKED_OUT" ? "won" : v.status === "CHECKED_IN" ? "open" : "muted";
-          return `
-            <div class="c360-visit-row">
-              <div class="c360-visit-date">
-                <strong>${vDate.getDate()}</strong>
-                <span>${vDate.toLocaleDateString("en-GB", { month: "short", year: "2-digit" })}</span>
-              </div>
-              <div class="c360-visit-body">
-                <div class="c360-visit-rep">${escHtml(v.rep?.fullName ?? "—")}</div>
-                ${v.objective ? `<div class="c360-visit-notes">${escHtml(v.objective)}</div>` : ""}
-                ${v.result ? `<div class="c360-visit-notes" style="color:var(--text-muted)">${escHtml(v.result)}</div>` : ""}
-              </div>
-              <div style="display:flex;flex-direction:column;align-items:flex-end;gap:var(--sp-1)">
-                <span class="badge badge--${statusColor}">${v.status}</span>
-                <span class="muted small">${v.visitType}</span>
-              </div>
-            </div>`;
-        }).join("")}
-      </div>`;
-  }
-
-  // ── Changelog ───────────────────────────────────────────────────────────────
-  if (activeTab === "changelog") {
-    if (!changelog.length) {
-      return `<div class="c360-empty"><div class="c360-empty-icon">📋</div>No changelog entries found.</div>`;
-    }
-    const actionIcon = (action) => {
-      if (action === "CREATE") return `<span class="d360-cl-action d360-cl-action--create">Created</span>`;
-      if (action === "DELETE") return `<span class="d360-cl-action d360-cl-action--delete">Deleted</span>`;
-      return `<span class="d360-cl-action d360-cl-action--update">Updated</span>`;
-    };
-    const diffFields = (before, after) => {
-      if (!before || !after) return [];
-      const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
-      const changes = [];
-      for (const k of keys) {
-        const bv = before[k]; const av = after[k];
-        if (JSON.stringify(bv) !== JSON.stringify(av)) {
-          changes.push({ key: k, before: bv, after: av });
-        }
-      }
-      return changes;
-    };
-    return `
-      <div class="d360-timeline">
-        ${changelog.map((entry) => {
-          const dt = new Date(entry.createdAt);
-          const diffs = diffFields(entry.beforeJson, entry.afterJson);
-          return `
-            <div class="d360-tl-item">
-              <div class="d360-tl-avatar d360-tl-avatar--sys" style="background:${avatarColor(entry.changedBy?.fullName || 'System')}">${c360Initials(entry.changedBy?.fullName || 'SYS')}</div>
-              <div class="d360-tl-body">
-                <div class="d360-tl-meta">
-                  <span class="d360-tl-author">${escHtml(entry.changedBy?.fullName || 'System')}</span>
-                  ${actionIcon(entry.action)}
-                  <span class="d360-tl-date">${fmtDateTime(dt)}</span>
-                </div>
-                ${diffs.length > 0 ? `
-                  <div class="d360-cl-diffs">
-                    ${diffs.map(({ key, before: bv, after: av }) => `
-                      <div class="d360-cl-diff-row">
-                        <span class="d360-cl-field">${escHtml(key)}</span>
-                        <span class="d360-cl-before">${escHtml(String(bv ?? "—"))}</span>
-                        <svg width="10" height="10" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
-                        <span class="d360-cl-after">${escHtml(String(av ?? "—"))}</span>
-                      </div>`).join("")}
-                  </div>` : ""}
-              </div>
-            </div>`;
-        }).join("")}
-      </div>`;
-  }
-
-  return "";
-}
-
-function renderDeal360() {
-  const d360 = state.deal360;
-  if (!d360) return;
-  const { deal, progress, visits, changelog, canSeeChangelog } = d360;
-  const c = deal.customer;
-
-  const statusBadgeClass = deal.status === "WON" ? "won" : deal.status === "LOST" ? "lost" : "open";
-  const isClosed = deal.status === "WON" || deal.status === "LOST";
-
-  const tabs = [
-    { key: "progress", label: "Progress",  count: progress.length },
-    { key: "customer", label: "Customer",  count: null },
-    { key: "visits",   label: "Visits",    count: visits.length },
-    ...(canSeeChangelog ? [{ key: "changelog", label: "Changelog", count: changelog.length }] : [])
-  ];
-
-  views.deals.innerHTML = `
-    <div class="master-outer">
-      <div class="c360-wrap">
-
-        <div class="c360-breadcrumb">
-          <button class="c360-back-btn" id="d360-back">
-            <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
-            Deals
-          </button>
-          <span class="c360-breadcrumb-sep">›</span>
-          <span>${escHtml(deal.dealNo)} — ${escHtml(deal.dealName)}</span>
-        </div>
-
-        <div class="c360-header">
-          <div class="c360-header-left">
-            <div class="d360-deal-icon">
-              <svg width="22" height="22" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
-            </div>
-            <div class="c360-header-info">
-              <h2 class="c360-name">${escHtml(deal.dealName)}</h2>
-              <div class="c360-meta">
-                <span class="c360-code">${escHtml(deal.dealNo)}</span>
-                <span class="c360-meta-sep">·</span>
-                <span class="badge badge--${statusBadgeClass}">${deal.status}</span>
-                <span class="c360-meta-sep">·</span>
-                <span class="c360-meta-item">${escHtml(deal.stage?.stageName || "—")}</span>
-                <span class="c360-meta-sep">·</span>
-                <span class="c360-meta-item">${escHtml(deal.owner?.fullName || "Unassigned")}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="c360-kpi-strip">
-          <div class="c360-kpi">
-            <p class="c360-kpi-label">Value</p>
-            <p class="c360-kpi-value" style="font-size:1.1rem">${asMoney(deal.estimatedValue)}</p>
-          </div>
-          <div class="c360-kpi">
-            <p class="c360-kpi-label">Stage</p>
-            <p class="c360-kpi-value" style="font-size:0.95rem;font-weight:600">${escHtml(deal.stage?.stageName || "—")}</p>
-          </div>
-          <div class="c360-kpi">
-            <p class="c360-kpi-label">Follow-up</p>
-            <p class="c360-kpi-value" style="font-size:0.9rem${!isClosed && deal.is_overdue_followup ? ";color:var(--danger)" : ""}">
-              ${deal.followUpAt ? new Date(deal.followUpAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—"}
-            </p>
-          </div>
-          ${isClosed ? `
-            <div class="c360-kpi">
-              <p class="c360-kpi-label">Closed</p>
-              <p class="c360-kpi-value" style="font-size:0.9rem">${deal.closedAt ? new Date(deal.closedAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—"}</p>
-            </div>` : ""}
-          <div class="c360-kpi">
-            <p class="c360-kpi-label">Customer</p>
-            <p class="c360-kpi-value" style="font-size:0.85rem;font-weight:600">${escHtml(c?.name || "—")}</p>
-          </div>
-          <div class="c360-kpi">
-            <p class="c360-kpi-label">Visits</p>
-            <p class="c360-kpi-value">${visits.length}</p>
-          </div>
-          <div class="c360-kpi">
-            <p class="c360-kpi-label">Updates</p>
-            <p class="c360-kpi-value">${progress.length}</p>
-          </div>
-        </div>
-
-        ${deal.lostNote ? `
-          <div class="d360-lost-note">
-            <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-            <span>Lost reason: ${escHtml(deal.lostNote)}</span>
-          </div>` : ""}
-
-        <div class="c360-tab-bar">
-          ${tabs.map((t) => `
-            <button class="c360-tab-btn ${d360.activeTab === t.key ? "active" : ""}" data-tab="${t.key}">
-              ${t.label}
-              ${t.count !== null ? `<span class="c360-tab-count">${t.count}</span>` : ""}
-            </button>`).join("")}
-        </div>
-
-        <div class="c360-tab-content" id="d360-tab-content">
-          ${renderDeal360TabContent(d360)}
-        </div>
-      </div>
-    </div>
-  `;
-
-  views.deals.querySelector("#d360-back")?.addEventListener("click", () => {
-    state.deal360 = null;
-    navigateToView("deals");
-    switchView("deals");
-    if (state.cache.kanban) renderDeals(state.cache.kanban);
-  });
-
-  views.deals.querySelectorAll(".c360-tab-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      state.deal360.activeTab = btn.dataset.tab;
-      views.deals.querySelectorAll(".c360-tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === btn.dataset.tab));
-      const content = views.deals.querySelector("#d360-tab-content");
-      if (content) content.innerHTML = renderDeal360TabContent(state.deal360);
-      bindDeal360TabListeners();
-    });
-  });
-
-  bindDeal360TabListeners();
-}
-
-function bindDeal360TabListeners() {
-  // Customer tab — open c360
-  views.deals.querySelectorAll(".d360-open-cust").forEach((btn) => {
-    btn.addEventListener("click", () => openCustomer360(btn.dataset.id, btn.dataset.code));
-  });
-
-  // r2:// attachment download buttons — fetch presigned URL on demand
-  views.deals.querySelectorAll(".d360-tl-attachment--btn").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const ref = btn.dataset.r2ref;
-      if (!ref) return;
-      btn.disabled = true;
-      const origHtml = btn.innerHTML;
-      btn.textContent = "Fetching…";
-      try {
-        const result = await api(`/storage/r2/presign-download?objectKey=${encodeURIComponent(ref)}`);
-        window.open(result.downloadUrl, "_blank", "noopener");
-      } catch (err) {
-        showToast(err.message || "Could not fetch download URL", "error");
-      } finally {
-        btn.innerHTML = origHtml;
-        btn.disabled = false;
-      }
-    });
-  });
-
-  // Progress update form
-  const form = views.deals.querySelector("#d360-update-form");
-  if (!form) return;
-
-  const fileInput  = form.querySelector("#d360-file-input");
-  const fileChips  = form.querySelector("#d360-file-chips");
-  const submitBtn  = form.querySelector("#d360-update-submit");
-
-  const MAX_FILES = 5;
-
-  const renderFileChips = () => {
-    if (!fileChips) return;
-    const files = Array.from(fileInput?.files ?? []);
-    fileChips.innerHTML = files.map((f, i) => `
-      <div class="d360-file-chip">
-        <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-        <span class="d360-file-name">${escHtml(f.name)}</span>
-        <button type="button" class="d360-file-remove" data-idx="${i}" aria-label="Remove file">
-          <svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-        </button>
-      </div>`).join("");
-    fileChips.querySelectorAll(".d360-file-remove").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const idx = parseInt(btn.dataset.idx, 10);
-        const dt = new DataTransfer();
-        Array.from(fileInput.files).forEach((f, i) => { if (i !== idx) dt.items.add(f); });
-        fileInput.files = dt.files;
-        renderFileChips();
-      });
-    });
-  };
-
-  fileInput?.addEventListener("change", () => {
-    if (fileInput.files.length > MAX_FILES) {
-      showToast(`You can attach up to ${MAX_FILES} files at a time.`, "error");
-      fileInput.value = "";
-      renderFileChips();
-      return;
-    }
-    renderFileChips();
-  });
-
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const dealId   = form.dataset.dealId;
-    const noteEl   = form.querySelector("#d360-update-note");
-    const noteText = noteEl?.value?.trim();
-    if (!noteText) { noteEl?.focus(); return; }
-
-    submitBtn.disabled = true;
-    const origLabel = submitBtn.innerHTML;
-    submitBtn.innerHTML = `<svg width="14" height="14" class="spin" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> Posting…`;
-
-    try {
-      const files = Array.from(fileInput?.files ?? []);
-      const attachmentUrls = [];
-
-      for (const file of files) {
-        const presign = await api("/storage/r2/presign-upload", {
-          method: "POST",
-          body: {
-            entityType: "DEAL",
-            entityId: dealId,
-            filename: file.name,
-            contentType: file.type || "application/octet-stream"
-          }
-        });
-
-        const uploadResp = await fetch(presign.uploadUrl, {
-          method: "PUT",
-          headers: { "content-type": file.type || "application/octet-stream" },
-          body: file
-        });
-        if (!uploadResp.ok) throw new Error(`File upload failed (HTTP ${uploadResp.status})`);
-
-        attachmentUrls.push(presign.objectRef);
-      }
-
-      await api(`/deals/${dealId}/progress-updates`, {
-        method: "POST",
-        body: { note: noteText, ...(attachmentUrls.length ? { attachmentUrls } : {}) }
-      });
-
-      const updated = await api(`/deals/${dealId}/progress-updates`);
-      state.deal360.progress = updated;
-      state.deal360.activeTab = "progress";
-
-      noteEl.value = "";
-      if (fileInput) fileInput.value = "";
-      renderFileChips();
-
-      const content = views.deals.querySelector("#d360-tab-content");
-      if (content) content.innerHTML = renderDeal360TabContent(state.deal360);
-      bindDeal360TabListeners();
-
-      showToast("Progress update posted.", "success");
-    } catch (err) {
-      showToast(err.message || "Failed to post update", "error");
-    } finally {
-      submitBtn.disabled = false;
-      submitBtn.innerHTML = origLabel;
-    }
-  });
-}
 
 async function loadMaster() {
   const scopeParam = state.customerScope !== "mine"
@@ -9331,50 +6790,6 @@ async function loadDeals() {
   renderDeals(data, views.deals, { compact: false });
 }
 
-async function loadVisits() {
-  const f = state.visitPage;
-  const q = new URLSearchParams();
-  if (f.status)          q.set("status",   f.status);
-  if (f.repIds?.length)  q.set("repIds",   f.repIds.join(","));
-  if (f.dateFrom)        q.set("dateFrom", f.dateFrom + "T00:00:00.000Z");
-  if (f.dateTo)          q.set("dateTo",   f.dateTo   + "T23:59:59.999Z");
-  const data = await api(`/visits${q.toString() ? "?" + q : ""}`);
-  state.cache.visits = data;
-  renderVisits(data);
-}
-
-async function loadCalendar(nextFilters = {}) {
-  state.calendarFilters = { ...state.calendarFilters, ...nextFilters };
-  const f = state.calendarFilters;
-  const query = new URLSearchParams();
-
-  // Scalar params
-  if (f.view)       query.set("view", f.view);
-  if (f.anchorDate) query.set("anchorDate", f.anchorDate);
-  if (f.query?.trim()) query.set("query", f.query.trim());
-  if (f.customerId) query.set("customerId", f.customerId);
-
-  // For day view, pass explicit local-day boundaries so the backend returns
-  // events that fall within the user's local calendar day (not UTC day).
-  if (f.view === "day" && f.anchorDate) {
-    const anchor = new Date(f.anchorDate);
-    const dayStart = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate(), 0, 0, 0, 0);
-    const dayEnd   = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate() + 1, 0, 0, 0, 0);
-    query.set("dateFrom", dayStart.toISOString());
-    query.set("dateTo",   dayEnd.toISOString());
-  }
-
-  // Array params — send as comma-separated; omit when empty (= no filter)
-  if (f.eventTypes?.length)    query.set("eventTypes",    f.eventTypes.join(","));
-  if (f.ownerIds?.length)      query.set("ownerIds",      f.ownerIds.join(","));
-  if (f.visitStatuses?.length) query.set("visitStatuses", f.visitStatuses.join(","));
-  if (f.dealStageIds?.length)  query.set("dealStageIds",  f.dealStageIds.join(","));
-  if (f.dealStatuses?.length)  query.set("dealStatuses",  f.dealStatuses.join(","));
-
-  const data = await api(`/calendar/events?${query.toString()}`);
-  state.cache.calendar = data;
-  renderCalendar(data);
-}
 
 async function loadIntegrations() {
   const isAtLeastManager = state.user?.role === "ADMIN" || state.user?.role === "MANAGER";
@@ -9846,58 +7261,65 @@ loginForm.addEventListener("submit", async (event) => {
   });
 })();
 
+setCalendarDeps({
+  openVisitCreateModal,
+  showEventDetail,
+  msDropdown,
+  initMsDropdown
+});
+
+setCustomer360Deps({
+  asMoney,
+  avatarColor,
+  c360Initials,
+  navigateToCustomer360,
+  navigateToMasterPage,
+  renderMasterData,
+  openVisitCreateModal,
+  openDealCreateModal
+});
+
+setDeal360Deps({
+  asMoney,
+  avatarColor,
+  c360Initials,
+  navigateToView,
+  renderDeals,
+  showToast
+});
+
+setDashboardDeps({
+  asMoney,
+  avatarColor,
+  repAvatarHtml,
+  navigateToSettingsPage
+});
+
+setVisitsDeps({
+  buildVisitListHtml,
+  attachVisitListListeners,
+  stageAccentVar,
+  openVisitDetail
+});
+
 // ── Onboarding wizard (S11) ───────────────────────────────────────────────────
-async function loadOnboardingWizard() {
-  const wizard = qs("#onboarding-wizard");
-  if (!wizard) return;
-  // Only show to admins
-  if (state.user?.role !== "ADMIN") { wizard.hidden = true; return; }
-  // Respect dismissed state
-  const tenantId = state.user?.tenantId;
-  if (!tenantId) { wizard.hidden = true; return; }
-  const dismissKey = `onboarding_dismissed_${tenantId}`;
-  if (localStorage.getItem(dismissKey) === "1") { wizard.hidden = true; return; }
-
-  try {
-    const data = await api(`/tenants/${tenantId}/onboarding-status`);
-    if (!data?.steps) { wizard.hidden = true; return; }
-
-    const { teamCreated, userInvited, integrationSetup, customerImported, dealCreated } = data.steps;
-    const allDone = teamCreated && userInvited && integrationSetup && customerImported && dealCreated;
-    if (allDone) { wizard.hidden = true; return; }
-
-    const steps = [
-      { key: "teamCreated",      label: "Set up your team structure",   link: "/settings/teams",        done: teamCreated },
-      { key: "userInvited",      label: "Invite your first sales rep",   link: "/settings/users",        done: userInvited },
-      { key: "integrationSetup", label: "Configure integrations",        link: "/settings/integrations", done: integrationSetup },
-      { key: "customerImported", label: "Import your customers",         link: "/master/customers",      done: customerImported },
-      { key: "dealCreated",      label: "Create your first deal",        link: "/deals",                 done: dealCreated }
-    ];
-
-    const list = qs("#onboarding-steps-list");
-    if (!list) return;
-    list.innerHTML = steps.map(s => `
-      <li class="onboarding-step${s.done ? " done" : ""}">
-        <span class="onboarding-step-check">${s.done ? "&#10003;" : ""}</span>
-        <span class="onboarding-step-label">${escHtml(s.label)}</span>
-        ${!s.done ? `<a class="onboarding-step-link" href="${escHtml(s.link)}">Go &rarr;</a>` : ""}
-      </li>
-    `).join("");
-
-    const wasHidden = wizard.hidden;
-    wizard.hidden = false;
-
-    // Only (re-)attach the dismiss listener when we first reveal the wizard
-    if (wasHidden) {
-      qs("#onboarding-dismiss-btn")?.addEventListener("click", () => {
-        wizard.hidden = true;
-        localStorage.setItem(dismissKey, "1");
-      }, { once: true });
-    }
-  } catch {
-    wizard.hidden = true;
+initOnboardingWizard({
+  stepNav: {
+    teamCreated:      () => { navigateToSettingsPage("teams");         switchView("settings"); },
+    userInvited:      () => { navigateToSettingsPage("users");         switchView("settings"); },
+    integrationSetup: () => { navigateToSettingsPage("integrations");  switchView("settings"); },
+    customerImported: () => { navigateToMasterPage("customers");        switchView("master"); },
+    dealCreated:      () => { navigateToView("deals");                 switchView("deals"); },
+    domainConfigured: () => { navigateToSettingsPage("branding");      switchView("settings"); }
   }
-}
+});
+
+initDemoDataModals({
+  refreshHost: async () => {
+    await Promise.all([loadMaster(), loadDeals(), loadVisits(), loadDashboard()]);
+  },
+  gotoIntegrations: () => { navigateToSettingsPage("integrations"); switchView("settings"); }
+});
 
 // ── Customer autocomplete for modal forms ─────────────────────────────────────
 function initCustomerAutocomplete(inputEl, listEl, hiddenEl, onSelect) {
@@ -10736,373 +8158,13 @@ async function bootstrap() {
 
 // ── QUICK SEARCH ──────────────────────────────────────────────────────────────
 
-(function initQuickSearch() {
-  const modal    = qs("#quick-search-modal");
-  const backdrop = qs("#qs-backdrop");
-  const input    = qs("#qs-input");
-  const results  = qs("#qs-results");
-
-  if (!modal || !input || !results) return;
-
-  let activeIdx = -1;
-
-  function openSearch() {
-    modal.hidden = false;
-    activeIdx = -1;
-    input.value = "";
-    renderResults("");
-    requestAnimationFrame(() => input.focus());
-  }
-
-  function closeSearch() {
-    modal.hidden = true;
-  }
-
-  const ICONS = {
-    dashboard: {
-      cls: "qs-item-icon--nav",
-      svg: `<svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>`
-    },
-    action: {
-      cls: "qs-item-icon--action",
-      svg: `<svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`
-    },
-    customer: {
-      cls: "qs-item-icon--customer",
-      svg: `<svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>`
-    },
-    item: {
-      cls: "qs-item-icon--item",
-      svg: `<svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>`
-    },
-    deal: {
-      cls: "qs-item-icon--deal",
-      svg: `<svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>`
-    },
-    visit: {
-      cls: "qs-item-icon--visit",
-      svg: `<svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>`
-    },
-    quotation: {
-      cls: "qs-item-icon--quotation",
-      svg: `<svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>`
-    }
-  };
-
-  // ── helpers ───────────────────────────────────────────────
-  function dealStageOf(dealId) {
-    return (state.cache.dealStages || []).find((s) =>
-      (s.deals || []).some((x) => x.id === dealId)
-    )?.stageName || "";
-  }
-
-  function matchesAny(q, ...terms) {
-    return terms.filter(Boolean).some((t) => String(t).toLowerCase().includes(q));
-  }
-
-  // ── main index builder ────────────────────────────────────
-  function buildIndex(query) {
-    const q = query.trim().toLowerCase();
-    const groups = [];
-
-    // ── 1. ACTIONS ─────────────────────────────────────────
-    const ACTION_DEFS = [
-      {
-        name: "Create Deal",
-        meta: "Add a new deal to the pipeline",
-        keywords: ["deal", "create", "new", "pipeline", "opportunity"],
-        action() {
-          closeSearch();
-          navigateToView("deals");
-          switchView("deals");
-          requestAnimationFrame(() => openDealCreateModal(state.cache.kanban));
-        }
-      },
-      {
-        name: "Create Visit",
-        meta: "Schedule or log a customer visit",
-        keywords: ["visit", "create", "new", "schedule", "checkin", "check"],
-        action() {
-          closeSearch();
-          navigateToView("visits");
-          switchView("visits");
-          requestAnimationFrame(() => openVisitCreateModal());
-        }
-      },
-      {
-        name: "Create Quotation",
-        meta: "Open Deals to prepare a new quotation",
-        keywords: ["quotation", "quote", "quot", "create", "new", "qt"],
-        action() {
-          closeSearch();
-          navigateToView("deals");
-          switchView("deals");
-          setStatus("Select a deal to create a quotation.");
-        }
-      }
-    ];
-
-    const matchingActions = !q
-      ? ACTION_DEFS
-      : ACTION_DEFS.filter((a) => a.keywords.some((k) => k.includes(q) || q.includes(k)));
-
-    if (matchingActions.length) {
-      groups.push({
-        label: "Actions",
-        items: matchingActions.map((a) => ({
-          type: "action",
-          name: a.name,
-          meta: a.meta,
-          action: a.action
-        }))
-      });
-    }
-
-    // ── 2. DASHBOARD NAV ───────────────────────────────────
-    if (!q || matchesAny(q, "dashboard", "report", "kpi", "performance")) {
-      groups.push({
-        label: "Navigation",
-        items: [{
-          type: "dashboard",
-          name: "Dashboard",
-          meta: "KPIs, pipeline, team performance",
-          action() { closeSearch(); navigateToView("dashboard"); switchView("dashboard"); }
-        }]
-      });
-    }
-
-    // ── 3. CUSTOMER-CENTRIC SEARCH ─────────────────────────
-    // When query matches a customer, show ALL their related records grouped
-    if (q) {
-      const allDeals = (state.cache.dealStages || []).flatMap((s) => s.deals || []);
-      const allVisits = state.cache.visits || [];
-
-      const matchedCustomers = (state.cache.customers || []).filter((c) =>
-        matchesAny(q, c.name, c.code, c.email, c.phone)
-      );
-
-      matchedCustomers.slice(0, 2).forEach((customer) => {
-        const custDeals = allDeals.filter(
-          (d) => d.customer?.id === customer.id || d.customerId === customer.id
-        );
-        const custVisits = allVisits.filter(
-          (v) => v.customer?.id === customer.id || v.customerId === customer.id
-        );
-
-        const items = [];
-
-        // Customer row
-        items.push({
-          type: "customer",
-          name: customer.name,
-          meta: [customer.code, customer.email].filter(Boolean).join(" · ") || "Customer",
-          action() { closeSearch(); navigateToMasterPage("customers"); switchView("master"); }
-        });
-
-        // Related deals
-        custDeals.slice(0, 4).forEach((d) => {
-          items.push({
-            type: "deal",
-            name: d.dealName,
-            meta: [d.dealNo, dealStageOf(d.id)].filter(Boolean).join(" · "),
-            badge: d.estimatedValue ? asMoney(d.estimatedValue) : null,
-            action() { closeSearch(); navigateToView("deals"); switchView("deals"); }
-          });
-        });
-
-        // Related visits
-        custVisits.slice(0, 3).forEach((v) => {
-          const dateStr = v.plannedAt ? new Date(v.plannedAt).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }) : "";
-          items.push({
-            type: "visit",
-            name: `Visit${dateStr ? " · " + dateStr : ""}`,
-            meta: [v.visitType, v.status?.replace(/_/g, " "), v.objective].filter(Boolean).join(" · "),
-            action() { closeSearch(); navigateToView("visits"); switchView("visits"); }
-          });
-        });
-
-        // Quotation shortcut if deals exist
-        if (custDeals.length) {
-          items.push({
-            type: "quotation",
-            name: "View Quotations",
-            meta: `${custDeals.length} deal${custDeals.length > 1 ? "s" : ""} — open Deals to manage quotations`,
-            action() { closeSearch(); switchView("deals"); }
-          });
-        }
-
-        groups.push({ label: `Records for ${customer.name}`, items });
-      });
-
-      // If customer-centric groups were added, skip the generic customer group below
-      if (matchedCustomers.length > 0) {
-        // Still show non-customer matches: items, deals by name, visits by objective
-        const itemMatches = (state.cache.items || []).filter((i) =>
-          matchesAny(q, i.name, i.code, i.sku)
-        );
-        if (itemMatches.length) {
-          groups.push({
-            label: "Items",
-            items: itemMatches.slice(0, 5).map((i) => ({
-              type: "item",
-              name: i.name,
-              meta: [i.code, i.sku, i.unit].filter(Boolean).join(" · ") || "Item",
-              action() { closeSearch(); navigateToMasterPage("items"); switchView("master"); }
-            }))
-          });
-        }
-        return groups;
-      }
-    }
-
-    // ── 4. STANDARD SEARCH (no specific customer match) ────
-
-    // Customers
-    const customers = (state.cache.customers || []).filter((c) =>
-      !q || matchesAny(q, c.name, c.code, c.email, c.phone)
-    );
-    if (customers.length) {
-      groups.push({
-        label: "Customers",
-        items: customers.slice(0, 6).map((c) => ({
-          type: "customer",
-          name: c.name,
-          meta: [c.code, c.email, c.phone].filter(Boolean).join(" · ") || "Customer",
-          action() { closeSearch(); navigateToMasterPage("customers"); switchView("master"); }
-        }))
-      });
-    }
-
-    // Items
-    const items = (state.cache.items || []).filter((i) =>
-      !q || matchesAny(q, i.name, i.code, i.sku)
-    );
-    if (items.length) {
-      groups.push({
-        label: "Items",
-        items: items.slice(0, 6).map((i) => ({
-          type: "item",
-          name: i.name,
-          meta: [i.code, i.sku, i.unit].filter(Boolean).join(" · ") || "Item",
-          action() { closeSearch(); navigateToMasterPage("items"); switchView("master"); }
-        }))
-      });
-    }
-
-    // Deals
-    const allDeals = (state.cache.dealStages || []).flatMap((s) => s.deals || []);
-    const deals = allDeals.filter((d) =>
-      !q || matchesAny(q, d.dealNo, d.dealName, d.customer?.name)
-    );
-    if (deals.length) {
-      groups.push({
-        label: "Deals",
-        items: deals.slice(0, 6).map((d) => ({
-          type: "deal",
-          name: d.dealName,
-          meta: [d.dealNo, d.customer?.name, dealStageOf(d.id)].filter(Boolean).join(" · "),
-          badge: d.estimatedValue ? asMoney(d.estimatedValue) : null,
-          action() { closeSearch(); switchView("deals"); }
-        }))
-      });
-    }
-
-    // Visits
-    const visits = (state.cache.visits || []).filter((v) =>
-      !q || matchesAny(q, v.customer?.name, v.objective, v.status)
-    );
-    if (visits.length) {
-      groups.push({
-        label: "Visits",
-        items: visits.slice(0, 6).map((v) => ({
-          type: "visit",
-          name: v.customer?.name || "Visit",
-          meta: [v.visitType, v.status?.replace(/_/g, " "), v.objective].filter(Boolean).join(" · "),
-          action() { closeSearch(); switchView("visits"); }
-        }))
-      });
-    }
-
-    return groups;
-  }
-
-  function iconHTML(type) {
-    const ic = ICONS[type] || ICONS.dashboard;
-    return `<div class="qs-item-icon ${ic.cls}">${ic.svg}</div>`;
-  }
-
-  function renderResults(query) {
-    const groups = buildIndex(query);
-    activeIdx = -1;
-
-    if (!groups.length) {
-      results.innerHTML = query.trim()
-        ? `<div class="qs-empty"><strong>No results found</strong>Try a customer name, deal number, or action like "create deal"</div>`
-        : `<div class="qs-empty"><strong>Start typing to search</strong>Type a customer code to see all their records</div>`;
-      return;
-    }
-
-    results.innerHTML = groups.map((group) => `
-      <div class="qs-group-label">${escHtml(group.label)}</div>
-      ${group.items.map((item) => `
-        <button class="qs-item qs-item--${item.type}" type="button" role="option">
-          ${iconHTML(item.type)}
-          <div class="qs-item-body">
-            <div class="qs-item-name">${escHtml(item.name)}</div>
-            ${item.meta ? `<div class="qs-item-meta">${escHtml(item.meta)}</div>` : ""}
-          </div>
-          ${item.badge ? `<span class="qs-item-badge">${escHtml(item.badge)}</span>` : ""}
-        </button>
-      `).join("")}
-    `).join("");
-
-    // Wire click handlers after rendering
-    const flatItems = groups.flatMap((g) => g.items);
-    results.querySelectorAll(".qs-item").forEach((btn, idx) => {
-      btn.addEventListener("click", () => flatItems[idx]?.action());
-    });
-  }
-
-  function getItems() {
-    return Array.from(results.querySelectorAll(".qs-item"));
-  }
-
-  function setActive(idx) {
-    const items = getItems();
-    items.forEach((el, i) => el.classList.toggle("qs-active", i === idx));
-    if (items[idx]) items[idx].scrollIntoView({ block: "nearest" });
-    activeIdx = idx;
-  }
-
-  input.addEventListener("input", () => renderResults(input.value));
-
-  input.addEventListener("keydown", (e) => {
-    const items = getItems();
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setActive(Math.min(activeIdx + 1, items.length - 1));
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setActive(Math.max(activeIdx - 1, 0));
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      if (activeIdx >= 0 && items[activeIdx]) items[activeIdx].click();
-    } else if (e.key === "Escape") {
-      closeSearch();
-    }
-  });
-
-  qs("#search-btn")?.addEventListener("click", openSearch);
-  backdrop?.addEventListener("click", closeSearch);
-
-  document.addEventListener("keydown", (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === "k") {
-      e.preventDefault();
-      modal.hidden ? openSearch() : closeSearch();
-    }
-    if (e.key === "Escape" && !modal.hidden) closeSearch();
-  });
-})();
+initQuickSearch({
+  navigateToView,
+  navigateToMasterPage,
+  openDealCreateModal,
+  openVisitCreateModal,
+  asMoney
+});
 
 // ── Form label decorator ──────────────────────────────────────────────────────
 // Injects a red * after the label text of any .form-label that contains a
@@ -11151,7 +8213,25 @@ new MutationObserver(() => decorateFormLabels(document)).observe(document.body, 
   subtree: true,
 });
 
-bindVoiceNoteModal();
+bindVoiceNoteModal({
+  async onConfirmed({ entityType, entityId, summary }) {
+    if (entityType === "DEAL") {
+      await loadDeals();
+      await loadDashboard();
+    } else if (entityType === "VISIT") {
+      if (summary) {
+        const checkoutResultEl = qs("#mt-checkout-result");
+        if (checkoutResultEl && !checkoutResultEl.value.trim()) {
+          checkoutResultEl.value = summary;
+        }
+      }
+      await loadVisits();
+      if (entityId && visitDetailBody && !visitDetailBody.closest("[hidden]")) {
+        openVisitDetail(entityId);
+      }
+    }
+  }
+});
 applyThemeMode("LIGHT");
 
 // ── Super Admin ────────────────────────────────────────────────────────────────
