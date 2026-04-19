@@ -9,7 +9,7 @@ import { ChannelType, IntegrationPlatform, SourceStatus } from "@prisma/client";
 import type { FastifyPluginAsync } from "fastify";
 import { config } from "../../config.js";
 import { z } from "zod";
-import { listVisibleUserIds, requireTenantId, requireUserId } from "../../lib/http.js";
+import { listVisibleUserIds, requireTenantId, requireUserId, zodMsg } from "../../lib/http.js";
 import { writeEntityChangelog } from "../../lib/changelog.js";
 import { prisma } from "../../lib/prisma.js";
 import { decryptCredential } from "../../lib/secrets.js";
@@ -309,7 +309,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
     const repId = requireUserId(request);
     const parsed = plannedVisitCreateSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
     const created = await createVisitRecord({
       tenantId,
@@ -331,7 +331,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
     const repId = requireUserId(request);
     const parsed = unplannedVisitCreateSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
     const created = await createVisitRecord({
       tenantId,
@@ -472,7 +472,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
     const params = request.params as { id: string };
     const parsed = checkInSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     // Upload selfie to R2 before the transaction (avoids holding a TX open during I/O).
@@ -749,7 +749,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
     const params = request.params as { id: string };
     const parsed = checkOutSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const updated = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
@@ -957,7 +957,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
     const params = request.params as { id: string };
     const parsed = visitUpdateSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const visit = await prisma.visit.findFirst({
@@ -1003,7 +1003,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
     const visibleUserIdList = [...visibleUserIds];
     const parsed = calendarQuerySchema.safeParse(request.query ?? {});
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const query = parsed.data;
@@ -1181,7 +1181,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
     const userId = requireUserId(request);
     const parsed = todoEventsQuerySchema.safeParse(request.query ?? {});
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const query = parsed.data;

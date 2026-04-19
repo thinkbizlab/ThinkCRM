@@ -3,12 +3,13 @@ import type { FastifyPluginAsync } from "fastify";
 import { randomBytes } from "node:crypto";
 import { promises as dns } from "node:dns";
 import { z } from "zod";
+import { Anthropic } from "@anthropic-ai/sdk";
 import { config } from "../../config.js";
-import { assertTenantPathAccess, requireRoleAtLeast, requireSuperAdmin } from "../../lib/http.js";
+import { assertTenantPathAccess, requireRoleAtLeast, requireSuperAdmin, zodMsg } from "../../lib/http.js";
 import { sendEmailCard, type EmailConfig } from "../../lib/email-notify.js";
 import { hashPassword } from "../../lib/password.js";
 import { prisma } from "../../lib/prisma.js";
-import { decryptCredential } from "../../lib/secrets.js";
+import { decryptField } from "../../lib/secrets.js";
 import { smtpPort } from "../../lib/smtp-port.js";
 import { getTenantUrl } from "../../lib/tenant-url.js";
 import { addVercelDomain, removeVercelDomain } from "../../lib/vercel-domains.js";
@@ -184,7 +185,7 @@ export const tenantRoutes: FastifyPluginAsync = async (app) => {
     requireSuperAdmin(request);
     const parsed = onboardTenantSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const payload = parsed.data;
@@ -606,12 +607,13 @@ export const tenantRoutes: FastifyPluginAsync = async (app) => {
     requireRoleAtLeast(request, UserRole.ADMIN);
     assertTenantPathAccess(request, tenantId);
 
-    const [userCount, customerCount, dealCount, teamCount, integrationCount] = await Promise.all([
+    const [userCount, customerCount, dealCount, teamCount, integrationCount, domainCount] = await Promise.all([
       prisma.user.count({ where: { tenantId } }),
       prisma.customer.count({ where: { tenantId } }),
       prisma.deal.count({ where: { tenantId } }),
       prisma.team.count({ where: { tenantId } }),
-      prisma.tenantIntegrationCredential.count({ where: { tenantId } })
+      prisma.tenantIntegrationCredential.count({ where: { tenantId } }),
+      prisma.tenantCustomDomain.count({ where: { tenantId } })
     ]);
 
     return {
@@ -620,8 +622,397 @@ export const tenantRoutes: FastifyPluginAsync = async (app) => {
         userInvited:      userCount > 1,     // more than just the admin
         integrationSetup: integrationCount > 0,
         customerImported: customerCount > 0,
-        dealCreated:      dealCount > 0
+        dealCreated:      dealCount > 0,
+        domainConfigured: domainCount > 0
       }
     };
   });
+
+  // ── Demo Data — trial tenants only ──────────────────────────────────────────
+
+  /** Check if demo data has been generated for this tenant. */
+  app.get("/tenants/:tenantId/demo-data/status", async (request) => {
+    const { tenantId } = request.params as { tenantId: string };
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    assertTenantPathAccess(request, tenantId);
+
+    const [demoCustomers, demoDeals, demoVisits, demoTeams, demoUsers, globalKeyUsage, tenantHasOwnKey] = await Promise.all([
+      prisma.customer.count({ where: { tenantId, isDemo: true } }),
+      prisma.deal.count({ where: { tenantId, isDemo: true } }),
+      prisma.visit.count({ where: { tenantId, isDemo: true } }),
+      prisma.team.count({ where: { tenantId, isDemo: true } }),
+      prisma.user.count({ where: { tenantId, isDemo: true } }),
+      prisma.auditLog.count({ where: { tenantId, action: "DEMO_DATA_GENERATE_GLOBAL_KEY" } }),
+      prisma.tenantIntegrationCredential.count({
+        where: { tenantId, platform: IntegrationPlatform.ANTHROPIC, status: "ENABLED", apiKeyRef: { not: null } }
+      })
+    ]);
+
+    const GLOBAL_KEY_LIMIT = 3;
+
+    return {
+      hasDemo: demoCustomers + demoDeals + demoVisits + demoTeams + demoUsers > 0,
+      counts: { customers: demoCustomers, deals: demoDeals, visits: demoVisits, teams: demoTeams, users: demoUsers },
+      globalKeyUsage,
+      globalKeyLimit: GLOBAL_KEY_LIMIT,
+      globalKeyRemaining: Math.max(0, GLOBAL_KEY_LIMIT - globalKeyUsage),
+      hasOwnKey: tenantHasOwnKey > 0
+    };
+  });
+
+  const demoDataGenerateSchema = z.object({
+    industry: z.string().min(2).max(200).trim(),
+    teamCount: z.number().int().min(1).max(5),
+    repCount: z.number().int().min(1).max(20)
+  }).strict();
+
+  /** Generate demo data — only for TRIALING tenants, ADMIN only. */
+  app.post("/tenants/:tenantId/demo-data/generate", async (request, reply) => {
+    const { tenantId } = request.params as { tenantId: string };
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    assertTenantPathAccess(request, tenantId);
+
+    // Must be trialing
+    const sub = await prisma.subscription.findFirst({
+      where: { tenantId },
+      select: { status: true }
+    });
+    if (!sub || sub.status !== "TRIALING") {
+      throw app.httpErrors.forbidden("Demo data generation is only available during the trial period.");
+    }
+
+    // Prevent duplicate generation
+    const existingDemo = await prisma.customer.count({ where: { tenantId, isDemo: true } });
+    if (existingDemo > 0) {
+      throw app.httpErrors.conflict("Demo data has already been generated. Delete it first before generating new data.");
+    }
+
+    const parsed = demoDataGenerateSchema.safeParse(request.body);
+    if (!parsed.success) throw app.httpErrors.badRequest(zodMsg(parsed.error));
+    const { industry, teamCount, repCount } = parsed.data;
+
+    // Resolve AI API key — tenant-specific or global with 3-use limit
+    const resolved = await resolveAnthropicKeyWithSource(tenantId);
+    if (!resolved) {
+      throw app.httpErrors.serviceUnavailable("AI service is not configured. Please set up an Anthropic API key in Settings → Integrations.");
+    }
+
+    const GLOBAL_KEY_LIMIT = 3;
+    if (resolved.isGlobal) {
+      const globalUsageCount = await prisma.auditLog.count({
+        where: { tenantId, action: "DEMO_DATA_GENERATE_GLOBAL_KEY" }
+      });
+      if (globalUsageCount >= GLOBAL_KEY_LIMIT) {
+        return reply.status(403).send({
+          statusCode: 403,
+          error: "Forbidden",
+          code: "GLOBAL_KEY_LIMIT_REACHED",
+          message: `You've used all ${GLOBAL_KEY_LIMIT} free demo data generations. To continue, add your own Anthropic API key in Settings → Integrations → AI Service.`
+        });
+      }
+    }
+
+    const apiKey = resolved.key;
+
+    // Ask AI to generate realistic demo data based on the industry
+    const client = new Anthropic({ apiKey });
+    const aiResponse = await client.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 4096,
+      messages: [{
+        role: "user",
+        content: `You are a CRM data generator. Generate realistic demo data for a sales CRM based on this context:
+- Industry/product: ${industry}
+- Number of teams: ${teamCount}
+- Number of sales reps: ${repCount}
+
+Generate JSON with this exact structure:
+{
+  "teams": [{ "teamName": "..." }],
+  "reps": [{ "fullName": "...", "email": "...", "teamIndex": 0 }],
+  "customers": [
+    {
+      "name": "...",
+      "customerCode": "...",
+      "contacts": [{ "name": "...", "position": "...", "tel": "...", "email": "..." }]
+    }
+  ],
+  "deals": [
+    {
+      "dealName": "...",
+      "customerIndex": 0,
+      "repIndex": 0,
+      "estimatedValue": 50000,
+      "stageOrder": 1,
+      "daysUntilFollowUp": 7
+    }
+  ],
+  "visits": [
+    {
+      "customerIndex": 0,
+      "repIndex": 0,
+      "daysFromNow": -3,
+      "objective": "...",
+      "visitType": "PLANNED",
+      "status": "CHECKED_OUT",
+      "result": "..."
+    }
+  ]
+}
+
+Rules:
+- Generate ${teamCount} teams with names fitting the "${industry}" industry
+- Generate ${repCount} reps with Thai names (mix of male/female), assign them to teams using teamIndex (0-based)
+- Generate 8-15 customers relevant to the industry, with realistic Thai company names and 1-2 contacts each
+- Customer codes should be like "C001", "C002", etc.
+- Generate 10-20 deals across different stages (stageOrder: 1=Opportunity, 2=Quotation, 3=Won, 4=Lost)
+- Generate 15-25 visits with a mix of statuses (PLANNED for future, CHECKED_OUT for past with results)
+- Use realistic Thai baht values for deals (10,000 - 5,000,000)
+- Rep emails should be firstname.l@demo.thinkcrm.com format
+- For visits with daysFromNow < 0 (past), status should be "CHECKED_OUT" with a result
+- For visits with daysFromNow >= 0 (future), status should be "PLANNED" with no result
+
+Respond ONLY with valid JSON, no markdown or explanation.`
+      }]
+    });
+
+    const aiText = aiResponse.content[0]?.type === "text" ? aiResponse.content[0].text : "";
+    const jsonMatch = aiText.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      throw app.httpErrors.internalServerError("AI failed to generate valid demo data. Please try again.");
+    }
+
+    let demoData: {
+      teams: Array<{ teamName: string }>;
+      reps: Array<{ fullName: string; email: string; teamIndex: number }>;
+      customers: Array<{ name: string; customerCode: string; contacts: Array<{ name: string; position: string; tel?: string; email?: string }> }>;
+      deals: Array<{ dealName: string; customerIndex: number; repIndex: number; estimatedValue: number; stageOrder: number; daysUntilFollowUp: number }>;
+      visits: Array<{ customerIndex: number; repIndex: number; daysFromNow: number; objective?: string; visitType: string; status: string; result?: string }>;
+    };
+
+    try {
+      demoData = JSON.parse(jsonMatch[0]);
+    } catch {
+      throw app.httpErrors.internalServerError("AI returned malformed JSON. Please try again.");
+    }
+
+    // Insert everything in a transaction
+    const result = await prisma.$transaction(async (tx) => {
+      // 1. Get the default payment term
+      let paymentTerm = await tx.paymentTerm.findFirst({ where: { tenantId } });
+      if (!paymentTerm) {
+        paymentTerm = await tx.paymentTerm.create({
+          data: { tenantId, code: "NET30", name: "Net 30", dueDays: 30 }
+        });
+      }
+
+      // 2. Create teams
+      const createdTeams: Array<{ id: string; teamName: string }> = [];
+      for (const t of demoData.teams) {
+        const team = await tx.team.create({
+          data: { tenantId, teamName: t.teamName, isDemo: true }
+        });
+        createdTeams.push(team);
+      }
+
+      // 3. Create rep users
+      const createdReps: Array<{ id: string; fullName: string }> = [];
+      for (const r of demoData.reps) {
+        const teamIdx = Math.min(r.teamIndex, createdTeams.length - 1);
+        const rep = await tx.user.create({
+          data: {
+            tenantId,
+            email: r.email,
+            fullName: r.fullName,
+            role: "REP",
+            passwordHash: "",
+            isActive: true,
+            isDemo: true,
+            teamId: createdTeams[teamIdx]?.id ?? null
+          }
+        });
+        createdReps.push(rep);
+      }
+
+      // 4. Create customers
+      const existingCustomerCount = await tx.customer.count({ where: { tenantId } });
+      const createdCustomers: Array<{ id: string; name: string }> = [];
+      for (let i = 0; i < demoData.customers.length; i++) {
+        const c = demoData.customers[i]!;
+        const code = `DEMO-${String(existingCustomerCount + i + 1).padStart(4, "0")}`;
+        const customer = await tx.customer.create({
+          data: {
+            tenantId,
+            customerCode: code,
+            name: c.name,
+            defaultTermId: paymentTerm.id,
+            isDemo: true
+          }
+        });
+        for (const contact of (c.contacts ?? [])) {
+          await tx.customerContact.create({
+            data: {
+              customerId: customer.id,
+              name: contact.name,
+              position: contact.position,
+              tel: contact.tel ?? null,
+              email: contact.email ?? null
+            }
+          });
+        }
+        createdCustomers.push(customer);
+      }
+
+      // 5. Get deal stages
+      const stages = await tx.dealStage.findMany({
+        where: { tenantId },
+        orderBy: { stageOrder: "asc" }
+      });
+      if (stages.length === 0) {
+        throw new Error("No deal stages configured");
+      }
+
+      // 6. Create deals
+      const existingDealCount = await tx.deal.count({ where: { tenantId } });
+      const createdDeals: Array<{ id: string }> = [];
+      for (let i = 0; i < demoData.deals.length; i++) {
+        const d = demoData.deals[i]!;
+        const custIdx = Math.min(d.customerIndex, createdCustomers.length - 1);
+        const repIdx = Math.min(d.repIndex, createdReps.length - 1);
+        const rep = createdReps[repIdx];
+        const cust = createdCustomers[custIdx];
+        const stage = stages.find(s => s.stageOrder === d.stageOrder) ?? stages[0]!;
+        if (!rep || !cust) continue;
+        const dealNo = `D-${String(existingDealCount + i + 1).padStart(6, "0")}`;
+        const followUp = new Date();
+        followUp.setDate(followUp.getDate() + (d.daysUntilFollowUp ?? 7));
+
+        const deal = await tx.deal.create({
+          data: {
+            tenantId,
+            ownerId: rep.id,
+            dealNo,
+            dealName: d.dealName,
+            customerId: cust.id,
+            stageId: stage.id,
+            estimatedValue: d.estimatedValue,
+            followUpAt: followUp,
+            status: stage.isClosedWon ? "WON" : stage.isClosedLost ? "LOST" : "OPEN",
+            closedAt: (stage.isClosedWon || stage.isClosedLost) ? new Date() : null,
+            isDemo: true
+          }
+        });
+        createdDeals.push(deal);
+      }
+
+      // 7. Create visits
+      const existingVisitCount = await tx.visit.count({ where: { tenantId } });
+      let visitIdx = 0;
+      for (const v of demoData.visits) {
+        const custIdx = Math.min(v.customerIndex, createdCustomers.length - 1);
+        const repIdx = Math.min(v.repIndex, createdReps.length - 1);
+        const rep = createdReps[repIdx];
+        const cust = createdCustomers[custIdx];
+        if (!rep || !cust) continue;
+        const visitNo = `V-${String(existingVisitCount + visitIdx + 1).padStart(6, "0")}`;
+        const plannedAt = new Date();
+        plannedAt.setDate(plannedAt.getDate() + (v.daysFromNow ?? 0));
+
+        const isPast = (v.daysFromNow ?? 0) < 0;
+        const visitStatus = isPast ? "CHECKED_OUT" : "PLANNED";
+
+        await tx.visit.create({
+          data: {
+            tenantId,
+            repId: rep.id,
+            customerId: cust.id,
+            visitNo,
+            visitType: v.visitType === "UNPLANNED" ? "UNPLANNED" : "PLANNED",
+            status: visitStatus,
+            plannedAt,
+            objective: v.objective ?? null,
+            checkInAt: isPast ? new Date(plannedAt.getTime() + 5 * 60_000) : null,
+            checkOutAt: isPast ? new Date(plannedAt.getTime() + 45 * 60_000) : null,
+            result: isPast ? (v.result ?? "Completed visit") : null,
+            isDemo: true
+          }
+        });
+        visitIdx++;
+      }
+
+      return {
+        teams: createdTeams.length,
+        reps: createdReps.length,
+        customers: createdCustomers.length,
+        deals: createdDeals.length,
+        visits: visitIdx
+      };
+    });
+
+    // Log global key usage so we can enforce the limit
+    if (resolved.isGlobal) {
+      await prisma.auditLog.create({
+        data: {
+          tenantId,
+          action: "DEMO_DATA_GENERATE_GLOBAL_KEY",
+          detail: { industry, teamCount, repCount, counts: result }
+        }
+      });
+    }
+
+    return reply.status(201).send({
+      ok: true,
+      message: "Demo data generated successfully!",
+      counts: result
+    });
+  });
+
+  /** Delete all demo data — ADMIN only. */
+  app.delete("/tenants/:tenantId/demo-data", async (request, reply) => {
+    const { tenantId } = request.params as { tenantId: string };
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    assertTenantPathAccess(request, tenantId);
+
+    // Delete in correct order (visits → deals → customers → users → teams) to respect FK constraints
+    const [visits, deals, customers, users, teams] = await prisma.$transaction([
+      prisma.visit.deleteMany({ where: { tenantId, isDemo: true } }),
+      prisma.deal.deleteMany({ where: { tenantId, isDemo: true } }),
+      prisma.customer.deleteMany({ where: { tenantId, isDemo: true } }),
+      prisma.user.deleteMany({ where: { tenantId, isDemo: true } }),
+      prisma.team.deleteMany({ where: { tenantId, isDemo: true } })
+    ]);
+
+    return reply.send({
+      ok: true,
+      message: "All demo data has been deleted.",
+      deleted: {
+        visits: visits.count,
+        deals: deals.count,
+        customers: customers.count,
+        users: users.count,
+        teams: teams.count
+      }
+    });
+  });
 };
+
+/** Resolve Anthropic API key — tenant-specific or global fallback. */
+/** Resolve Anthropic API key and indicate whether it's the tenant's own or the global fallback. */
+async function resolveAnthropicKeyWithSource(tenantId: string): Promise<{ key: string; isGlobal: boolean } | null> {
+  const cred = await prisma.tenantIntegrationCredential.findFirst({
+    where: {
+      tenantId,
+      platform: IntegrationPlatform.ANTHROPIC,
+      status: "ENABLED",
+      apiKeyRef: { not: null }
+    },
+    select: { apiKeyRef: true }
+  });
+  if (cred?.apiKeyRef) {
+    const key = decryptField(cred.apiKeyRef);
+    if (key) return { key, isGlobal: false };
+  }
+  const globalKey = config.ANTHROPIC_API_KEY ?? null;
+  if (globalKey) return { key: globalKey, isGlobal: true };
+  return null;
+}

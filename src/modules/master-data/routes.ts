@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { CustomerType, CustomFieldDataType, EntityType, Prisma, UserRole } from "@prisma/client";
 import { z } from "zod";
-import { listVisibleUserIds, requireRoleAtLeast, requireTenantId, requireUserId } from "../../lib/http.js";
+import { listVisibleUserIds, requireRoleAtLeast, requireTenantId, requireUserId, zodMsg } from "../../lib/http.js";
 import { writeEntityChangelog } from "../../lib/changelog.js";
 import { prisma } from "../../lib/prisma.js";
 import { validateCustomFields, asRecord } from "../../lib/custom-fields.js";
@@ -166,7 +166,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     const entityType = resolveCustomFieldEntityType(params.entityType, app);
     const parsed = customFieldDefinitionCreateSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
     const created = await prisma.customFieldDefinition.create({
       data: {
@@ -195,7 +195,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     const entityType = resolveCustomFieldEntityType(params.entityType, app);
     const parsed = customFieldDefinitionUpdateSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
     const existing = await prisma.customFieldDefinition.findFirst({
       where: { id: params.id, tenantId, entityType }
@@ -235,7 +235,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     const tenantId = requireTenantId(request);
     const parsed = paymentTermSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
     const definitions = await prisma.customFieldDefinition.findMany({
       where: { tenantId, entityType: EntityType.PAYMENT_TERM }
@@ -259,7 +259,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     const params = request.params as { id: string };
     const parsed = paymentTermUpdateSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
     const existing = await prisma.paymentTerm.findFirst({
       where: { id: params.id, tenantId }
@@ -340,7 +340,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     const visibleUserIds = await listVisibleUserIds(request);
     const parsed = customerSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
     const paymentTerm = await prisma.paymentTerm.findFirst({
       where: { id: parsed.data.defaultTermId, tenantId, isActive: true },
@@ -406,7 +406,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     const params = request.params as { id: string };
     const parsed = customerUpdateSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
     const existing = await findCustomerInScopeOrThrow({
       tenantId,
@@ -506,7 +506,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     const params = request.params as { id: string };
     const parsed = customerAddressSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     await findCustomerInScopeOrThrow({
@@ -558,7 +558,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     const params = request.params as { id: string };
     const parsed = customerContactSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
     await findCustomerInScopeOrThrow({
       tenantId,
@@ -616,7 +616,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     const changedById = requireUserId(request);
     const parsed = itemSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
     const definitions = await prisma.customFieldDefinition.findMany({
       where: { tenantId, entityType: EntityType.ITEM }
@@ -653,7 +653,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     const params = request.params as { id: string };
     const parsed = itemUpdateSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
     const existing = await prisma.item.findFirst({
       where: { id: params.id, tenantId }

@@ -124,4 +124,60 @@ export const cronRoutes: FastifyPluginAsync = async (app) => {
 
     return { expired: results.length, tenants: results };
   });
+
+  // ── Data Retention (system-level daily maintenance) ──────────────────────
+  // Policy:
+  //   - Audit logs > 12 months: anonymize (clear userId and ipAddress)
+  //   - Audit logs > 24 months: delete
+  //   - Expired refresh tokens: delete
+  //   - Expired WebAuthn challenges: delete
+  app.get("/cron/data-retention", async (request) => {
+    verifyCronSecret(request);
+
+    const now = new Date();
+    const twelveMonthsAgo = new Date(now);
+    twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
+    const twentyFourMonthsAgo = new Date(now);
+    twentyFourMonthsAgo.setMonth(twentyFourMonthsAgo.getMonth() - 24);
+
+    // Delete audit logs older than 24 months
+    const deleted = await prisma.auditLog.deleteMany({
+      where: { createdAt: { lt: twentyFourMonthsAgo } },
+    });
+
+    // Anonymize audit logs between 12-24 months (clear PII)
+    const anonymized = await prisma.auditLog.updateMany({
+      where: {
+        createdAt: { lt: twelveMonthsAgo, gte: twentyFourMonthsAgo },
+        OR: [
+          { userId: { not: null } },
+          { ipAddress: { not: null } },
+        ],
+      },
+      data: { userId: null, ipAddress: null },
+    });
+
+    // Purge expired/revoked refresh tokens older than 30 days
+    const thirtyDaysAgo = new Date(now);
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const purgedTokens = await prisma.refreshToken.deleteMany({
+      where: {
+        OR: [
+          { expiresAt: { lt: thirtyDaysAgo } },
+          { revokedAt: { lt: thirtyDaysAgo } },
+        ],
+      },
+    });
+
+    // Purge expired WebAuthn challenges
+    const purgedChallenges = await prisma.webAuthnChallenge.deleteMany({
+      where: { expiresAt: { lt: now } },
+    });
+
+    return {
+      auditLogs: { deleted: deleted.count, anonymized: anonymized.count },
+      refreshTokens: { purged: purgedTokens.count },
+      webAuthnChallenges: { purged: purgedChallenges.count },
+    };
+  });
 };

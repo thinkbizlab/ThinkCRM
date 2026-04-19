@@ -10,7 +10,7 @@ import {
 } from "@prisma/client";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { requireRoleAtLeast, requireTenantId, requireUserId } from "../../lib/http.js";
+import { requireRoleAtLeast, requireTenantId, requireUserId, zodMsg } from "../../lib/http.js";
 import { prisma } from "../../lib/prisma.js";
 import { connectorInputContractSchema, executeConnectorRun } from "./connector-framework.js";
 
@@ -123,7 +123,7 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
     const tenantId = requireTenantId(request);
     const parsed = sourceSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
     const created = await prisma.integrationSource.create({
       data: {
@@ -162,7 +162,7 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
     const params = request.params as { id: string };
     const parsed = mappingSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
     const source = await prisma.integrationSource.findFirst({
       where: { id: params.id, tenantId }
@@ -213,7 +213,7 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
     const userId = requireUserId(request);
     const parsed = excelImportSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     try {
@@ -271,7 +271,7 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
     const params = request.params as { id: string };
     const contract = syncRunSchema.safeParse(request.body);
     if (!contract.success) {
-      throw app.httpErrors.badRequest(`Connector contract violation: ${contract.error.message}`);
+      throw app.httpErrors.badRequest(`Connector contract violation: ${zodMsg(contract.error)}`);
     }
     if (contract.data.tenant_id !== tenantId) {
       throw app.httpErrors.forbidden("tenant_id does not match authenticated tenant.");
@@ -333,7 +333,7 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
     const sourceId = (request.params as { sourceId: string }).sourceId;
     const parsed = webhookRunSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     try {

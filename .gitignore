@@ -1,5 +1,7 @@
 node_modules/
 .env
+.env.vercel
+.env*.local
 dist/
 *.db
 *.db-journal
@@ -7,3 +9,7 @@ coverage/
 uploads/
 .cursor/
 .vercel
+.claude/
+.agents/
+backups/
+test-results/

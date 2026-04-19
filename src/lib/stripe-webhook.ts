@@ -23,6 +23,36 @@ const stripeEnvelopeSchema = z
   })
   .passthrough();
 
+/**
+ * Ensures webhook payloads are authentic. In production, STRIPE_WEBHOOK_SECRET must be set
+ * and every request must include a valid Stripe-Signature over the raw body.
+ */
+function assertStripeWebhookVerified(rawBody: unknown, stripeSignature?: string): void {
+  if (config.NODE_ENV === "production") {
+    if (!config.STRIPE_WEBHOOK_SECRET) {
+      throw new Error("STRIPE_WEBHOOK_SECRET is required in production.");
+    }
+    if (typeof rawBody !== "string" || !stripeSignature) {
+      throw new Error("INVALID_WEBHOOK_BODY");
+    }
+    try {
+      getStripe().webhooks.constructEvent(rawBody, stripeSignature, config.STRIPE_WEBHOOK_SECRET);
+    } catch {
+      throw new Error("INVALID_WEBHOOK_BODY");
+    }
+    return;
+  }
+
+  // Development / test: verify when all pieces are present; otherwise accept (local fixtures).
+  if (config.STRIPE_WEBHOOK_SECRET && stripeSignature && typeof rawBody === "string") {
+    try {
+      getStripe().webhooks.constructEvent(rawBody, stripeSignature, config.STRIPE_WEBHOOK_SECRET);
+    } catch {
+      throw new Error("INVALID_WEBHOOK_BODY");
+    }
+  }
+}
+
 function mapStripeSubscriptionStatus(raw: string | undefined): SubscriptionStatus | null {
   if (!raw) return null;
   switch (raw) {
@@ -52,16 +82,7 @@ export async function recordStripeWebhookAndSyncSubscription(
   subscriptionId?: string | null;
   statusApplied?: SubscriptionStatus | null;
 }> {
-  // Verify webhook signature. Required in production to prevent forged payloads.
-  if (config.STRIPE_WEBHOOK_SECRET && stripeSignature && typeof rawBody === "string") {
-    try {
-      getStripe().webhooks.constructEvent(rawBody, stripeSignature, config.STRIPE_WEBHOOK_SECRET);
-    } catch {
-      throw new Error("INVALID_WEBHOOK_BODY");
-    }
-  } else if (config.NODE_ENV === "production" && !config.STRIPE_WEBHOOK_SECRET) {
-    throw new Error("STRIPE_WEBHOOK_SECRET is required in production.");
-  }
+  assertStripeWebhookVerified(rawBody, stripeSignature);
 
   // Parse the verified (or unverified-dev) body as JSON if it arrived as a string.
   const body = typeof rawBody === "string" ? JSON.parse(rawBody) : rawBody;

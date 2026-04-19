@@ -72,6 +72,7 @@ model User {
   teamId              String?
   notifPrefs          Json?
   avatarUrl           String?
+  isDemo              Boolean               @default(false)
   externalAccounts    UserExternalAccount[]
   createdAt           DateTime              @default(now())
   updatedAt           DateTime              @updatedAt
@@ -89,6 +90,7 @@ model User {
   aiVisitRecommendationRuns AiVisitRecommendationRun[] @relation("AiVisitRecommendationRunRep")
   entityChangelogs      EntityChangelog[]      @relation("EntityChangelogChangedBy")
   devices               UserDevice[]
+  passkeys              UserPasskey[]
 
   @@unique([tenantId, email])
   @@index([tenantId, isActive, role])
@@ -199,6 +201,7 @@ model Team {
   tenantId    String
   teamName    String
   isActive    Boolean                 @default(true)
+  isDemo      Boolean                 @default(false)
   directorId  String?
   createdAt   DateTime                @default(now())
   updatedAt   DateTime                @updatedAt
@@ -304,6 +307,7 @@ model Customer {
   siteLat           Float?
   siteLng           Float?
   customFields      Json?
+  isDemo            Boolean            @default(false)
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
   tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -423,6 +427,7 @@ model Deal {
   status         DealStatus           @default(OPEN)
   lostNote       String?
   customFields   Json?
+  isDemo         Boolean              @default(false)
   createdAt      DateTime             @default(now())
   updatedAt      DateTime             @updatedAt
   tenant         Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -550,6 +555,7 @@ model Visit {
   checkOutLat   Float?
   checkOutLng   Float?
   result        String?
+  isDemo        Boolean     @default(false)
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
   tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1064,6 +1070,38 @@ enum CronRunStatus {
 enum CronTriggerType {
   SCHEDULED
   MANUAL
+}
+
+// ── WebAuthn Passkeys ───────────────────────────────────────────────────────
+
+model UserPasskey {
+  id               String   @id @default(cuid())
+  userId           String
+  credentialId     String   @unique
+  publicKey        Bytes
+  counter          BigInt   @default(0)
+  transports       String[]
+  deviceName       String   @default("Passkey")
+  aaguid           String?
+  createdAt        DateTime @default(now())
+  lastUsedAt       DateTime?
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ── WebAuthn Challenges ─────────────────────────────────────────────────────
+
+model WebAuthnChallenge {
+  id        String   @id @default(cuid())
+  challenge String   @unique
+  userId    String?
+  tenantId  String?
+  type      String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
 }
 
 // ── Data Sync Framework ─────────────────────────────────────────────────────

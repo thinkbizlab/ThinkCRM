@@ -1,7 +1,18 @@
 import { UserRole } from "@prisma/client";
 import type { FastifyRequest } from "fastify";
+import type { ZodError } from "zod";
 import { config } from "../config.js";
 import { prisma } from "./prisma.js";
+
+/** Convert a ZodError into a short, user-friendly message. */
+export function zodMsg(err: ZodError): string {
+  return err.issues
+    .map(i => {
+      const field = i.path.length ? i.path.join(".") : undefined;
+      return field ? `${field}: ${i.message}` : i.message;
+    })
+    .join("; ");
+}
 
 const superAdminEmails: Set<string> = new Set(
   (config.SUPER_ADMIN_EMAILS ?? "").split(",").map(e => e.trim().toLowerCase()).filter(Boolean)

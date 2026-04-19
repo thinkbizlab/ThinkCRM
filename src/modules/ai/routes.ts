@@ -14,7 +14,7 @@ import { extname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { Anthropic } from "@anthropic-ai/sdk";
-import { requireTenantId, requireUserId, resolveVisibleUserIds, type UserHierarchyNode } from "../../lib/http.js";
+import { requireTenantId, requireUserId, resolveVisibleUserIds, zodMsg, type UserHierarchyNode } from "../../lib/http.js";
 
 type UserLite = UserHierarchyNode & { role: UserRole; teamId: string | null };
 import { prisma } from "../../lib/prisma.js";
@@ -515,7 +515,7 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
     const repId = requireUserId(request);
     const parsed = createRecommendationRunSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const dateFrom = new Date(parsed.data.dateFrom);
@@ -704,7 +704,7 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
     const params = request.params as { runId: string };
     const parsed = recommendationSelectionSchema.safeParse(request.body ?? {});
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const selectedIds = parsed.data.recommendationIds ?? [];
@@ -773,7 +773,7 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
     const params = request.params as { runId: string };
     const parsed = recommendationSelectionSchema.safeParse(request.body ?? {});
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const selectedIds = parsed.data.recommendationIds ?? [];
@@ -1006,7 +1006,7 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
     } else {
       const parsed = jsonVoiceNoteCreateSchema.safeParse(request.body ?? {});
       if (!parsed.success) {
-        throw app.httpErrors.badRequest(parsed.error.message);
+        throw app.httpErrors.badRequest(zodMsg(parsed.error));
       }
       payload = parsed.data;
     }
@@ -1120,7 +1120,7 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
     const params = request.params as { jobId: string };
     const parsedBody = voiceNoteConfirmSchema.safeParse(request.body ?? {});
     if (!parsedBody.success) {
-      throw app.httpErrors.badRequest(parsedBody.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsedBody.error));
     }
 
     const job = await prisma.voiceNoteJob.findUnique({

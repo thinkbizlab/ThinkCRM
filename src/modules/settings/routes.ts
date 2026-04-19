@@ -22,7 +22,8 @@ import {
   requireRoleAtLeast,
   requireSelfOrManagerAccess,
   requireTenantId,
-  requireUserId
+  requireUserId,
+  zodMsg
 } from "../../lib/http.js";
 import { encryptField, decryptCredential } from "../../lib/secrets.js";
 import { smtpPort } from "../../lib/smtp-port.js";
@@ -789,7 +790,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     assertTenantPathAccess(request, params.id);
     const parsed = brandingSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     return prisma.tenantBranding.upsert({
@@ -975,7 +976,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       checkInMaxDistanceM: z.number().int().min(100).max(100_000),
       minVisitDurationMinutes: z.number().int().min(1).max(480)
     }).safeParse(body);
-    if (!parsed.success) throw app.httpErrors.badRequest(parsed.error.message);
+    if (!parsed.success) throw app.httpErrors.badRequest(zodMsg(parsed.error));
     return prisma.tenantVisitConfig.upsert({
       where: { tenantId: params.id },
       update: parsed.data,
@@ -990,7 +991,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     await ensureTargetUserInTenant(params.id, tenantId);
     const parsed = profileIntegrationConnectSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const account = await connectProfileIntegration({
@@ -1011,7 +1012,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     await ensureTargetUserInTenant(params.id, tenantId);
     const parsed = profileIntegrationConnectSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const account = await connectProfileIntegration({
@@ -1032,7 +1033,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     await ensureTargetUserInTenant(params.id, tenantId);
     const parsed = profileIntegrationConnectSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const account = await connectProfileIntegration({
@@ -1057,7 +1058,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     }
     const parsed = profileIntegrationConnectSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
     const account = await connectProfileIntegration({
       tenantId,
@@ -1285,7 +1286,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     }
     const parsed = tenantIntegrationCredentialSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     // H6: For EMAIL, clientSecret holds the SMTP port — validate it is a valid port number.
@@ -1410,7 +1411,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     }
     const parsed = tenantIntegrationEnableSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const credential = await prisma.tenantIntegrationCredential.findUnique({
@@ -1686,7 +1687,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     const tenantId = requireTenantId(request);
     const parsed = teamCreateSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const normalizedTeamName = parsed.data.teamName.trim();
@@ -1769,7 +1770,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
 
     const parsed = teamUpdateSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const requestedName = parsed.data.teamName?.trim();
@@ -1817,7 +1818,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
 
     const parsed = teamMemberAssignSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
     const rep = await ensureRepBelongsToTenant(tenantId, parsed.data.userId, app);
 
@@ -1856,7 +1857,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
 
     const parsed = teamNotificationChannelsUpsertSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const dedupeKey = new Set<string>();
@@ -2035,7 +2036,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     const tenantId = requireTenantId(request);
     const parsed = kpiTargetCreateSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
     const body = parsed.data;
     const rep = await ensureRepBelongsToTenant(tenantId, body.userId, app);
@@ -2069,7 +2070,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     const params = request.params as { id: string };
     const parsed = kpiTargetUpdateSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const existing = await prisma.salesKpiTarget.findFirst({
@@ -2112,7 +2113,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     const tenantId = requireTenantId(request);
     const parsed = kpiTargetListQuerySchema.safeParse(request.query);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const filters = parsed.data;
@@ -2212,7 +2213,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     const tenantId = requireTenantId(request);
     const parsed = storagePresignUploadSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const tenantForUpload = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { slug: true } });
@@ -2255,7 +2256,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     const tenantId = requireTenantId(request);
     const parsed = storagePresignDownloadSchema.safeParse(request.query);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const tenantForDownload = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { slug: true } });
@@ -2279,7 +2280,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     const params = request.params as { id: string };
     const parsed = userManagerAssignSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
     const visibleUserIds = await listVisibleUserIds(request);
     if (request.requestContext.role !== UserRole.ADMIN && !visibleUserIds.has(params.id)) {
@@ -2350,7 +2351,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     const tenantId = requireTenantId(request);
     const parsed = changelogQuerySchema.safeParse(request.query ?? {});
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const rows = await prisma.entityChangelog.findMany({
@@ -2496,7 +2497,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     requireAuth(request);
     const userId = requireUserId(request);
     const parsed = notifPrefsSchema.safeParse(request.body ?? {});
-    if (!parsed.success) throw app.httpErrors.badRequest(parsed.error.message);
+    if (!parsed.success) throw app.httpErrors.badRequest(zodMsg(parsed.error));
     await prisma.user.update({ where: { id: userId }, data: { notifPrefs: parsed.data } });
     return parsed.data;
   });
@@ -2539,7 +2540,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     if (!existing) throw app.httpErrors.notFound("User not found.");
 
     const parsed = userEditSchema.safeParse(request.body);
-    if (!parsed.success) throw app.httpErrors.badRequest(parsed.error.message);
+    if (!parsed.success) throw app.httpErrors.badRequest(zodMsg(parsed.error));
 
     const { fullName, email, role, managerUserId } = parsed.data;
 
@@ -2629,7 +2630,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const parsed = cronJobUpdateSchema.safeParse(request.body);
-    if (!parsed.success) throw app.httpErrors.badRequest(parsed.error.message);
+    if (!parsed.success) throw app.httpErrors.badRequest(zodMsg(parsed.error));
 
     // Validate cron expression using node-cron
     const cron = await import("node-cron");

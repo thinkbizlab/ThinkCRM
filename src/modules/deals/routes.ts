@@ -7,7 +7,8 @@ import {
   listVisibleUserIds,
   requireRoleAtLeast,
   requireTenantId,
-  requireUserId
+  requireUserId,
+  zodMsg
 } from "../../lib/http.js";
 import { writeEntityChangelog } from "../../lib/changelog.js";
 import { prisma } from "../../lib/prisma.js";
@@ -541,7 +542,7 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
     requireRoleAtLeast(request, UserRole.ADMIN);
     const parsed = stageCreateSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const stageData = parsed.data;
@@ -600,7 +601,7 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
     const params = request.params as { stageId: string };
     const parsed = stagePatchSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const stage = await prisma.dealStage.findFirst({
@@ -655,7 +656,7 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
     requireRoleAtLeast(request, UserRole.ADMIN);
     const parsed = stageReorderSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const stageRows = await prisma.dealStage.findMany({
@@ -757,7 +758,7 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
     const ownerId = requireUserId(request);
     const parsed = createDealSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const data = parsed.data;
@@ -816,7 +817,7 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
     const params = request.params as { id: string };
     const parsed = updateDealSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
     const deal = await prisma.deal.findFirst({
       where: { id: params.id, tenantId, ownerId: { in: visibleUserIdList } }
@@ -903,7 +904,7 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
     const params = request.params as { id: string };
     const parsed = moveStageSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const deal = await prisma.deal.findFirst({
@@ -1007,7 +1008,7 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
     const params = request.params as { id: string };
     const parsed = progressSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const deal = await prisma.deal.findFirst({
@@ -1068,7 +1069,7 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
     const params = request.params as { id: string; updateId: string };
     const parsed = createVisitFromProgressSchema.safeParse(request.body ?? {});
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
     const deal = await prisma.deal.findFirst({
       where: { id: params.id, tenantId, ownerId: { in: visibleUserIdList } }
@@ -1188,7 +1189,7 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
     const params = request.params as { id: string };
     const parsed = quotationCreateSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const deal = await prisma.deal.findFirst({
@@ -1306,7 +1307,7 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
     const params = request.params as { id: string };
     const parsed = dealItemsAssignSchema.safeParse(request.body ?? {});
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const deal = await prisma.deal.findFirst({
@@ -1372,7 +1373,7 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
     const params = request.params as { id: string };
     const parsed = quotationStatusPatchSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const quotation = await prisma.quotation.findFirst({
@@ -1400,7 +1401,7 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
     const params = request.params as { id: string };
     const parsed = quotationItemsUpsertSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const quotation = await prisma.quotation.findFirst({
@@ -1472,7 +1473,7 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
     assertTenantPathAccess(request, params.id);
     const parsed = quotationFormConfigSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const header = normalizeLayoutFields(parsed.data.header);

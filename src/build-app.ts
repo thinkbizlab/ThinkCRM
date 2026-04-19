@@ -12,6 +12,7 @@ import { createRemoteJWKSet, jwtVerify } from "jose";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdirSync } from "node:fs";
+import { Sentry } from "./lib/sentry.js";
 
 // Bot Framework JWKS — cached once, jose handles key rotation internally
 const BOT_FRAMEWORK_JWKS = createRemoteJWKSet(
@@ -39,20 +40,41 @@ import { prisma } from "./lib/prisma.js";
 import { decryptField, migrateCredentialsEncryption } from "./lib/secrets.js";
 import { requireActiveTenant } from "./lib/http.js";
 
+function trustProxyFromConfig(): boolean {
+  return (
+    config.TRUST_PROXY === true ||
+    Boolean(process.env.VERCEL) ||
+    Boolean(config.APP_URL)
+  );
+}
+
 export async function buildApp() {
-  const app = Fastify({ logger: true, trustProxy: config.APP_URL ? true : false });
+  const app = Fastify({
+    logger: { level: config.NODE_ENV === "production" ? "warn" : "info" },
+    trustProxy: trustProxyFromConfig()
+  });
   const __dirname = dirname(fileURLToPath(import.meta.url));
 
-  // C10: Security headers — helmet with a permissive CSP for the current inline-script-heavy frontend.
-  // Tighten the CSP incrementally as inline scripts in web/app.js are moved to external files.
+  // Error tracking — Sentry captures unhandled errors from all routes.
+  if (config.SENTRY_DSN) {
+    Sentry.setupFastifyErrorHandler(app);
+  }
+
+  // C10: Security headers. Inline scripts have been externalised (web/boot.js), so
+  // scriptSrc no longer needs 'unsafe-inline'. Google Maps loads from maps.googleapis.com
+  // and pulls additional assets from maps.gstatic.com at runtime. Google Fonts is loaded
+  // from fonts.googleapis.com (CSS) and fonts.gstatic.com (font files). styleSrc keeps
+  // 'unsafe-inline' only because web/app.js still sets a handful of inline style attrs
+  // (el.style.x = ...) that browsers evaluate under styleSrc-attr.
   await app.register(helmet, {
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
-        scriptSrc: ["'self'", "'unsafe-inline'", "maps.googleapis.com"],
-        styleSrc: ["'self'", "'unsafe-inline'"],
+        scriptSrc: ["'self'", "https://maps.googleapis.com", "https://maps.gstatic.com"],
+        styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+        fontSrc: ["'self'", "https://fonts.gstatic.com", "data:"],
         imgSrc: ["'self'", "data:", "https:"],
-        connectSrc: ["'self'"],
+        connectSrc: ["'self'", "https://maps.googleapis.com"],
         frameSrc: ["'none'"],
         objectSrc: ["'none'"],
         upgradeInsecureRequests: config.NODE_ENV === "production" ? [] : null,
@@ -62,29 +84,35 @@ export async function buildApp() {
   });
 
   // M2: CORS — accept APP_URL, tenant subdomains, and verified custom domains.
+  // Custom-domain DB lookups are cached in-memory with a short TTL to prevent
+  // per-request DB hits (and to bound flood cost from varying Origin headers).
+  const customDomainCache = new Map<string, { ok: boolean; expiresAt: number }>();
+  const CUSTOM_DOMAIN_TTL_MS = 60_000;
   await app.register(cors, {
     origin: config.NODE_ENV === "development"
       ? true
       : (origin, cb) => {
           if (!origin) return cb(null, true); // non-browser (curl, server-to-server)
-          // Always allow APP_URL
           if (config.APP_URL && origin === config.APP_URL) return cb(null, true);
-          // Allow *.BASE_DOMAIN subdomains
           if (config.BASE_DOMAIN) {
             try {
               const { hostname } = new URL(origin);
               if (hostname.endsWith(`.${config.BASE_DOMAIN}`)) return cb(null, true);
             } catch { /* malformed origin */ }
           }
-          // Allow verified custom domains (async lookup)
+          let hostname: string;
+          try { hostname = new URL(origin).hostname; } catch { return cb(null, false); }
+          const cached = customDomainCache.get(hostname);
+          if (cached && cached.expiresAt > Date.now()) return cb(null, cached.ok);
           (async () => {
             try {
-              const { hostname } = new URL(origin);
               const record = await prisma.tenantCustomDomain.findFirst({
                 where: { domain: hostname, status: "VERIFIED" },
                 select: { id: true }
               });
-              return cb(null, !!record);
+              const ok = !!record;
+              customDomainCache.set(hostname, { ok, expiresAt: Date.now() + CUSTOM_DOMAIN_TTL_MS });
+              return cb(null, ok);
             } catch {
               return cb(null, false);
             }
@@ -131,6 +159,7 @@ export async function buildApp() {
     await app.register(swaggerUi, {
       routePrefix: "/docs"
     });
+    app.get("/openapi.json", async () => app.swagger());
   }
   await app.register(fastifyStatic, {
     root: join(__dirname, "..", "web"),
@@ -297,7 +326,6 @@ export async function buildApp() {
     startScheduler().catch(err => app.log.error({ err }, "[scheduler] startup error"));
   }
 
-  app.get("/openapi.json", async () => app.swagger());
   app.get("/", async (_, reply) => reply.sendFile("index.html"));
   app.get("/dashboard", async (_, reply) => reply.sendFile("index.html"));
   app.get("/deals", async (_, reply) => reply.sendFile("index.html"));

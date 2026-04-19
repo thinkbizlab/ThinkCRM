@@ -32,8 +32,15 @@ const configSchema = z.object({
   // Optional: Google OAuth (Gmail login). Register an app in Google Cloud Console.
   GOOGLE_CLIENT_ID: z.preprocess(v => (v === "" ? undefined : v), z.string().optional()),
   GOOGLE_CLIENT_SECRET: z.preprocess(v => (v === "" ? undefined : v), z.string().optional()),
-  // Optional in dev; REQUIRED in production. Generate with: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+  // Optional in dev/test; REQUIRED in production for integration credential encryption.
+  // Generate with: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
   ENCRYPTION_KEY: z.preprocess(v => (v === "" ? undefined : v), z.string().regex(/^[0-9a-fA-F]{64}$/, "ENCRYPTION_KEY must be 64 hex characters").optional()),
+  // Trust X-Forwarded-* from a reverse proxy (client IP, HTTPS). Enabled automatically on Vercel or when APP_URL is set; set TRUST_PROXY=1 for other hosts.
+  TRUST_PROXY: z.preprocess(v => {
+    if (v === undefined || v === "") return undefined;
+    const s = String(v).toLowerCase();
+    return s === "1" || s === "true" || s === "yes";
+  }, z.boolean().optional()),
   // Optional: system-level SMTP for password reset emails when the tenant has no EMAIL integration.
   SMTP_HOST: z.preprocess(v => (v === "" ? undefined : v), z.string().optional()),
   SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(587),
@@ -64,6 +71,8 @@ const configSchema = z.object({
   VERCEL_API_TOKEN: z.preprocess(v => (v === "" ? undefined : v), z.string().optional()),
   // Comma-separated list of emails that have super-admin access (cross-tenant management).
   SUPER_ADMIN_EMAILS: z.preprocess(v => (v === "" ? undefined : v), z.string().optional()),
+  // Optional: Sentry DSN for error tracking. Get it from sentry.io → Project Settings → DSN.
+  SENTRY_DSN: z.preprocess(v => (v === "" ? undefined : v), z.string().url().optional()),
 });
 
 export type AppConfig = z.infer<typeof configSchema>;
@@ -74,4 +83,10 @@ export const config: AppConfig = configSchema.parse(process.env);
 const WEAK_JWT_SECRETS = ["thinkcrm-dev-secret-please-change", "change-me-to-a-random-32-char-string"];
 if (config.NODE_ENV === "production" && WEAK_JWT_SECRETS.includes(config.JWT_SECRET)) {
   throw new Error("JWT_SECRET must be set to a strong random value in production. Generate one with: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"");
+}
+
+if (config.NODE_ENV === "production" && !config.ENCRYPTION_KEY) {
+  throw new Error(
+    "ENCRYPTION_KEY must be set in production (64 hex characters). Generate with: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\""
+  );
 }

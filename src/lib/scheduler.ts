@@ -199,6 +199,47 @@ export async function startScheduler(): Promise<void> {
     }
   });
 
+  // Data retention — anonymize old audit logs, purge expired tokens/challenges.
+  // Runs daily at 00:15 server time.
+  cron.schedule("15 0 * * *", async () => {
+    try {
+      const now = new Date();
+      const twelveMonthsAgo = new Date(now);
+      twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
+      const twentyFourMonthsAgo = new Date(now);
+      twentyFourMonthsAgo.setMonth(twentyFourMonthsAgo.getMonth() - 24);
+
+      const deleted = await prisma.auditLog.deleteMany({
+        where: { createdAt: { lt: twentyFourMonthsAgo } },
+      });
+      const anonymized = await prisma.auditLog.updateMany({
+        where: {
+          createdAt: { lt: twelveMonthsAgo, gte: twentyFourMonthsAgo },
+          OR: [{ userId: { not: null } }, { ipAddress: { not: null } }],
+        },
+        data: { userId: null, ipAddress: null },
+      });
+
+      const thirtyDaysAgo = new Date(now);
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      const purgedTokens = await prisma.refreshToken.deleteMany({
+        where: {
+          OR: [
+            { expiresAt: { lt: thirtyDaysAgo } },
+            { revokedAt: { lt: thirtyDaysAgo } },
+          ],
+        },
+      });
+      const purgedChallenges = await prisma.webAuthnChallenge.deleteMany({
+        where: { expiresAt: { lt: now } },
+      });
+
+      console.log(`[scheduler] data-retention: audit deleted=${deleted.count} anonymized=${anonymized.count}, tokens purged=${purgedTokens.count}, challenges purged=${purgedChallenges.count}`);
+    } catch (err) {
+      console.error("[scheduler] data-retention job error", err);
+    }
+  });
+
   console.log(`[scheduler] Started — ${activeTasks.size} active tasks across ${tenants.length} tenants`);
 }
 

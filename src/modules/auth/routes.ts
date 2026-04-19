@@ -2,8 +2,9 @@ import type { FastifyPluginAsync } from "fastify";
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import { createRemoteJWKSet, jwtVerify } from "jose";
+import { generateRegistrationOptions, verifyRegistrationResponse, generateAuthenticationOptions, verifyAuthenticationResponse } from "@simplewebauthn/server";
 import { config } from "../../config.js";
-import { requireAuth, requireTenantId, requireUserId, isSuperAdmin } from "../../lib/http.js";
+import { requireAuth, requireTenantId, requireUserId, isSuperAdmin, zodMsg } from "../../lib/http.js";
 import { hashPassword, verifyPassword } from "../../lib/password.js";
 
 // JWKS sets are created once and cached (jose handles key rotation internally)
@@ -82,7 +83,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
   app.post("/auth/login", async (request) => {
     const parsed = loginSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const tenant = await prisma.tenant.findUnique({
@@ -142,7 +143,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
   app.post("/auth/first-login-reset", async (request) => {
     const parsed = firstLoginResetSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
     if (parsed.data.currentPassword === parsed.data.newPassword) {
       throw app.httpErrors.badRequest("New password must be different from current password.");
@@ -186,7 +187,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     const tenantId = requireTenantId(request);
     const userId = requireUserId(request);
     const parsed = profileUpdateSchema.safeParse(request.body);
-    if (!parsed.success) throw app.httpErrors.badRequest(parsed.error.message);
+    if (!parsed.success) throw app.httpErrors.badRequest(zodMsg(parsed.error));
 
     const existing = await prisma.user.findFirst({ where: { id: userId, tenantId } });
     if (!existing) throw app.httpErrors.notFound("User not found.");
@@ -211,7 +212,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     const tenantId = requireTenantId(request);
     const userId = requireUserId(request);
     const parsed = changePasswordSchema.safeParse(request.body);
-    if (!parsed.success) throw app.httpErrors.badRequest(parsed.error.message);
+    if (!parsed.success) throw app.httpErrors.badRequest(zodMsg(parsed.error));
     if (parsed.data.currentPassword === parsed.data.newPassword) {
       throw app.httpErrors.badRequest("New password must differ from current password.");
     }
@@ -978,7 +979,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
   // Always returns 200 regardless of whether the user/tenant exists — prevents enumeration.
   app.post("/auth/forgot-password", async (request, reply) => {
     const parsed = forgotPasswordSchema.safeParse(request.body);
-    if (!parsed.success) throw app.httpErrors.badRequest(parsed.error.message);
+    if (!parsed.success) throw app.httpErrors.badRequest(zodMsg(parsed.error));
 
     const tenant = await prisma.tenant.findUnique({
       where: { slug: parsed.data.tenantSlug },
@@ -1061,7 +1062,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/auth/reset-password", async (request) => {
     const parsed = resetPasswordSchema.safeParse(request.body);
-    if (!parsed.success) throw app.httpErrors.badRequest(parsed.error.message);
+    if (!parsed.success) throw app.httpErrors.badRequest(zodMsg(parsed.error));
 
     const record = await prisma.passwordResetToken.findUnique({
       where: { token: parsed.data.token }
@@ -1191,7 +1192,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/auth/accept-invite", async (request, reply) => {
     const parsed = acceptInviteSchema.safeParse(request.body);
-    if (!parsed.success) throw app.httpErrors.badRequest(parsed.error.message);
+    if (!parsed.success) throw app.httpErrors.badRequest(zodMsg(parsed.error));
 
     const invite = await prisma.userInvite.findUnique({
       where: { token: parsed.data.token }
@@ -1261,7 +1262,18 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     if (!rt || typeof rt !== "string") throw app.httpErrors.badRequest("refreshToken is required.");
 
     const record = await prisma.refreshToken.findUnique({ where: { token: rt } });
-    if (!record || record.revokedAt || record.expiresAt < new Date()) {
+    if (!record || record.expiresAt < new Date()) {
+      throw app.httpErrors.unauthorized("Invalid or expired refresh token.");
+    }
+
+    // Token rotation replay detection: if a previously-revoked token is reused,
+    // an attacker may have stolen it. Revoke ALL tokens for this user as a precaution.
+    if (record.revokedAt) {
+      await prisma.refreshToken.updateMany({
+        where: { userId: record.userId, revokedAt: null },
+        data: { revokedAt: new Date() }
+      });
+      app.log.warn({ userId: record.userId }, "Revoked refresh token reused — all tokens revoked (possible token theft)");
       throw app.httpErrors.unauthorized("Invalid or expired refresh token.");
     }
 
@@ -1271,7 +1283,12 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     });
     if (!user) throw app.httpErrors.unauthorized("User not found or inactive.");
 
-    // Issue a short-lived access token for mobile clients.
+    // Rotate: revoke old token and issue a new one atomically.
+    const [, newRefreshToken] = await Promise.all([
+      prisma.refreshToken.update({ where: { id: record.id }, data: { revokedAt: new Date() } }),
+      createRefreshToken(record.tenantId, record.userId, record.deviceId ?? undefined),
+    ]);
+
     const accessToken = await app.jwt.sign({
       userId: user.id,
       tenantId: user.tenantId,
@@ -1279,7 +1296,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       email: user.email
     }, { expiresIn: "15m" });
 
-    return { accessToken, tokenType: "Bearer" };
+    return { accessToken, refreshToken: newRefreshToken, tokenType: "Bearer" };
   });
 
   // ── Logout (revoke refresh token) ─────────────────────────────────────────────
@@ -1302,7 +1319,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     const tenantId = requireTenantId(request);
     const userId   = requireUserId(request);
     const parsed   = registerDeviceSchema.safeParse(request.body);
-    if (!parsed.success) throw app.httpErrors.badRequest(parsed.error.message);
+    if (!parsed.success) throw app.httpErrors.badRequest(zodMsg(parsed.error));
 
     const device = await prisma.userDevice.upsert({
       where: { userId_deviceToken: { userId, deviceToken: parsed.data.deviceToken } },
@@ -1327,6 +1344,397 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     }
 
     await prisma.userDevice.deleteMany({ where: { userId, deviceToken } });
+    return { ok: true };
+  });
+
+  // ── WebAuthn Passkey ──────────────────────────────────────────────────────────
+
+  /** Derive RP ID and origin from APP_URL config. */
+  function getWebAuthnRP(): { rpId: string; rpName: string; origin: string } {
+    const appUrl = config.APP_URL ?? "http://localhost:3000";
+    const url = new URL(appUrl);
+    return {
+      rpId: url.hostname,
+      rpName: "ThinkCRM",
+      origin: url.origin
+    };
+  }
+
+  const passkeyLoginOptionsSchema = z.object({
+    tenantSlug: z.string().min(2),
+    email: z.string().email().transform(s => s.toLowerCase())
+  });
+
+  /** Cleanup expired challenges (best-effort, runs occasionally). */
+  async function cleanupExpiredChallenges(): Promise<void> {
+    if (Math.random() > 0.1) return; // ~10% chance per request
+    await prisma.webAuthnChallenge.deleteMany({ where: { expiresAt: { lt: new Date() } } });
+  }
+
+  // ── Register passkey: step 1 — get options ──────────────────────────────────
+
+  app.post("/auth/passkey/register-options", async (request) => {
+    requireAuth(request);
+    const tenantId = requireTenantId(request);
+    const userId   = requireUserId(request);
+
+    const user = await prisma.user.findFirst({
+      where: { id: userId, tenantId, isActive: true },
+      select: { id: true, email: true, fullName: true, passkeys: { select: { credentialId: true } } }
+    });
+    if (!user) throw app.httpErrors.notFound("User not found.");
+
+    const MAX_PASSKEYS_PER_USER = 10;
+    if (user.passkeys.length >= MAX_PASSKEYS_PER_USER) {
+      throw app.httpErrors.badRequest(`Maximum of ${MAX_PASSKEYS_PER_USER} passkeys per user. Remove an existing passkey first.`);
+    }
+
+    const { rpId, rpName } = getWebAuthnRP();
+
+    const options = await generateRegistrationOptions({
+      rpName,
+      rpID: rpId,
+      userName: user.email,
+      userDisplayName: user.fullName,
+      excludeCredentials: user.passkeys.map(pk => ({
+        id: pk.credentialId,
+        transports: []
+      })),
+      authenticatorSelection: {
+        residentKey: "preferred",
+        userVerification: "preferred"
+      },
+      attestationType: "none"
+    });
+
+    // Store challenge in DB (not memory — works across serverless instances)
+    await prisma.webAuthnChallenge.create({
+      data: {
+        challenge: options.challenge,
+        userId,
+        tenantId,
+        type: "registration",
+        expiresAt: new Date(Date.now() + 5 * 60 * 1000) // 5 minutes
+      }
+    });
+
+    void cleanupExpiredChallenges();
+
+    return options;
+  });
+
+  // ── Register passkey: step 2 — verify ───────────────────────────────────────
+
+  app.post("/auth/passkey/register", async (request) => {
+    requireAuth(request);
+    const tenantId = requireTenantId(request);
+    const userId   = requireUserId(request);
+    const body = request.body as Record<string, unknown>;
+    const deviceName = typeof body.deviceName === "string" ? body.deviceName.slice(0, 120) : "Passkey";
+    const response = body.credential;
+    if (!response || typeof response !== "object") {
+      throw app.httpErrors.badRequest("Missing credential in request body.");
+    }
+
+    // Find and consume the challenge
+    const challengeRecord = await prisma.webAuthnChallenge.findFirst({
+      where: { userId, tenantId, type: "registration", expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: "desc" }
+    });
+    if (!challengeRecord) {
+      throw app.httpErrors.badRequest("No pending registration challenge. Please start again.");
+    }
+
+    const { rpId, origin } = getWebAuthnRP();
+
+    // Consume challenge immediately — single-use regardless of verification outcome
+    await prisma.webAuthnChallenge.delete({ where: { id: challengeRecord.id } });
+
+    let verification;
+    try {
+      verification = await verifyRegistrationResponse({
+        response: response as any,
+        expectedChallenge: challengeRecord.challenge,
+        expectedOrigin: origin,
+        expectedRPID: rpId,
+        requireUserVerification: false
+      });
+    } catch {
+      throw app.httpErrors.badRequest("Passkey registration verification failed. Please try again.");
+    }
+
+    if (!verification.verified || !verification.registrationInfo) {
+      throw app.httpErrors.badRequest("Passkey registration verification failed.");
+    }
+
+    const { credential, aaguid } = verification.registrationInfo;
+
+    // Save the passkey
+    const passkey = await prisma.userPasskey.create({
+      data: {
+        userId,
+        credentialId: credential.id,
+        publicKey: Buffer.from(credential.publicKey),
+        counter: credential.counter,
+        transports: credential.transports ?? [],
+        deviceName,
+        aaguid: aaguid ?? null
+      }
+    });
+
+    await logAuditEvent(tenantId, userId, "PASSKEY_REGISTERED", { passkeyId: passkey.id, deviceName }, request.ip);
+
+    return {
+      ok: true,
+      passkey: {
+        id: passkey.id,
+        deviceName: passkey.deviceName,
+        createdAt: passkey.createdAt
+      }
+    };
+  });
+
+  // ── Login with passkey: step 1 — get options ────────────────────────────────
+
+  app.post("/auth/passkey/login-options", async (request) => {
+    const parsed = passkeyLoginOptionsSchema.safeParse(request.body);
+    if (!parsed.success) throw app.httpErrors.badRequest(zodMsg(parsed.error));
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { slug: parsed.data.tenantSlug },
+      select: { id: true }
+    });
+    if (!tenant) throw app.httpErrors.unauthorized("Invalid tenant or credentials.");
+
+    const user = await prisma.user.findFirst({
+      where: { tenantId: tenant.id, email: parsed.data.email, isActive: true },
+      select: { id: true, passkeys: { select: { credentialId: true, transports: true } } }
+    });
+    // Return generic options even if user not found (timing attack defence)
+    if (!user || user.passkeys.length === 0) {
+      const dummyOptions = await generateAuthenticationOptions({
+        rpID: getWebAuthnRP().rpId,
+        userVerification: "preferred",
+        allowCredentials: []
+      });
+      // Don't store challenge — it will never verify
+      return dummyOptions;
+    }
+
+    const { rpId } = getWebAuthnRP();
+
+    const options = await generateAuthenticationOptions({
+      rpID: rpId,
+      userVerification: "preferred",
+      allowCredentials: user.passkeys.map(pk => ({
+        id: pk.credentialId,
+        transports: pk.transports as any[]
+      }))
+    });
+
+    await prisma.webAuthnChallenge.create({
+      data: {
+        challenge: options.challenge,
+        userId: user.id,
+        tenantId: tenant.id,
+        type: "authentication",
+        expiresAt: new Date(Date.now() + 5 * 60 * 1000)
+      }
+    });
+
+    void cleanupExpiredChallenges();
+
+    return options;
+  });
+
+  // ── Login with passkey: step 2 — verify ─────────────────────────────────────
+
+  app.post("/auth/passkey/login", async (request) => {
+    const body = request.body as Record<string, unknown>;
+    const tenantSlug = typeof body.tenantSlug === "string" ? body.tenantSlug : "";
+    const email = typeof body.email === "string" ? body.email.toLowerCase() : "";
+    const credential = body.credential;
+    if (!tenantSlug || !email || !credential || typeof credential !== "object") {
+      throw app.httpErrors.badRequest("tenantSlug, email, and credential are required.");
+    }
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { slug: tenantSlug },
+      select: { id: true, slug: true, name: true }
+    });
+    if (!tenant) throw app.httpErrors.unauthorized("Invalid tenant or credentials.");
+
+    const user = await prisma.user.findFirst({
+      where: { tenantId: tenant.id, email, isActive: true },
+      select: { id: true, email: true, fullName: true, role: true, tenantId: true, avatarUrl: true, emailVerified: true, mustResetPassword: true }
+    });
+    if (!user) throw app.httpErrors.unauthorized("Invalid tenant or credentials.");
+
+    if (!user.emailVerified) {
+      return { needsEmailVerification: true, tenantSlug: tenant.slug, email: user.email };
+    }
+    if (user.mustResetPassword) {
+      throw app.httpErrors.forbidden("First login password reset required.");
+    }
+
+    // Find the challenge
+    const challengeRecord = await prisma.webAuthnChallenge.findFirst({
+      where: { userId: user.id, tenantId: tenant.id, type: "authentication", expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: "desc" }
+    });
+    if (!challengeRecord) {
+      throw app.httpErrors.unauthorized("Invalid tenant or credentials.");
+    }
+
+    // Find the passkey credential
+    const cred = credential as Record<string, unknown>;
+    const credentialId = typeof cred.id === "string" ? cred.id : "";
+    const passkey = await prisma.userPasskey.findUnique({ where: { credentialId } });
+    if (!passkey || passkey.userId !== user.id) {
+      throw app.httpErrors.unauthorized("Invalid tenant or credentials.");
+    }
+
+    const { rpId, origin } = getWebAuthnRP();
+
+    // Consume challenge immediately — single-use regardless of verification outcome
+    await prisma.webAuthnChallenge.delete({ where: { id: challengeRecord.id } });
+
+    let verification;
+    try {
+      verification = await verifyAuthenticationResponse({
+        response: credential as any,
+        expectedChallenge: challengeRecord.challenge,
+        expectedOrigin: origin,
+        expectedRPID: rpId,
+        requireUserVerification: false,
+        credential: {
+          id: passkey.credentialId,
+          publicKey: passkey.publicKey,
+          counter: Number(passkey.counter),
+          transports: passkey.transports as any[]
+        }
+      });
+    } catch (err: any) {
+      await logAuditEvent(tenant.id, user.id, "LOGIN_FAILED", { email, reason: "passkey_verification_failed", error: err.message }, request.ip);
+      throw app.httpErrors.unauthorized("Invalid tenant or credentials.");
+    }
+
+    if (!verification.verified) {
+      throw app.httpErrors.unauthorized("Invalid tenant or credentials.");
+    }
+
+    // Update counter & last used timestamp
+    await prisma.userPasskey.update({
+      where: { id: passkey.id },
+      data: {
+        counter: verification.authenticationInfo.newCounter,
+        lastUsedAt: new Date()
+      }
+    });
+
+    const accessToken = await app.jwt.sign({
+      userId: user.id,
+      tenantId: tenant.id,
+      role: user.role,
+      email: user.email
+    }, { expiresIn: "1h" });
+
+    await logAuditEvent(tenant.id, user.id, "LOGIN", { email, method: "passkey", passkeyId: passkey.id }, request.ip);
+
+    const refreshToken = await createRefreshToken(tenant.id, user.id);
+
+    return {
+      accessToken,
+      refreshToken,
+      tokenType: "Bearer",
+      user: {
+        id: user.id,
+        tenantId: tenant.id,
+        role: user.role,
+        email: user.email,
+        fullName: user.fullName,
+        avatarUrl: resolveAvatarUrl(user.id, user.avatarUrl, tenant.id)
+      }
+    };
+  });
+
+  // ── List own passkeys ───────────────────────────────────────────────────────
+
+  app.get("/auth/passkeys", async (request) => {
+    requireAuth(request);
+    const userId = requireUserId(request);
+
+    const passkeys = await prisma.userPasskey.findMany({
+      where: { userId },
+      select: { id: true, deviceName: true, createdAt: true, lastUsedAt: true, aaguid: true },
+      orderBy: { createdAt: "desc" }
+    });
+
+    return { passkeys };
+  });
+
+  // ── Delete own passkey ──────────────────────────────────────────────────────
+
+  app.delete("/auth/passkeys/:passkeyId", async (request) => {
+    requireAuth(request);
+    const tenantId = requireTenantId(request);
+    const userId   = requireUserId(request);
+    const { passkeyId } = request.params as { passkeyId: string };
+
+    const passkey = await prisma.userPasskey.findFirst({ where: { id: passkeyId, userId } });
+    if (!passkey) throw app.httpErrors.notFound("Passkey not found.");
+
+    await prisma.userPasskey.delete({ where: { id: passkeyId } });
+    await logAuditEvent(tenantId, userId, "PASSKEY_DELETED", { passkeyId, deviceName: passkey.deviceName }, request.ip);
+
+    return { ok: true };
+  });
+
+  // ── Admin: list passkeys for a user ─────────────────────────────────────────
+
+  app.get("/auth/users/:userId/passkeys", async (request) => {
+    requireAuth(request);
+    const tenantId = requireTenantId(request);
+    if (request.requestContext.role !== "ADMIN") throw app.httpErrors.forbidden("Only admins can manage other users' passkeys.");
+
+    const { userId } = request.params as { userId: string };
+
+    // Verify user belongs to same tenant
+    const user = await prisma.user.findFirst({
+      where: { id: userId, tenantId },
+      select: { id: true, email: true, fullName: true }
+    });
+    if (!user) throw app.httpErrors.notFound("User not found.");
+
+    const passkeys = await prisma.userPasskey.findMany({
+      where: { userId },
+      select: { id: true, deviceName: true, createdAt: true, lastUsedAt: true, aaguid: true },
+      orderBy: { createdAt: "desc" }
+    });
+
+    return { user: { id: user.id, email: user.email, fullName: user.fullName }, passkeys };
+  });
+
+  // ── Admin: delete passkey for a user ────────────────────────────────────────
+
+  app.delete("/auth/users/:userId/passkeys/:passkeyId", async (request) => {
+    requireAuth(request);
+    const tenantId = requireTenantId(request);
+    const adminUserId = requireUserId(request);
+    if (request.requestContext.role !== "ADMIN") throw app.httpErrors.forbidden("Only admins can manage other users' passkeys.");
+
+    const { userId, passkeyId } = request.params as { userId: string; passkeyId: string };
+
+    // Verify user belongs to same tenant
+    const user = await prisma.user.findFirst({ where: { id: userId, tenantId }, select: { id: true } });
+    if (!user) throw app.httpErrors.notFound("User not found.");
+
+    const passkey = await prisma.userPasskey.findFirst({ where: { id: passkeyId, userId } });
+    if (!passkey) throw app.httpErrors.notFound("Passkey not found.");
+
+    await prisma.userPasskey.delete({ where: { id: passkeyId } });
+    await logAuditEvent(tenantId, adminUserId, "PASSKEY_DELETED_BY_ADMIN", { passkeyId, targetUserId: userId, deviceName: passkey.deviceName }, request.ip);
+
     return { ok: true };
   });
 };

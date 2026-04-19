@@ -8,7 +8,8 @@ import {
   requireRoleAtLeast,
   requireSelfOrManagerAccess,
   requireTenantId,
-  requireUserId
+  requireUserId,
+  zodMsg
 } from "../../lib/http.js";
 import { hashPassword } from "../../lib/password.js";
 import { prisma } from "../../lib/prisma.js";
@@ -278,7 +279,7 @@ export const apiFirstRoutes: FastifyPluginAsync = async (app) => {
     assertTenantPathAccess(request, params.id);
     const parsed = tenantScopedPaymentMethodSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
     const subscription = await prisma.subscription.findFirst({
       where: { tenantId: params.id },
@@ -302,7 +303,7 @@ export const apiFirstRoutes: FastifyPluginAsync = async (app) => {
     assertTenantPathAccess(request, params.id);
     const parsed = seatUpdateSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
     try {
       return await updateSubscriptionSeatCount(prisma, {
@@ -324,7 +325,7 @@ export const apiFirstRoutes: FastifyPluginAsync = async (app) => {
     const invitedById = requireUserId(request);
     const parsed = userInviteSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
     try {
       await validateTenantScopedReferences(tenantId, parsed.data);
@@ -536,7 +537,7 @@ export const apiFirstRoutes: FastifyPluginAsync = async (app) => {
     const params = request.params as { id: string };
     const parsed = roleUpdateSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
     const target = await prisma.user.findFirst({
       where: { id: params.id, tenantId }
@@ -601,7 +602,7 @@ export const apiFirstRoutes: FastifyPluginAsync = async (app) => {
     assertTenantPathAccess(request, params.id);
     const parsed = roleChainSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
     const sorted = parsed.data.chain.sort((a, b) => a.rankOrder - b.rankOrder);
     const created = await prisma.$transaction(async (tx) => {
@@ -636,7 +637,7 @@ export const apiFirstRoutes: FastifyPluginAsync = async (app) => {
     }
     const parsed = customFieldsUpsertSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const definitions = await prisma.customFieldDefinition.findMany({
@@ -705,7 +706,7 @@ export const apiFirstRoutes: FastifyPluginAsync = async (app) => {
     const params = request.params as { id: string; addressId: string };
     const parsed = customerAddressDefaultsSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const customer = await prisma.customer.findFirst({

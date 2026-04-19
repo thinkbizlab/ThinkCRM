@@ -1,0 +1,14 @@
+-- AlterTable
+ALTER TABLE "Customer" ADD COLUMN "isDemo" BOOLEAN NOT NULL DEFAULT false;
+
+-- AlterTable
+ALTER TABLE "Deal" ADD COLUMN "isDemo" BOOLEAN NOT NULL DEFAULT false;
+
+-- AlterTable
+ALTER TABLE "Team" ADD COLUMN "isDemo" BOOLEAN NOT NULL DEFAULT false;
+
+-- AlterTable
+ALTER TABLE "User" ADD COLUMN "isDemo" BOOLEAN NOT NULL DEFAULT false;
+
+-- AlterTable
+ALTER TABLE "Visit" ADD COLUMN "isDemo" BOOLEAN NOT NULL DEFAULT false;

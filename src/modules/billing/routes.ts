@@ -1,7 +1,7 @@
 import { UserRole } from "@prisma/client";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { requireRoleAtLeast, requireTenantId, requireUserId } from "../../lib/http.js";
+import { requireRoleAtLeast, requireTenantId, requireUserId, zodMsg } from "../../lib/http.js";
 import { prisma } from "../../lib/prisma.js";
 import { recordStripeWebhookAndSyncSubscription } from "../../lib/stripe-webhook.js";
 import { updateSubscriptionSeatCount } from "../../lib/subscription-seats.js";
@@ -191,7 +191,7 @@ export const billingRoutes: FastifyPluginAsync = async (app) => {
     const tenantId = requireTenantId(request);
     const parsed = captureSubscriptionSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const current = await prisma.subscription.findFirst({
@@ -224,7 +224,7 @@ export const billingRoutes: FastifyPluginAsync = async (app) => {
     const tenantId = requireTenantId(request);
     const parsed = seatUpdateSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     try {
@@ -261,7 +261,7 @@ export const billingRoutes: FastifyPluginAsync = async (app) => {
     const tenantId = requireTenantId(request);
     const parsed = storageRecordSchema.safeParse(request.body);
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const quota = await prisma.tenantStorageQuota.findFirst({ where: { tenantId } });
@@ -334,7 +334,7 @@ export const billingRoutes: FastifyPluginAsync = async (app) => {
     const tenantId = requireTenantId(request);
     const parsed = monthlyInvoiceQuerySchema.safeParse(request.query ?? {});
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
     const targetMonth = parsed.data.month;
     const invoiceMonth = targetMonth ?? asDateKey(startOfMonth(undefined)).slice(0, 7);
@@ -376,7 +376,7 @@ export const billingRoutes: FastifyPluginAsync = async (app) => {
     const tenantId = requireTenantId(request);
     const parsed = finalizeInvoiceSchema.safeParse(request.body ?? {});
     if (!parsed.success) {
-      throw app.httpErrors.badRequest(parsed.error.message);
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const preview = await buildMonthlyInvoicePreview(tenantId, parsed.data.month);
