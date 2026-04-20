@@ -90,6 +90,14 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
+    // When the login request arrives via a tenant-bound host (subdomain or verified
+    // custom domain), lock the workspace to that host regardless of what the client
+    // submitted — customers should not be able to sign in to another workspace.
+    const hostResolved = await resolveHostTenantSlug(request.hostname);
+    if (hostResolved && hostResolved.tenantSlug !== parsed.data.tenantSlug) {
+      throw app.httpErrors.unauthorized("Invalid tenant or credentials.");
+    }
+
     const emailIsSuperAdmin = superAdminEmailSet.has(parsed.data.email);
 
     const tenant = await prisma.tenant.findUnique({
@@ -920,36 +928,47 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     };
   });
 
-  app.get("/auth/resolve-domain", async (request, reply) => {
-    const host = (request.query as { host?: string }).host?.trim().toLowerCase();
-    if (!host) {
-      throw app.httpErrors.badRequest("host query parameter is required.");
-    }
+  // Resolve a request hostname to a tenant slug, if it belongs to a subdomain
+  // or verified custom domain. Returns null if the host is unclaimed (the normal
+  // case for the shared app URL — user picks their workspace on the login form).
+  async function resolveHostTenantSlug(host: string):
+    Promise<{ tenantSlug: string; resolvedVia: "subdomain" | "custom-domain" } | null> {
+    const h = host.trim().toLowerCase();
+    if (!h) return null;
 
     // Tier 1: Subdomain — if BASE_DOMAIN is set and host is {slug}.basedomain
     const baseDomain = config.BASE_DOMAIN?.toLowerCase();
-    if (baseDomain && host.endsWith(`.${baseDomain}`)) {
-      const subdomain = host.slice(0, -(baseDomain.length + 1)); // strip ".basedomain"
-      if (subdomain && !subdomain.includes(".")) { // single-level subdomain only
+    if (baseDomain && h.endsWith(`.${baseDomain}`)) {
+      const subdomain = h.slice(0, -(baseDomain.length + 1));
+      if (subdomain && !subdomain.includes(".")) {
         const tenant = await prisma.tenant.findUnique({
           where: { slug: subdomain },
           select: { slug: true }
         });
-        if (tenant) {
-          return reply.send({ tenantSlug: tenant.slug, resolvedVia: "subdomain" });
-        }
+        if (tenant) return { tenantSlug: tenant.slug, resolvedVia: "subdomain" };
       }
     }
 
     // Tier 2: Custom domain — look up in TenantCustomDomain table
     const record = await prisma.tenantCustomDomain.findFirst({
-      where: { domain: host, status: "VERIFIED" },
+      where: { domain: h, status: "VERIFIED" },
       select: { tenant: { select: { slug: true } } }
     });
-    if (!record) {
+    if (record) return { tenantSlug: record.tenant.slug, resolvedVia: "custom-domain" };
+
+    return null;
+  }
+
+  app.get("/auth/resolve-domain", async (request, reply) => {
+    const host = (request.query as { host?: string }).host;
+    if (!host) {
+      throw app.httpErrors.badRequest("host query parameter is required.");
+    }
+    const resolved = await resolveHostTenantSlug(host);
+    if (!resolved) {
       throw app.httpErrors.notFound("No tenant found for this host.");
     }
-    return reply.send({ tenantSlug: record.tenant.slug, resolvedVia: "custom-domain" });
+    return reply.send(resolved);
   });
 
   app.get("/auth/me", async (request) => {

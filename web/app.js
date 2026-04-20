@@ -92,7 +92,9 @@ async function fetchLoginBranding(slug) {
     if (!response.ok) return;
     const data = await response.json();
     if (data.tenantSlug) {
-      loginForm.querySelector('[name="tenantSlug"]').value = data.tenantSlug;
+      const slugInput = loginForm.querySelector('[name="tenantSlug"]');
+      slugInput.value = data.tenantSlug;
+      slugInput.readOnly = true;
       const workspaceRow = qs("#login-workspace-row");
       if (workspaceRow) workspaceRow.hidden = true;
       fetchLoginBranding(data.tenantSlug);
