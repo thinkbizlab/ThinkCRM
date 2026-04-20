@@ -2073,6 +2073,78 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     }
   });
 
+  app.delete("/kpi-targets/:id", async (request, reply) => {
+    requireRoleAtLeast(request, UserRole.MANAGER);
+    const tenantId = requireTenantId(request);
+    const params = request.params as { id: string };
+    const existing = await prisma.salesKpiTarget.findFirst({
+      where: { id: params.id, tenantId },
+      select: { id: true }
+    });
+    if (!existing) {
+      throw app.httpErrors.notFound("KPI target not found.");
+    }
+    await prisma.salesKpiTarget.delete({ where: { id: existing.id } });
+    return reply.code(204).send();
+  });
+
+  app.post("/kpi-targets/bulk-delete", async (request) => {
+    requireRoleAtLeast(request, UserRole.MANAGER);
+    const tenantId = requireTenantId(request);
+    const parsed = z.object({ ids: z.array(z.string().cuid()).min(1).max(200) }).safeParse(request.body);
+    if (!parsed.success) {
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
+    }
+    const result = await prisma.salesKpiTarget.deleteMany({
+      where: { tenantId, id: { in: parsed.data.ids } }
+    });
+    return { deleted: result.count };
+  });
+
+  app.post("/kpi-targets/copy-to-next-month", async (request) => {
+    requireRoleAtLeast(request, UserRole.MANAGER);
+    const tenantId = requireTenantId(request);
+    const parsed = z.object({ ids: z.array(z.string().cuid()).min(1).max(200) }).safeParse(request.body);
+    if (!parsed.success) {
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
+    }
+    const sources = await prisma.salesKpiTarget.findMany({
+      where: { tenantId, id: { in: parsed.data.ids } }
+    });
+
+    // Advance "YYYY-MM" by one month, wrapping December → January of next year.
+    const nextMonth = (ym: string): string => {
+      const [y, m] = ym.split("-").map(Number);
+      const date = new Date(Date.UTC(y, m, 1)); // m is 0-indexed after +1, so passing m gives us next month
+      return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+    };
+
+    let copied = 0;
+    let skipped = 0;
+    for (const src of sources) {
+      try {
+        await prisma.salesKpiTarget.create({
+          data: {
+            tenantId,
+            userId: src.userId,
+            targetMonth: nextMonth(src.targetMonth),
+            visitTargetCount: src.visitTargetCount,
+            newDealValueTarget: src.newDealValueTarget,
+            revenueTarget: src.revenueTarget
+          }
+        });
+        copied++;
+      } catch (error) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+          skipped++; // target already exists for next month
+          continue;
+        }
+        throw error;
+      }
+    }
+    return { copied, skipped };
+  });
+
   app.patch("/kpi-targets/:id", async (request) => {
     requireRoleAtLeast(request, UserRole.MANAGER);
     const tenantId = requireTenantId(request);

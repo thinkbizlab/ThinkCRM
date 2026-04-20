@@ -3948,9 +3948,21 @@ function renderSettings() {
             </div>
           ` : ""}
         </div>
+        ${canEditKpi && state.cache.kpiTargets.length ? `
+          <div id="kpi-bulk-toolbar" class="inline-actions wrap" hidden
+            style="padding:var(--sp-2) var(--sp-3);margin-bottom:var(--sp-2);background:var(--bg-subtle);border-radius:var(--r);align-items:center;gap:var(--sp-2)">
+            <span id="kpi-selected-count" class="muted small">0 selected</span>
+            <div style="margin-left:auto;display:inline-flex;gap:var(--sp-2)">
+              <button type="button" class="ghost small" id="kpi-bulk-copy-btn">📋 Copy to Next Month</button>
+              <button type="button" class="ghost small kpi-bulk-delete-btn" id="kpi-bulk-delete-btn"
+                style="color:var(--danger,#dc2626)">🗑 Delete</button>
+            </div>
+          </div>
+        ` : ""}
         ${state.cache.kpiTargets.length ? `
-          <div class="roles-table kpi-table">
+          <div class="roles-table kpi-table ${canEditKpi ? "kpi-table--selectable" : ""}">
             <div class="roles-table-head">
+              ${canEditKpi ? `<span><input type="checkbox" id="kpi-select-all" aria-label="Select all KPI targets" /></span>` : ""}
               <span>Rep</span>
               <span>Month</span>
               <span>Visit Target</span>
@@ -3962,6 +3974,7 @@ function renderSettings() {
               const repLabel = k.rep?.fullName || k.userId;
               const teamLabel = k.rep?.team?.teamName ? ` <span class="muted small">· ${k.rep.team.teamName}</span>` : "";
               return `<div class="roles-table-row">
+                ${canEditKpi ? `<span><input type="checkbox" class="kpi-row-select" value="${k.id}" aria-label="Select KPI target" /></span>` : ""}
                 <div class="roles-user-cell">
                   <div class="team-member-avatar" style="${k.rep?.avatarUrl ? "overflow:hidden" : "background:" + avatarColor(repLabel)}">${repAvatarHtml(repLabel, k.rep?.avatarUrl)}</div>
                   <span>${repLabel}${teamLabel}</span>
@@ -5749,6 +5762,63 @@ function renderSettings() {
       }
     });
   });
+
+  // ── KPI bulk-select toolbar (Delete / Copy to Next Month) ────────────
+  (function initKpiBulkToolbar() {
+    const toolbar      = views.settings.querySelector("#kpi-bulk-toolbar");
+    const countEl      = views.settings.querySelector("#kpi-selected-count");
+    const selectAll    = views.settings.querySelector("#kpi-select-all");
+    const rowChecks    = views.settings.querySelectorAll(".kpi-row-select");
+    const deleteBtn    = views.settings.querySelector("#kpi-bulk-delete-btn");
+    const copyNextBtn  = views.settings.querySelector("#kpi-bulk-copy-btn");
+    if (!toolbar || !rowChecks.length) return;
+
+    function selectedIds() {
+      return Array.from(rowChecks).filter((cb) => cb.checked).map((cb) => cb.value);
+    }
+    function refreshToolbar() {
+      const ids = selectedIds();
+      toolbar.hidden = ids.length === 0;
+      if (countEl) countEl.textContent = `${ids.length} selected`;
+      if (selectAll) {
+        selectAll.checked = ids.length > 0 && ids.length === rowChecks.length;
+        selectAll.indeterminate = ids.length > 0 && ids.length < rowChecks.length;
+      }
+    }
+
+    selectAll?.addEventListener("change", () => {
+      rowChecks.forEach((cb) => { cb.checked = selectAll.checked; });
+      refreshToolbar();
+    });
+    rowChecks.forEach((cb) => cb.addEventListener("change", refreshToolbar));
+
+    deleteBtn?.addEventListener("click", async () => {
+      const ids = selectedIds();
+      if (!ids.length) return;
+      if (!confirm(`Delete ${ids.length} KPI target${ids.length === 1 ? "" : "s"}? This cannot be undone.`)) return;
+      try {
+        await api("/kpi-targets/bulk-delete", { method: "POST", body: { ids } });
+        setStatus(`Deleted ${ids.length} KPI target${ids.length === 1 ? "" : "s"}.`);
+        await loadSettings();
+      } catch (error) {
+        setStatus(error.message, true);
+      }
+    });
+
+    copyNextBtn?.addEventListener("click", async () => {
+      const ids = selectedIds();
+      if (!ids.length) return;
+      try {
+        const res = await api("/kpi-targets/copy-to-next-month", { method: "POST", body: { ids } });
+        const parts = [`Copied ${res.copied}`];
+        if (res.skipped) parts.push(`skipped ${res.skipped} (already exists)`);
+        setStatus(parts.join(", ") + ".");
+        await loadSettings();
+      } catch (error) {
+        setStatus(error.message, true);
+      }
+    });
+  })();
 
   views.settings.querySelectorAll(".kpi-edit").forEach((btn) => {
     btn.addEventListener("click", async () => {

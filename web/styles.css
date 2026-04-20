@@ -5110,10 +5110,14 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 .roles-table-row:hover { background: var(--surface-soft); }
 .roles-user-cell { display: flex; align-items: center; gap: var(--sp-2); }
 
-/* KPI table — 6-column variant */
+/* KPI table — 5-column read-only variant and 7-column admin variant (with checkbox + actions) */
 .roles-table.kpi-table .roles-table-head,
 .roles-table.kpi-table .roles-table-row {
-  grid-template-columns: 1.5fr 90px 100px 130px 130px 60px;
+  grid-template-columns: 1.5fr 90px 100px 130px 130px;
+}
+.roles-table.kpi-table.kpi-table--selectable .roles-table-head,
+.roles-table.kpi-table.kpi-table--selectable .roles-table-row {
+  grid-template-columns: 36px 1.5fr 90px 100px 130px 130px 60px;
 }
 
 /* Role hierarchy (legacy kept for KPI table) */
