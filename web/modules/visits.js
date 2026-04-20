@@ -8,6 +8,7 @@ import { state } from "./state.js";
 import { api } from "./api.js";
 import { escHtml } from "./utils.js";
 import { openDeal360 } from "./deal-360.js";
+import { icon } from "./icons.js";
 
 let deps = {
   buildVisitListHtml: () => "",
@@ -74,17 +75,17 @@ export function renderVisits(visits) {
 
   views.visits.innerHTML = `
     <div class="visits-page-header">
-      <h3 class="visits-title">📍 Visits</h3>
+      <h3 class="visits-title">${icon('location')} Visits</h3>
       <button type="button" id="add-visit-btn">
-        📍 Plan Visit
+        ${icon('location')} Plan Visit
       </button>
     </div>
 
     <div class="vp-stats-bar">
-      <div class="vp-stat"><span class="vp-stat-value">${total}</span><span class="vp-stat-label">📋 Total</span></div>
-      <div class="vp-stat"><span class="vp-stat-value">${planned}</span><span class="vp-stat-label">🗓️ Planned</span></div>
-      <div class="vp-stat vp-stat--active"><span class="vp-stat-value">${active}</span><span class="vp-stat-label">🔥 Active</span></div>
-      <div class="vp-stat vp-stat--done"><span class="vp-stat-value">${done}</span><span class="vp-stat-label">✅ Done</span></div>
+      <div class="vp-stat"><span class="vp-stat-value">${total}</span><span class="vp-stat-label">${icon('clipboard')} Total</span></div>
+      <div class="vp-stat"><span class="vp-stat-value">${planned}</span><span class="vp-stat-label">${icon('calendar')} Planned</span></div>
+      <div class="vp-stat vp-stat--active"><span class="vp-stat-value">${active}</span><span class="vp-stat-label">${icon('flame')} Active</span></div>
+      <div class="vp-stat vp-stat--done"><span class="vp-stat-value">${done}</span><span class="vp-stat-label">${icon('checkCircle')} Done</span></div>
     </div>
 
     <div class="vp-filter-bar">
@@ -320,7 +321,7 @@ export function showEventDetail(ev, anchorEl) {
       <div class="ced-header">
         <span class="ced-type-badge ced-type--${ev.type}">${typeLabel}</span>
         <span class="ced-title">${escHtml(titleCore)}</span>
-        <button class="ced-close" id="ced-close-btn" aria-label="Close">✕</button>
+        <button class="ced-close" id="ced-close-btn" aria-label="Close">${icon('x', 14)}</button>
       </div>
       <div class="ced-body">${rows}</div>
       <div class="ced-footer">

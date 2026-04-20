@@ -7,6 +7,7 @@ import { state } from "./state.js";
 import { api } from "./api.js";
 import { escHtml, fmtDateTime } from "./utils.js";
 import { openCustomer360 } from "./customer-360.js";
+import { icon } from "./icons.js";
 
 let deps = {
   asMoney: (v) => String(v),
@@ -105,7 +106,7 @@ function renderDeal360TabContent(d360) {
               </div>`;
           }).join("")}
         </div>`
-      : `<div class="c360-empty" style="padding:var(--sp-6) 0"><div class="c360-empty-icon">📝</div>No progress updates yet.</div>`;
+      : `<div class="c360-empty" style="padding:var(--sp-6) 0"><div class="c360-empty-icon">${icon('pen')}</div>No progress updates yet.</div>`;
 
     return `
       <div class="d360-progress-wrap">
@@ -144,7 +145,7 @@ function renderDeal360TabContent(d360) {
   // ── Customer Info ───────────────────────────────────────────────────────────
   if (activeTab === "customer") {
     const c = deal.customer;
-    if (!c) return `<div class="c360-empty"><div class="c360-empty-icon">👤</div>No customer linked.</div>`;
+    if (!c) return `<div class="c360-empty"><div class="c360-empty-icon">${icon('user')}</div>No customer linked.</div>`;
     const contacts = c.contacts ?? [];
     const addresses = c.addresses ?? [];
     return `
@@ -209,7 +210,7 @@ function renderDeal360TabContent(d360) {
   // ── Visits ──────────────────────────────────────────────────────────────────
   if (activeTab === "visits") {
     if (!visits.length) {
-      return `<div class="c360-empty"><div class="c360-empty-icon">📍</div>No visits linked to this deal yet.</div>`;
+      return `<div class="c360-empty"><div class="c360-empty-icon">${icon('location')}</div>No visits linked to this deal yet.</div>`;
     }
     return `
       <div style="border:1px solid var(--border);border-radius:var(--r-md);overflow:hidden;margin-top:var(--sp-4)">
@@ -239,7 +240,7 @@ function renderDeal360TabContent(d360) {
   // ── Changelog ───────────────────────────────────────────────────────────────
   if (activeTab === "changelog") {
     if (!changelog.length) {
-      return `<div class="c360-empty"><div class="c360-empty-icon">📋</div>No changelog entries found.</div>`;
+      return `<div class="c360-empty"><div class="c360-empty-icon">${icon('clipboard')}</div>No changelog entries found.</div>`;
     }
     const actionIcon = (action) => {
       if (action === "CREATE") return `<span class="d360-cl-action d360-cl-action--create">Created</span>`;

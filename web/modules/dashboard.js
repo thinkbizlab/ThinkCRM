@@ -7,6 +7,7 @@ import { state } from "./state.js";
 import { api } from "./api.js";
 import { escHtml, asPercent } from "./utils.js";
 import { renderDemoDataBanner } from "./demo-data.js";
+import { icon } from "./icons.js";
 
 let deps = {
   asMoney: (v) => String(v),
@@ -64,39 +65,39 @@ export function renderDashboard(data) {
           <button type="submit">Apply</button>
         </form>
         <div class="inline-actions wrap dashboard-chip-row">
-          <span class="chip">👥 ${data.kpis.usersInScope} reps</span>
-          <span class="chip">✨ ${data.kpis.dealsCreatedInPeriod} new deals</span>
-          <span class="chip">📅 ${data.kpis.visitsPlannedInPeriod} visits planned</span>
+          <span class="chip">${icon('users')} ${data.kpis.usersInScope} reps</span>
+          <span class="chip">${icon('sparkles')} ${data.kpis.dealsCreatedInPeriod} new deals</span>
+          <span class="chip">${icon('calendar')} ${data.kpis.visitsPlannedInPeriod} visits planned</span>
         </div>
       </div>
 
       <div class="kpi-strip">
         <article class="kpi">
-          <div class="kpi-icon">📊</div>
+          <div class="kpi-icon">${icon('chart')}</div>
           <h4>Active Deals</h4>
           <strong>${data.kpis.activeDeals}</strong>
           <div class="muted">Open in pipeline</div>
         </article>
         <article class="kpi kpi--pipeline">
-          <div class="kpi-icon">💰</div>
+          <div class="kpi-icon">${icon('money')}</div>
           <h4>Pipeline</h4>
           <strong>${asMoney(data.kpis.pipelineValue)}</strong>
           <div class="muted">Potential revenue</div>
         </article>
         <article class="kpi kpi--won">
-          <div class="kpi-icon">🏆</div>
+          <div class="kpi-icon">${icon('trophy')}</div>
           <h4>Won</h4>
           <strong>${asMoney(data.kpis.wonValue)}</strong>
-          <div class="muted">Closed &amp; collected 🎉</div>
+          <div class="muted">Closed &amp; collected ${icon('party')}</div>
         </article>
         <article class="kpi kpi--lost">
-          <div class="kpi-icon">📉</div>
+          <div class="kpi-icon">${icon('chartDown')}</div>
           <h4>Lost</h4>
           <strong>${asMoney(data.kpis.lostValue)}</strong>
-          <div class="muted">Learn &amp; bounce back 💪</div>
+          <div class="muted">Learn &amp; bounce back ${icon('muscle')}</div>
         </article>
         <article class="kpi kpi--visits">
-          <div class="kpi-icon">🚀</div>
+          <div class="kpi-icon">${icon('rocket')}</div>
           <h4>Visit Rate</h4>
           <strong>${completion}%</strong>
           <div class="progress kpi-progress"><span style="width:${Math.min(completion, 100)}%"></span></div>
@@ -106,7 +107,7 @@ export function renderDashboard(data) {
 
       <div class="dash-grid">
         <div class="dash-section">
-          <h3 class="section-title">🎯 Target Achievement</h3>
+          <h3 class="section-title">${icon('target')} Target Achievement</h3>
           ${
             data.targetVsActual.length
               ? data.targetVsActual.map((t) => {
@@ -123,29 +124,29 @@ export function renderDashboard(data) {
                     <span class="muted">${t.month}</span>
                   </div>
                   <div class="target-metric">
-                    <span class="target-metric-label">🏃 Visits</span>
+                    <span class="target-metric-label">${icon('running')} Visits</span>
                     <div class="progress"><span class="${barCls(pv)}" style="width:${Math.min(pv, 100)}%"></span></div>
                     <span class="target-metric-val ${valCls(pv)}">${t.actual.visits}/${t.target.visits}</span>
                   </div>
                   <div class="target-metric">
-                    <span class="target-metric-label">💼 New Deal</span>
+                    <span class="target-metric-label">${icon('briefcase')} New Deal</span>
                     <div class="progress"><span class="${barCls(pd)}" style="width:${Math.min(pd, 100)}%"></span></div>
                     <span class="target-metric-val ${valCls(pd)}">${asPercent(t.progress.newDealValue)}%</span>
                   </div>
                   <div class="target-metric">
-                    <span class="target-metric-label">💵 Revenue</span>
+                    <span class="target-metric-label">${icon('money')} Revenue</span>
                     <div class="progress"><span class="${barCls(pr)}" style="width:${Math.min(pr, 100)}%"></span></div>
                     <span class="target-metric-val ${valCls(pr)}">${asPercent(t.progress.revenue)}%</span>
                   </div>
                 </div>`;
                 }).join("")
-              : '<div class="empty-state compact"><div class="empty-icon">🎯</div><div><strong>No KPI targets yet</strong><p>Set monthly targets in Settings.</p></div></div>'
+              : `<div class="empty-state compact"><div class="empty-icon">${icon('target', 24)}</div><div><strong>No KPI targets yet</strong><p>Set monthly targets in Settings.</p></div></div>`
           }
         </div>
 
         <div class="dash-section">
           <div class="section-title-row">
-            <h3 class="section-title" style="margin:0">🏅 Leaderboard</h3>
+            <h3 class="section-title" style="margin:0">${icon('medal')} Leaderboard</h3>
             <button type="button" class="section-info-btn" id="leaderboard-info-btn" aria-label="How scoring works">
               <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="8"/><polyline points="11 12 12 12 12 16"/></svg>
             </button>
@@ -156,8 +157,8 @@ export function renderDashboard(data) {
                   const isRep = (state.user?.role ?? "") === "REP";
                   const myUserId = state.user?.id ?? "";
                   return topGamers.map((g) => {
-                    const rankLabel = g.rank === 1 ? "🥇" : g.rank === 2 ? "🥈" : g.rank === 3 ? "🥉" : `#${g.rank}`;
-                    const badgeEmoji = g.badge === "Legend" ? "🌟" : g.badge === "Gold" ? "🏅" : g.badge === "Silver" ? "🥈" : "🎖";
+                    const rankLabel = g.rank <= 3 ? icon('medal') : `#${g.rank}`;
+                    const badgeEmoji = g.badge === "Legend" ? icon('starFilled') : icon('medal');
                     const momentumHtml = g.momentum === "up"
                       ? `<span class="lb-momentum lb-momentum--up"><svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="18 15 12 9 6 15"/></svg>UP</span>`
                       : g.momentum === "steady"
@@ -190,7 +191,7 @@ export function renderDashboard(data) {
                         <h4>${escHtml(g.userName)}${isMe ? ' <span class="lb-you-badge">You</span>' : ""}</h4>
                         <div class="lb-sub">
                           <span class="lb-badge-pill lb-badge--${g.badge.toLowerCase()}">${badgeEmoji} ${g.badge}</span>
-                          <span class="lb-streak">🔥 ${g.streakDays}d</span>
+                          <span class="lb-streak">${icon('flame')} ${g.streakDays}d</span>
                           <span class="lb-team muted">${escHtml(g.teamName)}</span>
                         </div>
                       </div>
@@ -201,31 +202,31 @@ export function renderDashboard(data) {
                     </div>`;
                   }).join("");
                 })()
-              : '<div class="empty-state compact"><div class="empty-icon">🏆</div><div><strong>No leaderboard data</strong><p>Create KPI targets to generate rankings.</p></div></div>'
+              : `<div class="empty-state compact"><div class="empty-icon">${icon('trophy', 24)}</div><div><strong>No leaderboard data</strong><p>Create KPI targets to generate rankings.</p></div></div>`
           }
         </div>
       </div>
 
       ${teams.length ? `
         <div class="dash-section" style="margin-top: var(--sp-4)">
-          <h3 class="section-title">👥 Team Performance</h3>
+          <h3 class="section-title">${icon('users')} Team Performance</h3>
           ${teams.map((team) => {
             const tvr = Number(team.visitCompletionRate || 0);
             const barCls = tvr >= 100 ? "progress-bar--great" : tvr >= 70 ? "progress-bar--good" : tvr >= 40 ? "progress-bar--warn" : "progress-bar--low";
             return `
             <div class="team-row">
               <div class="target-rep-head">
-                <h4>🏢 ${escHtml(team.teamName)}</h4>
-                <span class="chip">👤 ${team.memberCount} member${team.memberCount === 1 ? "" : "s"}</span>
+                <h4>${icon('building')} ${escHtml(team.teamName)}</h4>
+                <span class="chip">${icon('user')} ${team.memberCount} member${team.memberCount === 1 ? "" : "s"}</span>
               </div>
               <div class="inline-actions wrap dashboard-chip-row" style="margin-top: var(--sp-1)">
-                <span class="chip">📂 ${team.activeDeals} deals</span>
-                <span class="chip">💰 ${asMoney(team.pipelineValue)}</span>
-                <span class="chip chip-success">🏆 ${asMoney(team.wonValue)}</span>
-                <span class="chip chip-danger">📉 ${asMoney(team.lostValue)}</span>
+                <span class="chip">${icon('folder')} ${team.activeDeals} deals</span>
+                <span class="chip">${icon('money')} ${asMoney(team.pipelineValue)}</span>
+                <span class="chip chip-success">${icon('trophy')} ${asMoney(team.wonValue)}</span>
+                <span class="chip chip-danger">${icon('chartDown')} ${asMoney(team.lostValue)}</span>
               </div>
               <div class="target-metric" style="margin-top: var(--sp-2)">
-                <span class="target-metric-label">📍 Visits</span>
+                <span class="target-metric-label">${icon('location')} Visits</span>
                 <div class="progress"><span class="${barCls}" style="width:${Math.min(tvr, 100)}%"></span></div>
                 <span class="target-metric-val">${team.checkedOutVisits}/${team.plannedVisits}</span>
               </div>

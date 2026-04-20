@@ -1,5 +1,6 @@
 // Cross-cutting DOM helpers, screen-level refs, view registry, and toast plumbing.
 import { escHtml } from "./utils.js";
+import { icon } from "./icons.js";
 
 export const qs = (selector) => document.querySelector(selector);
 
@@ -81,7 +82,7 @@ export function showTrialBanner(subscription) {
   const daysLeft = Math.max(0, Math.ceil((new Date(subscription.trialEndsAt) - Date.now()) / 86400000));
   const urgency  = daysLeft <= 3 ? "danger" : daysLeft <= 7 ? "warning" : "info";
   statusBar.className = `trial-bar trial-banner--${escHtml(urgency)}`;
-  statusBar.innerHTML = `⏳ Trial: <strong>${daysLeft} day${daysLeft === 1 ? "" : "s"} left</strong> — upgrade to keep access after your trial ends.`;
+  statusBar.innerHTML = `${icon('clock')} Trial: <strong>${daysLeft} day${daysLeft === 1 ? "" : "s"} left</strong> — upgrade to keep access after your trial ends.`;
   statusBar.style.display = "";
   statusBar.removeAttribute("aria-hidden");
 }

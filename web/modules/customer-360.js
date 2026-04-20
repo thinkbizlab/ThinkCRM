@@ -6,6 +6,7 @@ import { qs, views, switchView, setStatus } from "./dom.js";
 import { state } from "./state.js";
 import { api } from "./api.js";
 import { escHtml } from "./utils.js";
+import { icon } from "./icons.js";
 
 let deps = {
   asMoney: (v) => String(v),
@@ -62,7 +63,7 @@ function renderC360TabContent(c360) {
           <div class="c360-info-row"><span class="c360-info-key">Due Days</span><span class="c360-info-val">${customer.paymentTerm?.dueDays ?? "—"} days</span></div>
           <div class="c360-info-row"><span class="c360-info-key">Created</span><span class="c360-info-val">${new Date(customer.createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</span></div>
           ${customer.siteLat != null && customer.siteLng != null
-            ? `<div class="c360-info-row"><span class="c360-info-key">Location</span><span class="c360-info-val"><a class="c360-address-map" href="https://maps.google.com/?q=${customer.siteLat},${customer.siteLng}" target="_blank" rel="noopener">📍 Open map</a></span></div>`
+            ? `<div class="c360-info-row"><span class="c360-info-key">Location</span><span class="c360-info-val"><a class="c360-address-map" href="https://maps.google.com/?q=${customer.siteLat},${customer.siteLng}" target="_blank" rel="noopener">${icon('location')} Open map</a></span></div>`
             : ""}
         </div>
         ${cfEntries.length > 0 ? `
@@ -78,7 +79,7 @@ function renderC360TabContent(c360) {
   }
 
   if (activeTab === "deals") {
-    if (!deals.length) return `<div class="c360-empty"><div class="c360-empty-icon">📋</div>No deals yet for this customer.</div>`;
+    if (!deals.length) return `<div class="c360-empty"><div class="c360-empty-icon">${icon('clipboard')}</div>No deals yet for this customer.</div>`;
     const stageName = (d) => d.stage?.stageName ?? "Unknown";
     return `
       <div style="border:1px solid var(--border);border-radius:var(--r-md);overflow:hidden;margin-top:var(--sp-4)">
@@ -101,7 +102,7 @@ function renderC360TabContent(c360) {
   }
 
   if (activeTab === "visits") {
-    if (!visits.length) return `<div class="c360-empty"><div class="c360-empty-icon">📍</div>No visits recorded for this customer.</div>`;
+    if (!visits.length) return `<div class="c360-empty"><div class="c360-empty-icon">${icon('location')}</div>No visits recorded for this customer.</div>`;
     return `
       <div style="border:1px solid var(--border);border-radius:var(--r-md);overflow:hidden;margin-top:var(--sp-4)">
         ${visits.map((v) => {
@@ -125,7 +126,7 @@ function renderC360TabContent(c360) {
 
   if (activeTab === "contacts") {
     const contacts = customer.contacts ?? [];
-    if (!contacts.length) return `<div class="c360-empty"><div class="c360-empty-icon">👤</div>No contacts added yet.</div>`;
+    if (!contacts.length) return `<div class="c360-empty"><div class="c360-empty-icon">${icon('user')}</div>No contacts added yet.</div>`;
     return `
       <div style="border:1px solid var(--border);border-radius:var(--r-md);overflow:hidden;margin-top:var(--sp-4)">
         ${contacts.map((c) => `
@@ -141,7 +142,7 @@ function renderC360TabContent(c360) {
 
   if (activeTab === "addresses") {
     const addresses = customer.addresses ?? [];
-    if (!addresses.length) return `<div class="c360-empty"><div class="c360-empty-icon">🏢</div>No addresses added yet.</div>`;
+    if (!addresses.length) return `<div class="c360-empty"><div class="c360-empty-icon">${icon('building')}</div>No addresses added yet.</div>`;
     return `
       <div class="c360-addresses-grid" style="margin-top:var(--sp-4)">
         ${addresses.map((a) => `

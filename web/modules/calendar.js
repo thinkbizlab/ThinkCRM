@@ -6,6 +6,7 @@ import { qs, views } from "./dom.js";
 import { state } from "./state.js";
 import { api } from "./api.js";
 import { escHtml, shiftAnchorDate } from "./utils.js";
+import { icon } from "./icons.js";
 
 let deps = {
   openVisitCreateModal: () => {},
@@ -155,7 +156,7 @@ export function renderCalendar(calendarData) {
             `;
           }).join("")}
         </div>
-        ${!dayEvs.length ? `<div class="empty-state"><div class="empty-icon">🗓️</div><div><strong>No events on this day</strong><p class="muted">Use the arrows to navigate or switch to Month view.</p></div></div>` : ""}
+        ${!dayEvs.length ? `<div class="empty-state"><div class="empty-icon">${icon('calendar')}</div><div><strong>No events on this day</strong><p class="muted">Use the arrows to navigate or switch to Month view.</p></div></div>` : ""}
       </div>
     `;
   }
@@ -267,7 +268,7 @@ export function renderCalendar(calendarData) {
                   placeholder="Name or code…" autocomplete="off"
                   value="${filters.customerName || ""}" />
                 <button type="button" class="cal-autocomplete-clear" id="cal-customer-clear"
-                  ${filters.customerId ? "" : "hidden"} aria-label="Clear customer">✕</button>
+                  ${filters.customerId ? "" : "hidden"} aria-label="Clear customer">${icon('x', 12)}</button>
                 <div class="cal-autocomplete-list" id="cal-customer-list" hidden></div>
                 <input type="hidden" name="customerId" id="cal-customer-id" value="${filters.customerId || ""}" />
               </div>

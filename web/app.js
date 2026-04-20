@@ -36,6 +36,7 @@ import {
 } from "./modules/visits.js";
 import { openMapPicker, closeMapPicker, initMapPicker, setMapPickerDeps } from "./modules/map-picker.js";
 import { renderCronPicker, initCronPicker } from "./modules/cron-picker.js";
+import { icon } from "./modules/icons.js";
 import {
   getCustomFieldDefinitions,
   collectCustomFieldPayload,
@@ -480,12 +481,12 @@ function openIntegrationGuide(label, guideHtml) {
   overlay.innerHTML = `
     <div class="ncm-panel" style="max-width:500px">
       <div class="ncm-header">
-        <span class="ncm-title">🔌 Setup Guide</span>
-        <button type="button" class="ncm-close" id="intg-guide-close">✕</button>
+        <span class="ncm-title">${icon('plug')} Setup Guide</span>
+        <button type="button" class="ncm-close" id="intg-guide-close">${icon('x', 14)}</button>
       </div>
       <div class="intg-guide-body">
         <div class="intg-guide-banner">
-          <div class="intg-guide-banner-icon">📋</div>
+          <div class="intg-guide-banner-icon">${icon('clipboard')}</div>
           <div class="intg-guide-banner-text">Follow these steps to configure <strong>${escHtml(label)}</strong>. After saving credentials, run <em>Test Connection</em> to verify.</div>
         </div>
         <div class="intg-guide-steps">${stepsHtml}</div>
@@ -720,7 +721,7 @@ async function openImportHistoryModal(type, title) {
     <div class="popup-box popup-box--wide" role="dialog" aria-modal="true">
       <div class="popup-header">
         <p class="popup-title">${escHtml(title)}</p>
-        <button class="popup-close-btn" aria-label="Close">✕</button>
+        <button class="popup-close-btn" aria-label="Close">${icon('x', 14)}</button>
       </div>
       <div style="padding:var(--sp-3) 0;display:flex;flex-direction:column;gap:var(--sp-2)">
         <p class="muted small">Showing the 50 most recent imports for this workspace.</p>
@@ -857,7 +858,7 @@ function openMasterDataImportModal(entity) {
     <div class="popup-box popup-box--wide" role="dialog" aria-modal="true">
       <div class="popup-header">
         <p class="popup-title">Import ${escHtml(spec.label)}</p>
-        <button class="popup-close-btn" aria-label="Close">✕</button>
+        <button class="popup-close-btn" aria-label="Close">${icon('x', 14)}</button>
       </div>
       <div style="padding:var(--sp-3) 0;display:flex;flex-direction:column;gap:var(--sp-3)">
         <p class="muted small">Upload an Excel (.xlsx) file. Required columns: ${spec.columns.map(c => `<code>${c}</code>`).join(", ")}. Existing rows (matched by natural key) are overwritten.</p>
@@ -969,9 +970,9 @@ function renderMasterData(paymentTerms) {
   views.master.innerHTML = `
     <div class="master-outer">
     <div class="master-tabs">
-      <button class="master-page-btn ${state.masterPage === "customers" ? "active-master-btn" : ""}" data-page="customers">🏢 Customers</button>
-      <button class="master-page-btn ${state.masterPage === "items" ? "active-master-btn" : ""}" data-page="items">📦 Items</button>
-      <button class="master-page-btn ${state.masterPage === "payment-terms" ? "active-master-btn" : ""}" data-page="payment-terms">💳 Payment Terms</button>
+      <button class="master-page-btn ${state.masterPage === "customers" ? "active-master-btn" : ""}" data-page="customers">${icon('building')} Customers</button>
+      <button class="master-page-btn ${state.masterPage === "items" ? "active-master-btn" : ""}" data-page="items">${icon('box')} Items</button>
+      <button class="master-page-btn ${state.masterPage === "payment-terms" ? "active-master-btn" : ""}" data-page="payment-terms">${icon('card')} Payment Terms</button>
     </div>
 
     <section class="card" ${state.masterPage !== "payment-terms" ? 'style="display:none"' : ""}>
@@ -1487,7 +1488,7 @@ function renderDealCard(deal, kanban) {
       <div class="deal-card-actions">
         <select class="deal-stage-select" data-id="${deal.id}">${stageOptions}</select>
         <button class="deal-stage-save" data-id="${deal.id}">Move</button>
-        <button type="button" class="voice-note-btn ghost" data-entity-type="DEAL" data-entity-id="${deal.id}" title="Voice note">🎙</button>
+        <button type="button" class="voice-note-btn ghost" data-entity-type="DEAL" data-entity-id="${deal.id}" title="Voice note">${icon('mic')}</button>
       </div>
       ${stageProgressPct !== null ? `<div class="deal-stage-progress"><span style="width:${stageProgressPct}%"></span></div>` : ""}
     </div>
@@ -1597,7 +1598,7 @@ function renderDeals(kanban, dealsRoot = views.deals, options = {}) {
                 ${
                   stage.deals.length
                     ? stage.deals.map((deal) => renderDealCard(deal, kanban)).join("")
-                    : `<div class="empty-state compact"><div class="empty-icon">🗃️</div><div><strong>${hasFilter ? "No matches" : "No deals"}</strong></div></div>`
+                    : `<div class="empty-state compact"><div class="empty-icon">${icon('archive')}</div><div><strong>${hasFilter ? "No matches" : "No deals"}</strong></div></div>`
                 }
               </div>
             </div>
@@ -1613,7 +1614,7 @@ function renderDeals(kanban, dealsRoot = views.deals, options = {}) {
       <div class="deals-page-header">
         <h2 class="deals-title"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M3 13h18"/></svg>Deal Pipeline</h2>
         <button class="deals-create-btn" id="deals-create-btn">
-          ✨ New Deal
+          ${icon('sparkles')} New Deal
         </button>
       </div>
 
@@ -1644,7 +1645,7 @@ function renderDeals(kanban, dealsRoot = views.deals, options = {}) {
         </div>
         <button class="deals-filter-btn${suspicious ? " active" : ""}" id="deals-suspicious-btn" title="Deals with a follow-up date in the past">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true"><path d="M7 2a5 5 0 100 10A5 5 0 007 2zm0 3v2.5l1.5 1.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Overdue follow-ups${suspicious ? " ✓" : ""}
+          Overdue follow-ups${suspicious ? ` ${icon('check', 12)}` : ""}
         </button>
         ${hasFilter ? `<span class="deals-filter-result">${totalDeals} deal${totalDeals !== 1 ? "s" : ""}</span>` : ""}
       </div>
@@ -1903,7 +1904,7 @@ function renderMyTasks(data) {
 
     return `
       <div class="mt-card ${stripe}" data-visit-id="${ev.entityId}">
-        <div class="mt-card-type mt-type--visit">📍 Visit</div>
+        <div class="mt-card-type mt-type--visit">${icon('location')} Visit</div>
         <div class="mt-card-main">
           <div class="mt-card-customer">${escHtml(ev.customer.name)}</div>
           ${ev.visitNo ? `<div class="mt-card-visitno">${escHtml(ev.visitNo)}</div>` : ""}
@@ -1946,7 +1947,7 @@ function renderMyTasks(data) {
 
     return `
       <div class="mt-card ${stripe}${closeToday ? " mt-card--close-today" : ""}">
-        <div class="mt-card-type mt-type--deal">💼 Deal</div>
+        <div class="mt-card-type mt-type--deal">${icon('briefcase')} Deal</div>
         <div class="mt-card-main">
           <div class="mt-card-customer">${escHtml(ev.customer.name)}</div>
           <div class="mt-card-dealname">${escHtml(ev.dealName || ev.title)}</div>
@@ -1958,7 +1959,7 @@ function renderMyTasks(data) {
             ${ev.stage ? `<span class="mt-stage-badge" style="--sa:var(${stageAccent})">${escHtml(ev.stage.name)}</span>` : ""}
             ${ev.estimatedValue ? `<span class="mt-meta-value">${asMoney(ev.estimatedValue)}</span>` : ""}
           </div>
-          ${closeToday ? `<div class="mt-close-today-hint">🎯 Target close today</div>` : ""}
+          ${closeToday ? `<div class="mt-close-today-hint">${icon('target')} Target close today</div>` : ""}
         </div>
         <div class="mt-card-actions">
           <button class="mt-action mt-action--deal" data-deal-id="${ev.entityId}" data-deal-no="${escHtml(ev.dealNo || ev.entityId)}">
@@ -1999,7 +2000,7 @@ function renderMyTasks(data) {
   const total = (data.counts?.total || 0) + inProgress.length;
 
   const hour = now.getHours();
-  const greeting = hour < 12 ? "Good morning ☀️" : hour < 17 ? "Good afternoon 🌤️" : hour < 21 ? "Good evening 🌙" : "Burning the midnight oil 🌟";
+  const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : hour < 21 ? "Good evening" : "Burning the midnight oil";
   const todayLabel = now.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
 
   views.repHub.innerHTML = `
@@ -2016,23 +2017,23 @@ function renderMyTasks(data) {
           <button class="ghost topnav-icon-btn" id="mt-refresh" title="Refresh">
             <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
           </button>
-          <button class="primary" id="mt-new-visit">📍 Plan Visit</button>
-          <button class="ghost" id="mt-new-deal">💼 Add Deal</button>
+          <button class="primary" id="mt-new-visit">${icon('location')} Plan Visit</button>
+          <button class="ghost" id="mt-new-deal">${icon('briefcase')} Add Deal</button>
         </div>
       </div>
 
       ${!total && !inProgress.length ? `
         <div class="empty-state" style="margin-top:var(--sp-8)">
-          <div style="font-size:3rem;line-height:1;margin-bottom:var(--sp-2)">🎉</div>
+          <div style="font-size:3rem;line-height:1;margin-bottom:var(--sp-2)">${icon('party')}</div>
           <div><strong>All clear — you're crushing it!</strong><p>No tasks due today or coming up.</p></div>
         </div>` : `
 
-        ${section("📍 Meeting In-Progress", inProgress, "mt-section--inprogress")}
-        ${section("⚠️ Need Follow-Up", overdue, "mt-section--overdue", { overdue: true })}
-        ${section("☀️ Today", today, "mt-section--today")}
-        ${section("🌅 Tomorrow", tomorrow, "mt-section--tomorrow")}
-        ${section("📅 Next 7 Days", nextWeek, "mt-section--nextweek")}
-        ${section("🗓️ Next 30 Days", nextMonth, "mt-section--nextmonth")}
+        ${section(`${icon('location')} Meeting In-Progress`, inProgress, "mt-section--inprogress")}
+        ${section(`${icon('warning')} Need Follow-Up`, overdue, "mt-section--overdue", { overdue: true })}
+        ${section(`${icon('sun')} Today`, today, "mt-section--today")}
+        ${section(`${icon('sunrise')} Tomorrow`, tomorrow, "mt-section--tomorrow")}
+        ${section(`${icon('calendar')} Next 7 Days`, nextWeek, "mt-section--nextweek")}
+        ${section(`${icon('calendar')} Next 30 Days`, nextMonth, "mt-section--nextmonth")}
       `}
     </div>`;
 
@@ -2115,7 +2116,7 @@ function openCheckInModal(visitId, customerName) {
         <div class="mt-checkin-header">
           <div class="mt-checkin-title">Check In</div>
           <div class="mt-checkin-customer">${escHtml(customerName || "")}</div>
-          <button class="ced-close" id="mt-checkin-close" aria-label="Close">✕</button>
+          <button class="ced-close" id="mt-checkin-close" aria-label="Close">${icon('x', 14)}</button>
         </div>
 
         <div class="mt-checkin-body">
@@ -2271,7 +2272,7 @@ function openCheckOutModal(visitId, customerName) {
             <div class="mt-checkin-title">Check Out</div>
             <div class="mt-checkin-customer">${escHtml(customerName || "")}</div>
           </div>
-          <button class="ced-close" id="mt-checkout-close" aria-label="Close">✕</button>
+          <button class="ced-close" id="mt-checkout-close" aria-label="Close">${icon('x', 14)}</button>
         </div>
 
         <div class="mt-checkout-body">
@@ -2664,7 +2665,7 @@ function renderVisitDetailContent(visit, changelogs) {
     : null;
   const customerHtml = `
     <div class="vd-section">
-      <p class="vd-section-title">🏢 Customer</p>
+      <p class="vd-section-title">${icon('building')} Customer</p>
       <div class="vd-detail-rows">
         <div class="vd-detail-row"><span class="vd-detail-row-label">Code</span><span class="vd-detail-row-value">${escHtml(c.customerCode || "—")}</span></div>
         <div class="vd-detail-row"><span class="vd-detail-row-label">Type</span><span class="vd-detail-row-value">${escHtml(c.customerType || "—")}</span></div>
@@ -2676,7 +2677,7 @@ function renderVisitDetailContent(visit, changelogs) {
   // ── Deal ────────────────────────────────────────────────────────────────────
   const dealHtml = visit.deal ? `
     <div class="vd-section">
-      <p class="vd-section-title">🤝 Related Deal</p>
+      <p class="vd-section-title">${icon('handshake')} Related Deal</p>
       <div class="vd-deal-card">
         <div class="vd-deal-no">${escHtml(visit.deal.dealNo)}</div>
         <div class="vd-deal-name">${escHtml(visit.deal.dealName)}</div>
@@ -2687,7 +2688,7 @@ function renderVisitDetailContent(visit, changelogs) {
   // ── Timing ──────────────────────────────────────────────────────────────────
   const timingHtml = `
     <div class="vd-section">
-      <p class="vd-section-title">⏰ Timing</p>
+      <p class="vd-section-title">${icon('bell')} Timing</p>
       <div class="vd-timing-grid">
         <div class="vd-timing-card">
           <div class="vd-timing-card-label">Planned</div>
@@ -2721,14 +2722,14 @@ function renderVisitDetailContent(visit, changelogs) {
   // ── Expected Result ──────────────────────────────────────────────────────────
   const objectiveHtml = `
     <div class="vd-section">
-      <p class="vd-section-title">🎯 Expected Result</p>
+      <p class="vd-section-title">${icon('target')} Expected Result</p>
       <div class="vd-result-block ${visit.objective ? "" : "empty"}">${visit.objective ? escHtml(visit.objective) : "No objective recorded."}</div>
     </div>`;
 
   // ── Actual Result ────────────────────────────────────────────────────────────
   const resultHtml = `
     <div class="vd-section">
-      <p class="vd-section-title">✅ Actual Result</p>
+      <p class="vd-section-title">${icon('checkCircle')} Actual Result</p>
       <div class="vd-result-block ${visit.result ? "" : "empty"}">${visit.result ? escHtml(visit.result) : "No result recorded yet."}</div>
     </div>`;
 
@@ -2749,10 +2750,10 @@ function renderVisitDetailContent(visit, changelogs) {
       ? `<img class="vd-map-img" loading="lazy"
             src="https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lng}&zoom=15&size=600x240&scale=2&markers=color:red%7C${lat},${lng}&key=${encodeURIComponent(apiKey)}"
             alt="Visit location map" />`
-      : `<div class="vd-map-fallback">📍 ${lat.toFixed(5)}, ${lng.toFixed(5)}</div>`;
+      : `<div class="vd-map-fallback">${icon('location')} ${lat.toFixed(5)}, ${lng.toFixed(5)}</div>`;
     locationHtml = `
       <div class="vd-section">
-        <p class="vd-section-title">📍 Location</p>
+        <p class="vd-section-title">${icon('location')} Location</p>
         ${mapHtml}
         <a class="vd-directions-btn" href="${dirUrl}" target="_blank" rel="noopener">
           Get Directions
@@ -2762,8 +2763,8 @@ function renderVisitDetailContent(visit, changelogs) {
     const dirUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(addrText)}`;
     locationHtml = `
       <div class="vd-section">
-        <p class="vd-section-title">📍 Location</p>
-        <div class="vd-map-fallback">📍 ${escHtml(addrText)}</div>
+        <p class="vd-section-title">${icon('location')} Location</p>
+        <div class="vd-map-fallback">${icon('location')} ${escHtml(addrText)}</div>
         <a class="vd-directions-btn" href="${dirUrl}" target="_blank" rel="noopener">
           Get Directions
         </a>
@@ -2823,7 +2824,7 @@ function renderVisitDetailContent(visit, changelogs) {
 
     changelogHtml = `
       <div class="vd-section">
-        <p class="vd-section-title">📝 Change History</p>
+        <p class="vd-section-title">${icon('pen')} Change History</p>
         ${clItems ? `<div class="vd-changelog-list">${clItems}</div>` : `<div class="vd-cl-empty">No changes recorded.</div>`}
       </div>`;
   }
@@ -2848,7 +2849,7 @@ function renderVisitDetailContent(visit, changelogs) {
     }).join("");
     voiceNotesHtml = `
       <div class="vd-section">
-        <p class="vd-section-title">🎙️ Voice Notes</p>
+        <p class="vd-section-title">${icon('mic')} Voice Notes</p>
         <div class="vd-vn-list">${items}</div>
       </div>`;
   }
@@ -3020,7 +3021,7 @@ function closeDealEditModal() {
 function renderIntegrationLogs(logs) {
   views.integrations.innerHTML = `
     <div class="logs-outer">
-      <h3 class="section-title">🔌 Integration Logs</h3>
+      <h3 class="section-title">${icon('plug')} Integration Logs</h3>
       <div class="list">
         ${
           logs.length
@@ -3034,7 +3035,7 @@ function renderIntegrationLogs(logs) {
                   <div class="log-time">${asDate(log.startedAt)}<br><span class="chip ${log.status === "SUCCESS" ? "chip-success" : "chip-danger"}">${log.status}</span></div>
                 </div>
               `).join("")
-            : '<div class="empty-state"><div class="empty-icon">🔌</div><div><strong>No integration logs yet</strong><p>Run a connection test in Settings to generate the first log.</p></div></div>'
+            : `<div class="empty-state"><div class="empty-icon">${icon('plug', 24)}</div><div><strong>No integration logs yet</strong><p>Run a connection test in Settings to generate the first log.</p></div></div>`
         }
       </div>
     </div>
@@ -3088,20 +3089,20 @@ function renderSettings() {
   const hasRole = (...allowed) => allowed.includes(role);
 
   const personalNavItems = [
-    { page: "my-profile",    label: "My Profile",               emoji: "👤" },
-    { page: "notifications", label: "Notifications",            emoji: "🔔" }
+    { page: "my-profile",    label: "My Profile",               ic: "user" },
+    { page: "notifications", label: "Notifications",            ic: "bell" }
   ];
 
   const allNavItems = [
-    { page: "company",        label: "Company Settings",      emoji: "🏢", roles: ["ADMIN"] },
-    { page: "branding",       label: "Branding & Theme",      emoji: "🎨", roles: ["ADMIN"] },
-    { page: "team-structure", label: "Team Structure",         emoji: "👥", roles: ["ADMIN", "DIRECTOR", "MANAGER", "SUPERVISOR", "REP"] },
-    { page: "roles",          label: "Roles & Permissions",   emoji: "🔐", roles: ["ADMIN"] },
-    { page: "kpi-targets",    label: "KPI Targets",            emoji: "🎯", roles: ["ADMIN", "DIRECTOR", "MANAGER", "SUPERVISOR", "REP"] },
-    { page: "integrations",   label: "Integrations",          emoji: "🔌", roles: ["ADMIN"] },
-    { page: "custom-domain",  label: "Custom Domain",          emoji: "🌐", roles: ["ADMIN"] },
-    { page: "data-sync",      label: "Data Sync",              emoji: "🔄", roles: ["ADMIN"] },
-    { page: "cron-jobs",      label: "Scheduled Jobs",         emoji: "⏱", roles: ["ADMIN"] }
+    { page: "company",        label: "Company Settings",      ic: "building", roles: ["ADMIN"] },
+    { page: "branding",       label: "Branding & Theme",      ic: "palette", roles: ["ADMIN"] },
+    { page: "team-structure", label: "Team Structure",         ic: "users", roles: ["ADMIN", "DIRECTOR", "MANAGER", "SUPERVISOR", "REP"] },
+    { page: "roles",          label: "Roles & Permissions",   ic: "lockKey", roles: ["ADMIN"] },
+    { page: "kpi-targets",    label: "KPI Targets",            ic: "target", roles: ["ADMIN", "DIRECTOR", "MANAGER", "SUPERVISOR", "REP"] },
+    { page: "integrations",   label: "Integrations",          ic: "plug", roles: ["ADMIN"] },
+    { page: "custom-domain",  label: "Custom Domain",          ic: "globe", roles: ["ADMIN"] },
+    { page: "data-sync",      label: "Data Sync",              ic: "refresh", roles: ["ADMIN"] },
+    { page: "cron-jobs",      label: "Scheduled Jobs",         ic: "clock", roles: ["ADMIN"] }
   ];
   const navItems = allNavItems.filter(item => item.roles.includes(role));
 
@@ -3143,7 +3144,7 @@ function renderSettings() {
       </section>
 
       <section class="card">
-        <h3 class="section-title">👤 Personal Information</h3>
+        <h3 class="section-title">${icon('user')} Personal Information</h3>
         <form id="profile-info-form" class="settings-form">
           <div class="settings-field-row">
             <label class="form-label">Full Name
@@ -3170,7 +3171,7 @@ function renderSettings() {
       </section>
 
       <section class="card">
-        <h3 class="section-title">🔒 Change Password</h3>
+        <h3 class="section-title">${icon('lock')} Change Password</h3>
         <form id="change-password-form" class="settings-form">
           <div class="settings-field-row">
             <label class="form-label">Current Password
@@ -3193,7 +3194,7 @@ function renderSettings() {
 
       ${window.PublicKeyCredential ? `
       <section class="card">
-        <h3 class="section-title">🔑 Passkeys</h3>
+        <h3 class="section-title">${icon('key')} Passkeys</h3>
         <p class="form-hint" style="margin-bottom:var(--sp-4)">Sign in securely using your fingerprint, face, or device PIN. Passkeys are phishing-resistant and work across your devices.</p>
         <div id="passkey-list" class="passkey-list"><div class="muted">Loading passkeys…</div></div>
         <div style="margin-top:var(--sp-4)">
@@ -3233,12 +3234,12 @@ function renderSettings() {
     const slackConnectEnabled   = (integrations || []).find(i => i.provider === "SLACK")?.slackConnectEnabled === true;
     const channelProviders = [
       {
-        provider: "LINE", label: "LINE", icon: "💬",
+        provider: "LINE", label: "LINE", ic: "chat",
         hint: "Enter your LINE User ID (get it from your admin or by messaging the LINE OA)",
         placeholder: "e.g. U1a2b3c4d5e6f7890",
         helpHtml: `
           <p class="notif-help-steps" style="list-style:none;padding:0;margin:0 0 var(--sp-2)">
-            ⚠️ <strong>หมายเหตุ:</strong> LINE User ID นี้ <em>ไม่ใช่</em> LINE ID (ชื่อผู้ใช้) ที่เห็นในแอป<br>
+            ${icon('warning')} <strong>หมายเหตุ:</strong> LINE User ID นี้ <em>ไม่ใช่</em> LINE ID (ชื่อผู้ใช้) ที่เห็นในแอป<br>
             คือ Internal User ID ของ LINE Messaging API ขึ้นต้นด้วย <code>U</code> ตามด้วย 32 ตัวอักษร
           </p>
           <p style="font-size:0.83rem;font-weight:600;margin:0 0 4px">วิธีรับ User ID:</p>
@@ -3250,7 +3251,7 @@ function renderSettings() {
           <p class="notif-help-example">ตัวอย่าง: <code>U1a2b3c4d5e6f7890abcd1234567890ab</code></p>`
       },
       {
-        provider: "MS_TEAMS", label: "Microsoft Teams", icon: "🟦",
+        provider: "MS_TEAMS", label: "Microsoft Teams", ic: "square",
         hint: "Enter your Microsoft Teams user ID (Azure AD Object ID)",
         placeholder: "e.g. 8:orgid:xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
         helpHtml: `
@@ -3264,7 +3265,7 @@ function renderSettings() {
           <p class="notif-help-example">Example: <code>8:orgid:3f5a8b12-1c2d-4e5f-a6b7-89cdef012345</code></p>`
       },
       {
-        provider: "SLACK", label: "Slack", icon: "💼",
+        provider: "SLACK", label: "Slack", ic: "briefcase",
         hint: "Enter your Slack member ID",
         placeholder: "e.g. U012AB3CD",
         helpHtml: `
@@ -3282,7 +3283,7 @@ function renderSettings() {
     const channelsSection = integrations === undefined
       ? `<section class="card"><div class="muted" style="padding:var(--sp-2)">Loading notification channels…</div></section>`
       : `<section class="card">
-          <h3 class="section-title">🔔 Notification Channels</h3>
+          <h3 class="section-title">${icon('bell')} Notification Channels</h3>
           <p class="muted" style="margin-bottom:var(--sp-4);font-size:0.88rem">Connect a messaging app so the system can send you deal follow-up reminders and visit check-in alerts.</p>
           <div class="notif-channels-list">
             ${channelProviders.map(ch => {
@@ -3291,7 +3292,7 @@ function renderSettings() {
               return `
               <div class="notif-channel-card" data-provider="${ch.provider}">
                 <div class="notif-channel-main">
-                  <span class="notif-channel-icon">${ch.icon}</span>
+                  <span class="notif-channel-icon">${icon(ch.ic, 18)}</span>
                   <div class="notif-channel-info">
                     <span class="notif-channel-name">
                       ${ch.label}
@@ -3354,26 +3355,26 @@ function renderSettings() {
     const hasChannel = (integrations || []).some(i => i.status === "CONNECTED");
     const channelWarning = !hasChannel && integrations !== undefined ? `
       <div class="notif-channel-warning">
-        <span>⚠️ No notification channel connected. Connect one below to receive alerts.</span>
+        <span>${icon('warning')} No notification channel connected. Connect one below to receive alerts.</span>
       </div>` : "";
     const isGroupRole = ["ADMIN", "DIRECTOR", "MANAGER", "SUPERVISOR"].includes(state.user?.role);
     pageHtml = `
       ${channelsSection}
       ${channelWarning}
       <section class="card">
-        <h3 class="section-title">👤 Personal Notifications</h3>
+        <h3 class="section-title">${icon('user')} Personal Notifications</h3>
         <p class="muted" style="font-size:0.85rem;margin-bottom:var(--sp-3)">Sent directly to you via your connected channel.</p>
         <div class="notif-group">
           ${toggle("dealFollowUp", "Follow-up deal reminder",   "Remind me before a deal follow-up date is due")}
           ${toggle("visitRemind",  "Check-in reminder",         "Remind me when I have a visit scheduled for check-in")}
-          ${toggle("kpiAlert",     "🎯 KPI Alert",              "แจ้งเตือนประจำวัน 5 วันสุดท้ายของเดือน หากคืบหน้าต่ำกว่า 85% (ส่งส่วนตัว หรือกลุ่มหากไม่มีช่องส่วนตัว)")}
-          ${toggle("weeklyDigest", "📊 Weekly Digest",          "สรุปผลงานทุกวันจันทร์ 06:00 น. ส่งเข้าช่องกลุ่มของทีม")}
+          ${toggle("kpiAlert",     `${icon('target')} KPI Alert`,             "แจ้งเตือนประจำวัน 5 วันสุดท้ายของเดือน หากคืบหน้าต่ำกว่า 85% (ส่งส่วนตัว หรือกลุ่มหากไม่มีช่องส่วนตัว)")}
+          ${toggle("weeklyDigest", `${icon('chart')} Weekly Digest`,          "สรุปผลงานทุกวันจันทร์ 06:00 น. ส่งเข้าช่องกลุ่มของทีม")}
         </div>
       </section>
 
       ${isGroupRole ? `
       <section class="card">
-        <h3 class="section-title">👥 Group Notifications</h3>
+        <h3 class="section-title">${icon('users')} Group Notifications</h3>
         <p class="muted" style="font-size:0.85rem;margin-bottom:var(--sp-3)">Sent to you when members of your team perform these actions.</p>
         <div class="notif-group">
           ${toggle("repCheckin",  "Rep checked in",   "When a sales rep checks in at a customer site")}
@@ -3531,7 +3532,7 @@ function renderSettings() {
   } else if (page === "branding") {
     pageHtml = `
       <section class="card">
-        <h3 class="section-title">🎨 Logo &amp; Colors</h3>
+        <h3 class="section-title">${icon('palette')} Logo &amp; Colors</h3>
         ${isAdmin ? `
         <form id="branding-form" class="settings-form">
           <div class="brand-assets-row">
@@ -3614,7 +3615,7 @@ function renderSettings() {
     }
 
     const channelTypeLabel = { LINE: "LINE", SLACK: "Slack", EMAIL: "Email", MS_TEAMS: "MS Teams" };
-    const channelTypeIcon  = { LINE: "💬", SLACK: "#", EMAIL: "✉️", MS_TEAMS: "🟦" };
+    const channelTypeIcon  = { LINE: icon('chat'), SLACK: icon('hash'), EMAIL: icon('mail'), MS_TEAMS: icon('square') };
 
     function buildTeamCol(team) {
       // Exclude ADMIN from org chart
@@ -3733,7 +3734,7 @@ function renderSettings() {
       </div>
       ${teams.length
         ? `<div class="org-chart-scroll"><div class="org-chart">${directorGroupsHtml}${noDirectorHtml}</div></div>`
-        : `<div class="empty-state compact"><div class="empty-icon">👥</div><div><strong>No teams yet</strong>${isAdmin ? `<p>Click "+ Create Team" to get started.</p>` : ""}</div></div>`}
+        : `<div class="empty-state compact"><div class="empty-icon">${icon('users')}</div><div><strong>No teams yet</strong>${isAdmin ? `<p>Click "+ Create Team" to get started.</p>` : ""}</div></div>`}
     `;
   } else if (page === "roles") {
     const me = state.user;
@@ -3796,37 +3797,37 @@ function renderSettings() {
               <span class="rp-hierarchy-title">Role Hierarchy</span>
             </div>
             <div class="rp-hierarchy-flow">
-              <span class="rp-badge rp-badge--admin">👑 Admin</span>
+              <span class="rp-badge rp-badge--admin">${icon('crown')} Admin</span>
               <span class="rp-arrow">→</span>
-              <span class="rp-badge rp-badge--director">🎖 Sales Director</span>
+              <span class="rp-badge rp-badge--director">${icon('medal')} Sales Director</span>
               <span class="rp-arrow">→ (multiple)</span>
-              <span class="rp-badge rp-badge--manager">🏢 Sales Manager</span>
+              <span class="rp-badge rp-badge--manager">${icon('building')} Sales Manager</span>
               <span class="rp-arrow">→ (multiple)</span>
-              <span class="rp-badge rp-badge--supervisor">👤 Supervisor</span>
+              <span class="rp-badge rp-badge--supervisor">${icon('user')} Supervisor</span>
               <span class="rp-arrow">→ (multiple)</span>
-              <span class="rp-badge rp-badge--rep">👥 Sales Rep</span>
+              <span class="rp-badge rp-badge--rep">${icon('users')} Sales Rep</span>
             </div>
             <p class="rp-hierarchy-note">Use the <strong>Reports To</strong> column to chain each level. When a level is empty (e.g. Supervisor resigned), a Sales Rep may report directly to a Sales Manager, and a Supervisor may report directly to a Sales Director.</p>
           </div>
           <div class="rp-cards">
             <div class="rp-card">
-              <div class="rp-card-head"><span class="rp-card-icon">👑</span><span class="rp-card-label">Admin</span><span class="rp-card-count">${roleCounts.ADMIN}</span></div>
+              <div class="rp-card-head"><span class="rp-card-icon">${icon('crown')}</span><span class="rp-card-label">Admin</span><span class="rp-card-count">${roleCounts.ADMIN}</span></div>
               <p class="rp-card-desc">Full access: manage users, all data, reports</p>
             </div>
             <div class="rp-card">
-              <div class="rp-card-head"><span class="rp-card-icon">🎖</span><span class="rp-card-label">Sales Director</span><span class="rp-card-count">${roleCounts.DIRECTOR}</span></div>
+              <div class="rp-card-head"><span class="rp-card-icon">${icon('medal')}</span><span class="rp-card-label">Sales Director</span><span class="rp-card-count">${roleCounts.DIRECTOR}</span></div>
               <p class="rp-card-desc">Oversees multiple Sales Managers</p>
             </div>
             <div class="rp-card">
-              <div class="rp-card-head"><span class="rp-card-icon">🏢</span><span class="rp-card-label">Sales Manager</span><span class="rp-card-count">${roleCounts.MANAGER}</span></div>
+              <div class="rp-card-head"><span class="rp-card-icon">${icon('building')}</span><span class="rp-card-label">Sales Manager</span><span class="rp-card-count">${roleCounts.MANAGER}</span></div>
               <p class="rp-card-desc">View all their Supervisors' and Reps' data</p>
             </div>
             <div class="rp-card">
-              <div class="rp-card-head"><span class="rp-card-icon">👤</span><span class="rp-card-label">Supervisor</span><span class="rp-card-count">${roleCounts.SUPERVISOR}</span></div>
+              <div class="rp-card-head"><span class="rp-card-icon">${icon('user')}</span><span class="rp-card-label">Supervisor</span><span class="rp-card-count">${roleCounts.SUPERVISOR}</span></div>
               <p class="rp-card-desc">View their team data, reports, calendar</p>
             </div>
             <div class="rp-card">
-              <div class="rp-card-head"><span class="rp-card-icon">👥</span><span class="rp-card-label">Sales Rep</span><span class="rp-card-count">${roleCounts.REP}</span></div>
+              <div class="rp-card-head"><span class="rp-card-icon">${icon('users')}</span><span class="rp-card-label">Sales Rep</span><span class="rp-card-count">${roleCounts.REP}</span></div>
               <p class="rp-card-desc">Own visits and check-ins only</p>
             </div>
           </div>
@@ -3843,7 +3844,7 @@ function renderSettings() {
           <option value="">All Teams</option>
           ${(state.cache.teams || []).map(t => `<option value="${t.id}" ${state.rolePageTeam === t.id ? "selected" : ""}>${escHtml(t.teamName)}</option>`).join("")}
         </select>
-        <button class="rp-refresh-btn" id="rp-refresh-btn">↻ Refresh</button>
+        <button class="rp-refresh-btn" id="rp-refresh-btn">${icon('refresh')} Refresh</button>
         ${isAdmin ? `<button class="ghost small" id="rp-invite-btn">+ Invite User</button>
         <button class="ghost small" id="rp-import-btn">Import Users</button>
         <button class="ghost small" id="rp-import-history-btn">Import History</button>` : ""}
@@ -3898,7 +3899,7 @@ function renderSettings() {
                 <span>${reportsToOptions(u)}</span>
                 <span class="rp-role-change-cell">
                   ${roleOptions(u)}
-                  ${isAdmin ? `<button type="button" class="passkey-admin-btn ghost small" data-uid="${u.id}" data-name="${escHtml(u.fullName)}" title="Manage passkeys">🔑</button>` : ""}
+                  ${isAdmin ? `<button type="button" class="passkey-admin-btn ghost small" data-uid="${u.id}" data-name="${escHtml(u.fullName)}" title="Manage passkeys">${icon('key')}</button>` : ""}
                 </span>
               </div>`;
             }).join("")}
@@ -3921,7 +3922,7 @@ function renderSettings() {
     const canEditKpi = hasRole("ADMIN", "DIRECTOR", "MANAGER");
     pageHtml = `
       <section class="card">
-        <h3 class="section-title">🎯 Set KPI Target</h3>
+        <h3 class="section-title">${icon('target')} Set KPI Target</h3>
         <p class="muted" style="margin-bottom:var(--sp-3)">Targets are set <strong>per person, per month</strong>. Each rep can have different targets each month.</p>
         ${canEditKpi ? `
           ${state.cache.salesReps.length ? `
@@ -3953,7 +3954,7 @@ function renderSettings() {
 
       <section class="card">
         <div class="inline-actions wrap" style="justify-content:space-between;align-items:center;margin-bottom:var(--sp-3)">
-          <h3 class="section-title" style="margin:0">📊 KPI Targets</h3>
+          <h3 class="section-title" style="margin:0">${icon('chart')} KPI Targets</h3>
           ${canEditKpi ? `
             <div class="inline-actions">
               <button class="ghost small" id="kpi-template-btn" type="button">⬇ Download Template</button>
@@ -3967,9 +3968,9 @@ function renderSettings() {
             style="padding:var(--sp-2) var(--sp-3);margin-bottom:var(--sp-2);background:var(--bg-subtle);border-radius:var(--r);align-items:center;gap:var(--sp-2)">
             <span id="kpi-selected-count" class="muted small">0 selected</span>
             <div style="margin-left:auto;display:inline-flex;gap:var(--sp-2)">
-              <button type="button" class="ghost small" id="kpi-bulk-copy-btn">📋 Copy to Next Month</button>
+              <button type="button" class="ghost small" id="kpi-bulk-copy-btn">${icon('clipboard')} Copy to Next Month</button>
               <button type="button" class="ghost small kpi-bulk-delete-btn" id="kpi-bulk-delete-btn"
-                style="color:var(--danger,#dc2626)">🗑 Delete</button>
+                style="color:var(--danger,#dc2626)">${icon('trash')} Delete</button>
             </div>
           </div>
         ` : ""}
@@ -4058,7 +4059,7 @@ function renderSettings() {
                             ${isEnabled ? "Disable" : "Enable"}
                           </button>
                           ${platform === "MS_TEAMS" ? `<button type="button" class="ghost small teams-app-pkg-btn" data-tenant-id="${tenantId}">⬇ Download Teams App</button>
-                            <button type="button" class="ghost small teams-push-all-btn" data-tenant-id="${tenantId}" title="Requires User.Read.All, AppCatalog.Read.All, TeamsAppInstallation.ReadWriteForUser.All permissions with admin consent">🚀 Push to All Users</button>` : ""}
+                            <button type="button" class="ghost small teams-push-all-btn" data-tenant-id="${tenantId}" title="Requires User.Read.All, AppCatalog.Read.All, TeamsAppInstallation.ReadWriteForUser.All permissions with admin consent">${icon('rocket')} Push to All Users</button>` : ""}
                         ` : ""}
                       </div>
                       ${cred?.lastTestStatus ? `<p class="intg-test-result small intg-test-result--${cred.lastTestStatus === "SUCCESS" ? "pass" : "fail"}">Last test: ${cred.lastTestResult ? escHtml(cred.lastTestResult) : cred.lastTestStatus} · ${asDate(cred.lastTestedAt)}</p>` : ""}
@@ -4341,14 +4342,14 @@ function renderSettings() {
     const syncJobs = state.cache.syncJobs ?? [];
     pageHtml = `
       <section class="card" style="margin-bottom:var(--sp-4)">
-        <h3 class="section-title">🔄 Data Sync</h3>
+        <h3 class="section-title">${icon('refresh')} Data Sync</h3>
         <p class="muted" style="font-size:0.85rem">Sync Customers, Items, and Payment Terms from external ERP systems. Supports API push, REST pull, and file import.</p>
       </section>
 
       <!-- API Keys -->
       <section class="card" style="margin-bottom:var(--sp-4)">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-3)">
-          <h4 style="margin:0">🔑 API Keys</h4>
+          <h4 style="margin:0">${icon('key')} API Keys</h4>
           <button class="btn-primary small" id="sync-create-key-btn">+ Create API Key</button>
         </div>
         <p class="muted" style="font-size:0.82rem;margin-bottom:var(--sp-3)">
@@ -4403,7 +4404,7 @@ function renderSettings() {
       <!-- Data Sources & Field Mappings -->
       <section class="card" style="margin-bottom:var(--sp-4)">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-3)">
-          <h4 style="margin:0">📡 Data Sources & Field Mappings</h4>
+          <h4 style="margin:0">${icon('antenna')} Data Sources & Field Mappings</h4>
           <button class="btn-primary small" id="sync-create-source-btn">+ Create Source</button>
         </div>
         <p class="muted" style="font-size:0.82rem;margin-bottom:var(--sp-3)">
@@ -4466,7 +4467,7 @@ function renderSettings() {
       <div id="sync-mapping-editor" style="display:none;margin-bottom:var(--sp-4)">
         <section class="card">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-3)">
-            <h4 style="margin:0">📝 Edit Field Mappings — <span id="sync-mapping-source-name"></span></h4>
+            <h4 style="margin:0">${icon('pen')} Edit Field Mappings — <span id="sync-mapping-source-name"></span></h4>
             <button class="ghost small" id="sync-mapping-close">Close</button>
           </div>
           <form id="sync-mapping-form">
@@ -4484,7 +4485,7 @@ function renderSettings() {
 
       <!-- Recent Sync Jobs -->
       <section class="card">
-        <h4 style="margin-bottom:var(--sp-3)">📋 Recent Sync Jobs</h4>
+        <h4 style="margin-bottom:var(--sp-3)">${icon('clipboard')} Recent Sync Jobs</h4>
         ${syncJobs.length === 0 ? '<p class="muted">No sync jobs yet.</p>' : `
           <table class="data-table">
             <thead><tr><th>Time</th><th>Source</th><th>Type</th><th>Status</th><th>Records</th><th></th></tr></thead>
@@ -4513,16 +4514,16 @@ function renderSettings() {
       const jobs = cronData || [];
       pageHtml = `
         <section class="card" style="margin-bottom:var(--sp-4)">
-          <h3 class="section-title">⏱ Scheduled Jobs</h3>
+          <h3 class="section-title">${icon('clock')} Scheduled Jobs</h3>
           <p class="muted" style="font-size:0.85rem">กำหนดตารางเวลา และดูประวัติการทำงานของแต่ละงาน Admin เท่านั้น</p>
         </section>
         ${jobs.map(job => {
           const cfg = job.config;
           const lastRun = job.runs?.[0];
           const statusBadge = (status) => {
-            if (status === "SUCCESS")  return `<span class="cron-badge cron-badge--success">✅ Success</span>`;
-            if (status === "FAILURE")  return `<span class="cron-badge cron-badge--failure">❌ Failed</span>`;
-            if (status === "RUNNING")  return `<span class="cron-badge cron-badge--running">⏳ Running</span>`;
+            if (status === "SUCCESS")  return `<span class="cron-badge cron-badge--success">${icon('checkCircle')} Success</span>`;
+            if (status === "FAILURE")  return `<span class="cron-badge cron-badge--failure">${icon('xCircle')} Failed</span>`;
+            if (status === "RUNNING")  return `<span class="cron-badge cron-badge--running">${icon('clock')} Running</span>`;
             return `<span class="cron-badge">—</span>`;
           };
           const triggerBadge = (t) => t === "MANUAL"
@@ -4614,14 +4615,14 @@ function renderSettings() {
         <p class="settings-sidenav-label">PERSONAL</p>
         ${personalNavItems.map((item) => `
           <button class="settings-nav-item ${page === item.page ? "active" : ""}" data-settings-nav="${item.page}" title="${navCollapsed ? item.label : ""}">
-            <span class="settings-nav-emoji" aria-hidden="true">${item.emoji}</span>
+            <span class="settings-nav-emoji" aria-hidden="true">${icon(item.ic, 16)}</span>
             <span class="settings-nav-label">${item.label}</span>
           </button>
         `).join("")}
         <p class="settings-sidenav-label" style="margin-top:var(--sp-3)">ORGANIZATION</p>
         ${navItems.map((item) => `
           <button class="settings-nav-item ${page === item.page ? "active" : ""}" data-settings-nav="${item.page}" title="${navCollapsed ? item.label : ""}">
-            <span class="settings-nav-emoji" aria-hidden="true">${item.emoji}</span>
+            <span class="settings-nav-emoji" aria-hidden="true">${icon(item.ic, 16)}</span>
             <span class="settings-nav-label">${item.label}</span>
           </button>
         `).join("")}
@@ -4779,12 +4780,12 @@ function renderSettings() {
       try {
         const res = await api(`/users/${userId}/test-teams-dm`, { method: "POST" });
         if (res.ok) {
-          setStatus("✅ " + res.message);
+          setStatus(res.message);
         } else {
-          setStatus("❌ " + res.message, true);
+          setStatus(res.message, true);
         }
       } catch (err) {
-        setStatus("❌ " + err.message, true);
+        setStatus(err.message, true);
       } finally {
         btn.disabled = false;
         btn.textContent = "Test DM";
@@ -4852,10 +4853,10 @@ function renderSettings() {
           await api(`/cron-jobs/${jobKey}`, { method: "PUT", body: { cronExpr: input.value.trim(), isEnabled: check.checked } });
           // Refresh data
           state.cache.cronJobs = await api("/cron-jobs");
-          if (statusEl) { statusEl.textContent = "✅ Saved"; statusEl.className = "cron-save-status cron-save-ok"; }
+          if (statusEl) { statusEl.textContent = "Saved"; statusEl.className = "cron-save-status cron-save-ok"; }
           renderSettings();
         } catch (e) {
-          if (statusEl) { statusEl.textContent = "❌ " + (e.message || "Error"); statusEl.className = "cron-save-status cron-save-err"; }
+          if (statusEl) { statusEl.textContent = e.message || "Error"; statusEl.className = "cron-save-status cron-save-err"; }
         } finally {
           btn.disabled = false;
           setTimeout(() => { if (statusEl) statusEl.textContent = ""; }, 3000);
@@ -4868,7 +4869,7 @@ function renderSettings() {
       btn.addEventListener("click", async () => {
         const jobKey = btn.dataset.jobKey;
         btn.disabled = true;
-        btn.textContent = "⏳ Running…";
+        btn.textContent = "Running…";
         try {
           await api(`/cron-jobs/${jobKey}/trigger`, { method: "POST" });
           // Ensure history for this job is visible
@@ -5141,7 +5142,7 @@ function renderSettings() {
           <div class="popup-box popup-box--wide" role="dialog" aria-modal="true">
             <div class="popup-header">
               <p class="popup-title">Sync Job Detail</p>
-              <button class="popup-close-btn" aria-label="Close">✕</button>
+              <button class="popup-close-btn" aria-label="Close">${icon('x', 14)}</button>
             </div>
             <div style="padding:var(--sp-3)">
               <p><strong>Status:</strong> ${escHtml(job.status)} &nbsp; <strong>Source:</strong> ${escHtml(job.source?.sourceName ?? "—")} &nbsp; <strong>Type:</strong> ${escHtml(job.runType)}</p>
@@ -5196,7 +5197,7 @@ function renderSettings() {
       <div class="popup-box popup-box--wide" role="dialog" aria-modal="true">
         <div class="popup-header">
           <p class="popup-title">Invite User</p>
-          <button class="popup-close-btn" aria-label="Close">✕</button>
+          <button class="popup-close-btn" aria-label="Close">${icon('x', 14)}</button>
         </div>
         <form id="invite-user-form" style="display:flex;flex-direction:column;gap:var(--sp-3);padding:var(--sp-3) 0">
           <label class="form-label">Full name <input class="form-input" name="fullName" type="text" required placeholder="Jane Smith" autocomplete="name" minlength="2" maxlength="120" /></label>
@@ -5275,7 +5276,7 @@ function renderSettings() {
       <div class="popup-box popup-box--wide" role="dialog" aria-modal="true">
         <div class="popup-header">
           <p class="popup-title">Import Users</p>
-          <button class="popup-close-btn" aria-label="Close">✕</button>
+          <button class="popup-close-btn" aria-label="Close">${icon('x', 14)}</button>
         </div>
         <div style="padding:var(--sp-3) 0;display:flex;flex-direction:column;gap:var(--sp-3)">
           <p class="muted small">Upload an Excel (.xlsx) file. Required columns: <code>email</code>, <code>fullName</code>, <code>role</code> (REP, SUPERVISOR, MANAGER, DIRECTOR, ADMIN). Optional: <code>teamName</code>.</p>
@@ -5656,7 +5657,7 @@ function renderSettings() {
       <div class="popup-box popup-box--wide" role="dialog" aria-modal="true">
         <div class="popup-header">
           <p class="popup-title">Import KPI Targets</p>
-          <button class="popup-close-btn" aria-label="Close">✕</button>
+          <button class="popup-close-btn" aria-label="Close">${icon('x', 14)}</button>
         </div>
         <div style="padding:var(--sp-3) 0;display:flex;flex-direction:column;gap:var(--sp-3)">
           <p class="muted small">Upload an Excel (.xlsx) file. Required columns: <code>email</code>, <code>targetMonth</code> (YYYY-MM), <code>visitTargetCount</code>, <code>newDealValueTarget</code>, <code>revenueTarget</code>. Existing rows for the same rep + month are overwritten.</p>
@@ -6052,10 +6053,10 @@ function renderSettings() {
         const result = await api(`/tenants/${tenantId}/integrations/credentials/${platform}/test`, { method: "POST" });
         const passed = result.ok === true || result.status === "SUCCESS" || result.lastTestStatus === "SUCCESS";
         resultEl.className = `intg-test-result small intg-test-result--${passed ? "pass" : "fail"}`;
-        resultEl.textContent = passed ? "✓ Test passed" : `✗ Test failed${result.message ? ": " + result.message : ""}`;
+        resultEl.textContent = passed ? "Test passed" : `Test failed${result.message ? ": " + result.message : ""}`;
       } catch (error) {
         resultEl.className = "intg-test-result small intg-test-result--fail";
-        resultEl.textContent = `✗ ${error.message}`;
+        resultEl.textContent = error.message;
       } finally {
         btn.disabled = false;
         btn.textContent = "Test Connection";
@@ -6124,15 +6125,15 @@ function renderSettings() {
         const res = await api(`/tenants/${tid}/integrations/ms-teams-push-all`, { method: "POST" });
         const detail = `Azure AD users found: ${res.orgUsersFound ?? "?"}, CRM users: ${res.crmUsersFound ?? "?"}, matched: ${res.matched ?? "?"}`;
         if (res.ok) {
-          setStatus(`✅ ${res.message} (${detail})${res.errors?.length ? " Errors: " + res.errors.join("; ") : ""}`);
+          setStatus(`${res.message} (${detail})${res.errors?.length ? " Errors: " + res.errors.join("; ") : ""}`);
         } else {
-          setStatus(`❌ ${res.message} — ${detail}${res.sampleAadEmails?.length ? ` | Sample AAD emails: ${res.sampleAadEmails.join(", ")}` : ""}`, true);
+          setStatus(`${res.message} — ${detail}${res.sampleAadEmails?.length ? ` | Sample AAD emails: ${res.sampleAadEmails.join(", ")}` : ""}`, true);
         }
       } catch (e) {
-        setStatus("❌ " + e.message, true);
+        setStatus(e.message, true);
       } finally {
         btn.disabled = false;
-        btn.textContent = "🚀 Push to All Users";
+        btn.innerHTML = `${icon('rocket')} Push to All Users`;
       }
     });
   });
@@ -6412,7 +6413,7 @@ function openContactsPopup(contacts) {
     <div class="popup-box popup-box--wide" role="dialog" aria-modal="true">
       <div class="popup-header">
         <p class="popup-title">Contacts <span class="muted small">(${contacts.length})</span></p>
-        <button class="popup-close-btn" aria-label="Close">✕</button>
+        <button class="popup-close-btn" aria-label="Close">${icon('x', 14)}</button>
       </div>
       <div class="cpop-list">${rows}</div>
     </div>`;
@@ -6673,11 +6674,11 @@ function openNewCustomerModal(termOptions) {
               <div class="ncm-type-pills">
                 <label class="ncm-type-pill">
                   <input type="radio" name="customerType" value="COMPANY" checked>
-                  <span>🏢 Company</span>
+                  <span>${icon('building')} Company</span>
                 </label>
                 <label class="ncm-type-pill">
                   <input type="radio" name="customerType" value="PERSONAL">
-                  <span>👤 Personal</span>
+                  <span>${icon('user')} Personal</span>
                 </label>
               </div>
             </div>
@@ -6987,7 +6988,7 @@ function openNewCustomerModal(termOptions) {
             }
           }
         }
-        if (statusEl) { statusEl.textContent = `✓ Found: ${data.name}${data.status ? " (" + data.status + ")" : ""}`; statusEl.className = "ncm-dbd-status ncm-dbd-ok"; }
+        if (statusEl) { statusEl.textContent = `Found: ${data.name}${data.status ? " (" + data.status + ")" : ""}`; statusEl.className = "ncm-dbd-status ncm-dbd-ok"; }
       } else {
         if (statusEl) { statusEl.textContent = "Company found but no name returned."; statusEl.className = "ncm-dbd-status"; }
       }
@@ -7106,7 +7107,7 @@ function openEditCustomerModal(cust, termOptions) {
     <div class="ncm-card" style="max-width:480px">
       <div class="ncm-header">
         <span class="ncm-title">Edit Customer</span>
-        <button type="button" class="ncm-close" id="ecm-close">✕</button>
+        <button type="button" class="ncm-close" id="ecm-close">${icon('x', 14)}</button>
       </div>
       <form id="edit-cust-form" class="ncm-body" novalidate>
         <div class="ncm-row">
@@ -7214,7 +7215,7 @@ function syncMappingRowHtml(idx, m) {
       <input type="text" name="targetField" placeholder="CRM field (e.g. customerCode)" value="${escHtml(d.targetField || "")}" class="form-control" style="width:150px">
       <input type="text" name="transformRule" placeholder="Transform (trim/upper/lower/number)" value="${escHtml(d.transformRule || "")}" class="form-control" style="width:140px">
       <label style="display:flex;align-items:center;gap:4px;font-size:0.82rem"><input type="checkbox" name="isRequired" ${d.isRequired ? "checked" : ""}> Required</label>
-      <button type="button" class="ghost small" onclick="this.closest('.sync-mapping-row').remove()">✕</button>
+      <button type="button" class="ghost small" onclick="this.closest('.sync-mapping-row').remove()">${icon('x', 12)}</button>
     </div>`;
 }
 
@@ -7586,11 +7587,11 @@ loginForm.addEventListener("submit", async (event) => {
         const res = await fetch(`/api/v1/tenants/check-slug?slug=${encodeURIComponent(slug)}`);
         const data = await res.json();
         if (data.available) {
-          slugStatus.textContent = "✓ Available";
+          slugStatus.textContent = "Available";
           slugStatus.className = "signup-slug-status available";
           slugHint.textContent = `Your workspace URL: ${location.hostname}/${slug}`;
         } else {
-          slugStatus.textContent = "✗ Taken";
+          slugStatus.textContent = "Taken";
           slugStatus.className = "signup-slug-status taken";
           slugHint.textContent = "Try adding your company initials or a number.";
         }
