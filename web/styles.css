@@ -69,6 +69,7 @@ html.has-token #auth-screen { display: none !important; }
   --r-md: 12px;
   --r-lg: 18px;
   --r-xl: 24px;
+  --radius: var(--r-md);
 
   /* Stage accent palette (kept as semantic hints, tuned toward Apple hues) */
   --stage-0: oklch(59% 0.18 258);   /* blue   — opportunity */
@@ -325,12 +326,13 @@ body {
 .oauth-btns { display: flex; flex-direction: column; gap: var(--sp-2); }
 .oauth-btn {
   display: flex; align-items: center; justify-content: center; gap: var(--sp-2);
-  width: 100%; padding: 10px 16px; border-radius: var(--radius);
+  width: 100%; padding: 11px 16px; border-radius: var(--r-md);
   border: 1px solid var(--border); background: var(--surface);
-  color: var(--text); font-size: 0.88rem; font-weight: 600;
-  cursor: pointer; transition: background 0.15s, border-color 0.15s;
+  color: var(--text); font-size: 0.9rem; font-weight: 600;
+  cursor: pointer; transition: background 0.15s, border-color 0.15s, transform 0.1s;
 }
 .oauth-btn:hover { background: var(--surface-raised); border-color: var(--accent); }
+.oauth-btn:active { transform: scale(0.98); }
 
 .login-error {
   margin: var(--sp-3) 0 0;
