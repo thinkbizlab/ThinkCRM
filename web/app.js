@@ -35,6 +35,7 @@ import {
   setVisitsDeps
 } from "./modules/visits.js";
 import { openMapPicker, closeMapPicker, initMapPicker, setMapPickerDeps } from "./modules/map-picker.js";
+import { renderCronPicker, initCronPicker } from "./modules/cron-picker.js";
 import {
   getCustomFieldDefinitions,
   collectCustomFieldPayload,
@@ -4549,28 +4550,10 @@ function renderSettings() {
             <div class="cron-job-config">
               <div class="cron-config-inputs">
                 <div class="cron-config-field">
-                  <label class="cron-config-label">
-                    Cron Expression
-                    <button class="cron-help-btn" data-job-key="${job.jobKey}" title="How cron expressions work">?</button>
-                  </label>
-                  <input class="cron-expr-input" type="text" data-job-key="${job.jobKey}" value="${escHtml(cfg.cronExpr)}" placeholder="e.g. 0 6 * * 1" />
+                  <label class="cron-config-label">Schedule</label>
+                  ${renderCronPicker({ jobKey: job.jobKey, cronExpr: cfg.cronExpr, defaultCronExpr: job.defaultCronExpr })}
                   <div class="cron-expr-preview" id="cron-preview-${job.jobKey}">${describeCron(cfg.cronExpr, cfg.timezone)}</div>
                 </div>
-              </div>
-              <div class="cron-help-panel" id="cron-help-${job.jobKey}" hidden>
-                <p class="cron-help-title">Cron Expression Format</p>
-                <code class="cron-help-format">┌─────── minute (0–59)<br>│ ┌───── hour (0–23)<br>│ │ ┌─── day of month (1–31)<br>│ │ │ ┌─ month (1–12)<br>│ │ │ │ ┌ day of week (0–7, 0&amp;7=Sun)<br>│ │ │ │ │<br>* * * * *</code>
-                <table class="cron-help-table">
-                  <thead><tr><th>Expression</th><th>Meaning</th></tr></thead>
-                  <tbody>
-                    <tr><td><code>0 6 * * 1</code></td><td>Every Monday at 06:00</td></tr>
-                    <tr><td><code>0 7 * * *</code></td><td>Every day at 07:00</td></tr>
-                    <tr><td><code>0 9 * * 1-5</code></td><td>Weekdays at 09:00</td></tr>
-                    <tr><td><code>0 8 1 * *</code></td><td>1st of every month at 08:00</td></tr>
-                    <tr><td><code>30 17 * * 5</code></td><td>Every Friday at 17:30</td></tr>
-                  </tbody>
-                </table>
-                <p class="cron-help-note">⏰ Time is interpreted in the Tenant timezone (configured in Company settings). Use <strong>*</strong> as a wildcard for "every".</p>
               </div>
               <div class="cron-config-controls">
                 <div class="cron-config-field cron-enabled-field">
@@ -4840,23 +4823,15 @@ function renderSettings() {
 
   // ── Cron Jobs listeners ───────────────────────────────────────
   if (state.settingsPage === "cron-jobs") {
-    // Help panel toggle (? button)
-    views.settings.querySelectorAll(".cron-help-btn").forEach(btn => {
-      btn.addEventListener("click", () => {
-        const panel = qs(`#cron-help-${btn.dataset.jobKey}`);
-        if (panel) panel.hidden = !panel.hidden;
+    // Friendly schedule picker + live preview
+    (state.cache.cronJobs || []).forEach(job => {
+      initCronPicker(views.settings, {
+        jobKey: job.jobKey,
+        onChange: (expr) => {
+          const preview = qs(`#cron-preview-${job.jobKey}`);
+          if (preview) preview.textContent = describeCron(expr, job.config?.timezone || "");
+        },
       });
-    });
-
-    // Live preview of cron expression (updates as user types)
-    const updatePreview = (jobKey) => {
-      const exprInput = views.settings.querySelector(`.cron-expr-input[data-job-key="${jobKey}"]`);
-      const preview = qs(`#cron-preview-${jobKey}`);
-      const jobData = (state.cache.cronJobs || []).find(j => j.jobKey === jobKey);
-      if (preview && exprInput) preview.textContent = describeCron(exprInput.value, jobData?.config?.timezone || "");
-    };
-    views.settings.querySelectorAll(".cron-expr-input").forEach(input => {
-      input.addEventListener("input", () => updatePreview(input.dataset.jobKey));
     });
 
     // Save button

@@ -9871,3 +9871,101 @@ button.cust-badge-contact:hover { opacity: 0.7; }
 :root[data-theme="dark"] .passkey-delete-btn:hover {
   background: oklch(30% 0.05 25 / 0.4);
 }
+
+/* ── CRON PICKER (friendly schedule) ──────────────────────── */
+.cron-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  max-width: 420px;
+}
+
+.cp-modes {
+  display: inline-flex;
+  padding: 2px;
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  gap: 2px;
+  align-self: flex-start;
+}
+
+.cp-mode-btn {
+  appearance: none;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  color: var(--text-2) !important;
+  font-family: inherit;
+  font-size: 0.82rem;
+  font-weight: 500;
+  padding: 5px 12px !important;
+  border-radius: calc(var(--r-md) - 3px) !important;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+  letter-spacing: -0.01em;
+}
+.cp-mode-btn:hover { color: var(--text) !important; }
+.cp-mode-btn.active {
+  background: var(--surface) !important;
+  color: var(--text) !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 0 0 1px var(--border) !important;
+  font-weight: 600;
+}
+
+.cp-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.cp-body[hidden] { display: none; }
+
+.cp-field-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-color);
+  margin: 0;
+}
+
+.cp-time, .cp-monthday, .cp-custom { max-width: 180px; }
+.cp-custom { max-width: 320px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+.cp-days {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.cp-day-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  padding: 6px 10px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+.cp-day-chip:hover { border-color: var(--border-strong); color: var(--text); }
+.cp-day-chip.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+.cp-custom-hint { font-size: 0.78rem; margin: 2px 0 0; }
+.cp-custom-hint code {
+  font-size: 0.78rem;
+  padding: 1px 4px;
+  background: var(--surface-inset);
+  border-radius: 4px;
+}
