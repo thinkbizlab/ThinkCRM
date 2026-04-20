@@ -2177,6 +2177,10 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 .dashboard-filter-label select { width: auto; }
 .dashboard-rep-select { min-width: 160px; }
 
+/* Align month/team/rep controls + Apply button along a single baseline */
+.dashboard-filter-form { align-items: flex-end; }
+.dashboard-filter-apply { align-self: flex-end; }
+
 /* ── DEALS PAGE HEADER ────────────────────────────────────── */
 
 .deals-page-header {
