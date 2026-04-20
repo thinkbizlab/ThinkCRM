@@ -51,7 +51,10 @@ function applyLoginBranding(b) {
   const appName = b.appName || "ThinkCRM";
   document.title = appName;
   const nameEl = qs("#login-app-name");
-  if (nameEl) nameEl.textContent = appName;
+  if (nameEl) {
+    nameEl.textContent = appName;
+    nameEl.classList.remove("branding-pending");
+  }
 
   const primary   = b.primaryColor   || "#2563eb";
   const secondary = b.secondaryColor || "#0f172a";
@@ -75,13 +78,20 @@ async function fetchLoginBranding(slug) {
   } catch { /* ignore — branding is cosmetic */ }
 }
 
+// Reveal the login wordmark with whatever text it currently has (used when no
+// tenant-specific branding will arrive, so we don't leave it hidden forever).
+function revealLoginBrandingDefault() {
+  qs("#login-app-name")?.classList.remove("branding-pending");
+}
+
 // Auto-resolve workspace from custom domain on login page
 (async () => {
   const getSlug = () => loginForm.querySelector('[name="tenantSlug"]')?.value?.trim();
   const hostname = window.location.hostname;
   if (hostname === "localhost" || hostname === "127.0.0.1") {
     const slugInput = loginForm.querySelector('[name="tenantSlug"]');
-    if (slugInput?.value) fetchLoginBranding(slugInput.value);
+    if (slugInput?.value) await fetchLoginBranding(slugInput.value);
+    revealLoginBrandingDefault();
     loadOAuthProviderButtons({ getTenantSlug: getSlug });
     return;
   }
@@ -95,12 +105,14 @@ async function fetchLoginBranding(slug) {
         slugInput.readOnly = true;
         const workspaceRow = qs("#login-workspace-row");
         if (workspaceRow) workspaceRow.hidden = true;
-        fetchLoginBranding(data.tenantSlug);
+        await fetchLoginBranding(data.tenantSlug);
       }
     }
   } catch {
     // Shared domain — fall through to the default (no prefill).
   }
+  // Make sure the wordmark is visible even if branding didn't load.
+  revealLoginBrandingDefault();
   // Always load OAuth buttons after resolve-domain settles — whether or not
   // we matched a tenant. Passing getSlug so the API can resolve tenant-level
   // creds once a slug is known, and fall back to platform env otherwise.

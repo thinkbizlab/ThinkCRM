@@ -165,6 +165,10 @@ body {
   max-width: 340px;
 }
 
+/* Hide the app name until branding resolves, so whitelabel domains don't flash
+   the default "ThinkCRM" before the tenant name paints. */
+.branding-pending { visibility: hidden; }
+
 .login-wordmark {
   font-family: 'Kanit', sans-serif;
   font-size: 4rem;
