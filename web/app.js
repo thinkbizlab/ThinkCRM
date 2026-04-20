@@ -1421,7 +1421,11 @@ function renderDealCard(deal, kanban) {
   // urgency emoji
   const today = new Date(now); today.setHours(0, 0, 0, 0);
   const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1);
-  const urgencyIcon = isOverdue ? "🔥" : (followUp && followUp >= today && followUp < tomorrow) ? "⚡" : "📅";
+  const urgencyIcon = isOverdue
+    ? `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 14.5C8 18 10 20 12 20c2 0 4-2 4-5.5 0-2-1.5-3.5-2-5-1 2-4 3-4 5z"/><path d="M12 20c-4 0-7-3-7-7 0-5 5-7 7-11 2 3 3 5 3 7 1-1 2-2 2-4 3 4 4 8 4 11 0 4-3 7-7 7"/></svg>`
+    : (followUp && followUp >= today && followUp < tomorrow)
+    ? `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"/></svg>`
+    : `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18"/><path d="M8 3v4"/><path d="M16 3v4"/></svg>`;
   const followUpText = followUp
     ? followUp.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })
     : "—";
@@ -1429,9 +1433,9 @@ function renderDealCard(deal, kanban) {
   // value tier badge
   const v = deal.estimatedValue || 0;
   const tierBadge = v >= 100000
-    ? `<span class="deal-tier deal-tier--diamond" title="Big deal">💎</span>`
+    ? `<span class="deal-tier deal-tier--diamond" title="Big deal"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h12l3 6-9 12L3 9z"/><path d="M3 9h18"/><path d="m9 3-3 6 6 12"/><path d="m15 3 3 6-6 12"/></svg></span>`
     : v >= 10000
-    ? `<span class="deal-tier deal-tier--star" title="Mid deal">⭐</span>`
+    ? `<span class="deal-tier deal-tier--star" title="Mid deal"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3 6.4 20.2l1.1-6.2L3 9.6l6.2-.9z"/></svg></span>`
     : "";
 
   // stage progress bar (skip for closed)
@@ -1443,9 +1447,9 @@ function renderDealCard(deal, kanban) {
 
   // won/lost banner
   const closedBanner = deal.status === "WON"
-    ? `<div class="deal-closed-banner deal-closed-banner--won">🏆 Deal Won!</div>`
+    ? `<div class="deal-closed-banner deal-closed-banner--won"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 21h8"/><path d="M12 17v4"/><path d="M7 4h10v5a5 5 0 0 1-10 0V4z"/><path d="M17 5h3a2 2 0 0 1 0 4h-3"/><path d="M7 5H4a2 2 0 0 0 0 4h3"/></svg>Deal Won!</div>`
     : deal.status === "LOST"
-    ? `<div class="deal-closed-banner deal-closed-banner--lost">💔 Deal Lost</div>`
+    ? `<div class="deal-closed-banner deal-closed-banner--lost"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/><path d="m9.5 11 2 2-1 3 1.5-1.5L14 16l-1-3 2-2"/></svg>Deal Lost</div>`
     : "";
 
   const customerInitial = (deal.customer?.name || "?")[0].toUpperCase();
@@ -1475,7 +1479,7 @@ function renderDealCard(deal, kanban) {
         </div>` : ""}
       </div>
       <div class="deal-card-footer">
-        <span class="deal-assignee">👤 ${escHtml(deal.owner?.fullName || "Unassigned")}</span>
+        <span class="deal-assignee"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>${escHtml(deal.owner?.fullName || "Unassigned")}</span>
         <button class="deal-detail-btn" data-id="${deal.id}" data-no="${escHtml(deal.dealNo)}" title="Open deal detail">
           <svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
         </button>
@@ -1607,7 +1611,7 @@ function renderDeals(kanban, dealsRoot = views.deals, options = {}) {
     dealsRoot.innerHTML = `
     <div class="deals-outer">
       <div class="deals-page-header">
-        <h2 class="deals-title">🤝 Deal Pipeline</h2>
+        <h2 class="deals-title"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M3 13h18"/></svg>Deal Pipeline</h2>
         <button class="deals-create-btn" id="deals-create-btn">
           ✨ New Deal
         </button>
@@ -2003,7 +2007,7 @@ function renderMyTasks(data) {
       <div class="mt-page-head">
         <div>
           <div class="mt-page-title-row">
-            <h2 class="mt-page-title">📋 My Tasks</h2>
+            <h2 class="mt-page-title"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3h6a1 1 0 0 1 1 1v2H8V4a1 1 0 0 1 1-1z"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="m9 14 2 2 4-4"/></svg>My Tasks</h2>
             ${total ? `<span class="mt-total-badge">${total}</span>` : ""}
           </div>
           <div class="mt-page-greeting">${greeting} — ${todayLabel}</div>

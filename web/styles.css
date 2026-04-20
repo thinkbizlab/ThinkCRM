@@ -504,6 +504,8 @@ body {
 
 .topnav-nav .nav-btn svg { flex-shrink: 0; }
 .nav-emoji { font-size: 1rem; line-height: 1; flex-shrink: 0; }
+.nav-ic { flex-shrink: 0; opacity: 0.9; }
+.topnav-nav .nav-btn.active .nav-ic { opacity: 1; }
 
 .topnav-nav .nav-btn:hover {
   background: var(--surface-soft);
@@ -2670,17 +2672,41 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 .deal-tier {
   display: inline-flex;
   align-items: center;
-  font-size: 1rem;
   line-height: 1;
-  filter: drop-shadow(0 1px 2px rgb(0 0 0 / 0.15));
+  margin-right: 4px;
 }
+.deal-tier--diamond { color: var(--accent); }
+.deal-tier--star    { color: oklch(72% 0.17 65); }
 
 /* Urgency icon */
 .deal-urgency-icon {
-  font-size: 0.9rem;
+  display: inline-flex;
+  align-items: center;
   line-height: 1;
   flex-shrink: 0;
+  color: var(--muted-color);
 }
+.deal-info-row.overdue .deal-urgency-icon { color: var(--danger); }
+
+/* Card footer assignee — inline SVG + name */
+.deal-assignee {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-2);
+}
+.deal-assignee svg { color: var(--muted-color); flex-shrink: 0; }
+
+/* Pipeline heading + My Tasks heading — inline SVG next to label */
+.deals-title, .mt-page-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.deals-title svg, .mt-page-title svg { color: var(--accent); flex-shrink: 0; }
+
+/* Won/Lost banner SVG */
+.deal-closed-banner svg { flex-shrink: 0; }
 
 /* Stage progress bar — thin strip at bottom of card */
 .deal-stage-progress {
