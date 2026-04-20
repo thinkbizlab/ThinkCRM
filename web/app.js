@@ -195,6 +195,7 @@ async function loginWithPasskey() {
     }
     hideAppLoading();
     await loadDemoDataStatus();
+    renderDemoDataBanner();
     loadOnboardingWizard();
   } catch (err) {
     if (err.name === "NotAllowedError") {
@@ -230,6 +231,8 @@ qs("#oauth-passkey-btn")?.addEventListener("click", loginWithPasskey);
   switchView("repHub");
   paintRepHubFull();
   hideAppLoading();
+  await loadDemoDataStatus();
+  renderDemoDataBanner();
 })();
 // Handle platform Connect redirect-backs (?xxx_connected=1 or ?xxx_error=…)
 // Stash params before app loads; act on them once the shell is ready.
@@ -7413,6 +7416,8 @@ loginForm.addEventListener("submit", async (event) => {
       paintRepHubFull();
     }
     hideAppLoading();
+    await loadDemoDataStatus();
+    renderDemoDataBanner();
   } catch (error) {
     hideAppLoading();
     authMessage.textContent = error.message;
@@ -8471,6 +8476,8 @@ async function bootstrap() {
       paintRepHubFull();
     }
     hideAppLoading();
+    await loadDemoDataStatus();
+    renderDemoDataBanner();
   } catch {
     localStorage.removeItem("thinkcrm_token");
     state.token = "";

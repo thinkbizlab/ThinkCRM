@@ -6,7 +6,6 @@ import { qs, views, switchView } from "./dom.js";
 import { state } from "./state.js";
 import { api } from "./api.js";
 import { escHtml, asPercent } from "./utils.js";
-import { renderDemoDataBanner } from "./demo-data.js";
 import { icon } from "./icons.js";
 
 let deps = {
@@ -53,16 +52,15 @@ export function renderDashboard(data) {
     </label>` : "";
 
   views.dashboard.innerHTML = `
-    <div id="demo-data-banner" hidden></div>
     <div class="dash-view">
       <div class="dash-filter-bar">
         <form id="dashboard-month-form" class="inline-actions dashboard-filter-form">
-          <label class="dashboard-filter-label">
+          <label class="dashboard-filter-label">Month
             <input type="month" name="month" value="${periodMonth}" required />
           </label>
           ${teamSelectHtml}
           ${repSelectHtml}
-          <button type="submit">Apply</button>
+          <button type="submit" class="dashboard-filter-apply">Apply</button>
         </form>
         <div class="inline-actions wrap dashboard-chip-row">
           <span class="chip">${icon('users')} ${data.kpis.usersInScope} reps</span>
@@ -264,8 +262,6 @@ export function renderDashboard(data) {
       </div>
     </div>
   `;
-
-  renderDemoDataBanner();
 
   qs("#dashboard-month-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
