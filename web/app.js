@@ -974,9 +974,10 @@ function renderMasterData(paymentTerms) {
         <input name="code" placeholder="Code (e.g. NET45)" required />
         <input name="name" placeholder="Name" required />
         <input name="dueDays" type="number" min="0" placeholder="Due days" required />
-        ${renderCustomFieldInputs(paymentTermFieldDefinitions)}
+        ${isAdmin ? renderCustomFieldInputs(paymentTermFieldDefinitions) : ""}
         <button type="submit">Create Payment Term</button>
       </form>
+      ${isAdmin ? `
       <h4>Custom Fields</h4>
       <form class="mini-form custom-field-def-form" data-entity="payment-term">
         <input name="fieldKey" placeholder="fieldKey (e.g. collectionMethod)" required />
@@ -994,6 +995,7 @@ function renderMasterData(paymentTerms) {
         <button type="submit">Add Field</button>
       </form>
       <div class="list">${renderCustomFieldDefinitionRows("payment-terms")}</div>
+      ` : ""}
       <div class="list">
         ${paymentTerms
           .map(
@@ -1002,7 +1004,7 @@ function renderMasterData(paymentTerms) {
             <h4>${escHtml(p.name)} (${escHtml(p.code)})</h4>
             <div class="muted">Due ${p.dueDays} days</div>
             <div class="chip ${p.isActive ? "chip-success" : "chip-danger"}">${p.isActive ? "Active" : "Inactive"}</div>
-            ${renderCustomFieldsSummary(p.customFields)}
+            ${isAdmin ? renderCustomFieldsSummary(p.customFields) : ""}
             <div class="inline-actions wrap">
               <button class="payment-term-toggle" data-id="${p.id}" data-active="${p.isActive}">
                 ${p.isActive ? "Deactivate" : "Activate"}
