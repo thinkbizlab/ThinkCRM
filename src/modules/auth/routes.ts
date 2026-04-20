@@ -298,16 +298,27 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     });
     // M8: Return default branding for unknown slugs — prevents tenant-existence enumeration.
     if (!tenant) {
-      return reply.send({ appName: "ThinkCRM", primaryColor: "#2563eb", secondaryColor: "#0f172a", themeMode: "LIGHT" });
+      return reply.send({
+        appName: "ThinkCRM",
+        primaryColor: "#2563eb",
+        secondaryColor: "#0f172a",
+        accentGradientEnabled: false,
+        accentGradientColor: "#ec4899",
+        accentGradientAngle: 135,
+        themeMode: "LIGHT"
+      });
     }
     const b = tenant.branding;
     return reply.send({
-      appName:        b?.appName        ?? tenant.name,
-      logoUrl:        await resolveBrandingUrl(b?.logoUrl, tenant.slug),
-      faviconUrl:     await resolveBrandingUrl(b?.faviconUrl, tenant.slug),
-      primaryColor:   b?.primaryColor   ?? "#2563eb",
-      secondaryColor: b?.secondaryColor ?? "#0f172a",
-      themeMode:      b?.themeMode      ?? "LIGHT"
+      appName:               b?.appName               ?? tenant.name,
+      logoUrl:               await resolveBrandingUrl(b?.logoUrl, tenant.slug),
+      faviconUrl:            await resolveBrandingUrl(b?.faviconUrl, tenant.slug),
+      primaryColor:          b?.primaryColor          ?? "#2563eb",
+      secondaryColor:        b?.secondaryColor        ?? "#0f172a",
+      accentGradientEnabled: b?.accentGradientEnabled ?? false,
+      accentGradientColor:   b?.accentGradientColor   ?? "#ec4899",
+      accentGradientAngle:   b?.accentGradientAngle   ?? 135,
+      themeMode:             b?.themeMode             ?? "LIGHT"
     });
   });
 

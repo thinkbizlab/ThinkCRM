@@ -66,6 +66,20 @@ const brandingSchema = z.object({
     .trim()
     .regex(/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, "secondaryColor must be hex (#RGB or #RRGGBB).")
     .transform(normalizeHexColor),
+  accentGradientEnabled: z
+    .preprocess((v) => {
+      if (typeof v === "boolean") return v;
+      if (typeof v === "string") return v === "true" || v === "on" || v === "1";
+      return false;
+    }, z.boolean())
+    .optional(),
+  accentGradientColor: z
+    .string()
+    .trim()
+    .regex(/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, "accentGradientColor must be hex (#RGB or #RRGGBB).")
+    .transform(normalizeHexColor)
+    .optional(),
+  accentGradientAngle: z.coerce.number().int().min(0).max(360).optional(),
   themeMode: z.enum(["LIGHT", "DARK"]).default("LIGHT")
 });
 

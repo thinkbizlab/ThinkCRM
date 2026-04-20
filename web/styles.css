@@ -1216,6 +1216,61 @@ button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-l
 
 .ghost:active, button.ghost:active { transform: scale(0.98); }
 
+/* ── GRADIENT ACCENT ─────────────────────────────────────── */
+
+html.accent-gradient-on button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-logout-btn):not(.topnav-user):not(.login-submit):not(.sp-close-btn):not(.sp-text-btn):not(.sp-view-all-btn):not(.spi):not(.master-page-btn):not(.user-dropdown-item):not(.cal-filter-apply):not(.cal-filter-reset):not(.cal-autocomplete-clear):not(.cal-autocomplete-item):not(.ms-dropdown-btn):not(.ms-select-all):not(.ms-clear):not(.vp-chip):not(.vn-lang-btn):not(.section-info-btn):not(.modal-close-btn):not(.deal-detail-btn):not(.deal-menu-btn):not(.lr-confirm-btn):not(.intg-info-btn):not(.oauth-btn):not(.profile-avatar-btn):not(.team-ch-toggle-btn):not(.cron-run-now-btn):not(.cron-save-btn):not(.cron-load-more-btn):not(.cron-history-toggle):not(.cron-help-btn):not(.notif-channel-help-btn):not(.teams-app-pkg-btn):not(.notif-teams-dm-test-btn):not(.teams-push-all-btn):not(.onboarding-wizard-dismiss):not(.ob-step-action):not(.ob-hero-close):not(.ob-later-btn):not(.demo-generate-btn):not(.demo-delete-btn):not(.btn-danger):not(.btn-danger-outline):not(.passkey-register-btn):not(.passkey-delete-btn):not(.passkey-admin-btn):not(.ghost) {
+  background: var(--accent-gradient, var(--accent));
+}
+
+html.accent-gradient-on button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-logout-btn):not(.topnav-user):not(.login-submit):not(.sp-close-btn):not(.sp-text-btn):not(.sp-view-all-btn):not(.spi):not(.master-page-btn):not(.user-dropdown-item):not(.cal-filter-apply):not(.cal-filter-reset):not(.cal-autocomplete-clear):not(.cal-autocomplete-item):not(.ms-dropdown-btn):not(.ms-select-all):not(.ms-clear):not(.vp-chip):not(.vn-lang-btn):not(.section-info-btn):not(.modal-close-btn):not(.deal-detail-btn):not(.deal-menu-btn):not(.lr-confirm-btn):not(.intg-info-btn):not(.oauth-btn):not(.profile-avatar-btn):not(.team-ch-toggle-btn):not(.cron-run-now-btn):not(.cron-save-btn):not(.cron-load-more-btn):not(.cron-history-toggle):not(.cron-help-btn):not(.notif-channel-help-btn):not(.teams-app-pkg-btn):not(.notif-teams-dm-test-btn):not(.teams-push-all-btn):not(.onboarding-wizard-dismiss):not(.ob-step-action):not(.ob-hero-close):not(.ob-later-btn):not(.demo-generate-btn):not(.demo-delete-btn):not(.btn-danger):not(.btn-danger-outline):not(.passkey-register-btn):not(.passkey-delete-btn):not(.passkey-admin-btn):not(.ghost):hover {
+  background: var(--accent-gradient, var(--accent-bright));
+  filter: brightness(1.08);
+}
+
+html.accent-gradient-on .login-submit {
+  background: var(--accent-gradient, var(--accent)) !important;
+}
+
+/* Branding form: gradient controls */
+.gradient-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-soft);
+}
+.gradient-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-wrap: wrap;
+}
+.gradient-toggle input[type="checkbox"] { width: auto; accent-color: var(--accent); }
+.gradient-toggle-label { font-weight: 600; }
+.gradient-controls { display: flex; flex-direction: column; gap: var(--sp-3); }
+.gradient-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-2);
+}
+.gradient-preview-swatch {
+  width: 100%;
+  min-height: 72px;
+  border-radius: var(--r-lg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 0.85rem;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
+}
+
 /* ── FORMS ────────────────────────────────────────────────── */
 
 input, select, textarea {

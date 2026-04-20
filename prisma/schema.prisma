@@ -244,17 +244,20 @@ model TenantIntegrationCredential {
 }
 
 model TenantBranding {
-  id             String    @id @default(cuid())
-  tenantId       String    @unique
-  appName        String?
-  logoUrl        String?
-  faviconUrl     String?
-  primaryColor   String    @default("#2563eb")
-  secondaryColor String    @default("#0f172a")
-  themeMode      ThemeMode @default(LIGHT)
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
-  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id                     String    @id @default(cuid())
+  tenantId               String    @unique
+  appName                String?
+  logoUrl                String?
+  faviconUrl             String?
+  primaryColor           String    @default("#2563eb")
+  secondaryColor         String    @default("#0f172a")
+  accentGradientEnabled  Boolean   @default(false)
+  accentGradientColor    String    @default("#ec4899")
+  accentGradientAngle    Int       @default(135)
+  themeMode              ThemeMode @default(LIGHT)
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+  tenant                 Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
 
 model TenantTaxConfig {
