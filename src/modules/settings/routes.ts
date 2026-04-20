@@ -2114,7 +2114,10 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
 
     // Advance "YYYY-MM" by one month, wrapping December → January of next year.
     const nextMonth = (ym: string): string => {
-      const [y, m] = ym.split("-").map(Number);
+      const [yStr, mStr] = ym.split("-");
+      const y = Number(yStr);
+      const m = Number(mStr);
+      if (!Number.isFinite(y) || !Number.isFinite(m)) return ym;
       const date = new Date(Date.UTC(y, m, 1)); // m is 0-indexed after +1, so passing m gives us next month
       return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
     };
