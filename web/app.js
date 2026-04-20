@@ -77,31 +77,34 @@ async function fetchLoginBranding(slug) {
 
 // Auto-resolve workspace from custom domain on login page
 (async () => {
+  const getSlug = () => loginForm.querySelector('[name="tenantSlug"]')?.value?.trim();
   const hostname = window.location.hostname;
   if (hostname === "localhost" || hostname === "127.0.0.1") {
-    // Still try to apply branding from the prefilled workspace slug
     const slugInput = loginForm.querySelector('[name="tenantSlug"]');
     if (slugInput?.value) fetchLoginBranding(slugInput.value);
-    loadOAuthProviderButtons({
-      getTenantSlug: () => loginForm.querySelector('[name="tenantSlug"]')?.value?.trim()
-    });
+    loadOAuthProviderButtons({ getTenantSlug: getSlug });
     return;
   }
   try {
     const response = await fetch(`/api/v1/auth/resolve-domain?host=${encodeURIComponent(hostname)}`);
-    if (!response.ok) return;
-    const data = await response.json();
-    if (data.tenantSlug) {
-      const slugInput = loginForm.querySelector('[name="tenantSlug"]');
-      slugInput.value = data.tenantSlug;
-      slugInput.readOnly = true;
-      const workspaceRow = qs("#login-workspace-row");
-      if (workspaceRow) workspaceRow.hidden = true;
-      fetchLoginBranding(data.tenantSlug);
+    if (response.ok) {
+      const data = await response.json();
+      if (data.tenantSlug) {
+        const slugInput = loginForm.querySelector('[name="tenantSlug"]');
+        slugInput.value = data.tenantSlug;
+        slugInput.readOnly = true;
+        const workspaceRow = qs("#login-workspace-row");
+        if (workspaceRow) workspaceRow.hidden = true;
+        fetchLoginBranding(data.tenantSlug);
+      }
     }
   } catch {
-    // Not a custom domain — show workspace field as normal
+    // Shared domain — fall through to the default (no prefill).
   }
+  // Always load OAuth buttons after resolve-domain settles — whether or not
+  // we matched a tenant. Passing getSlug so the API can resolve tenant-level
+  // creds once a slug is known, and fall back to platform env otherwise.
+  loadOAuthProviderButtons({ getTenantSlug: getSlug });
 })();
 
 // Re-apply login branding whenever the workspace slug changes (debounced).
@@ -4981,8 +4984,12 @@ function renderSettings() {
 
   views.settings.querySelectorAll("[data-settings-nav]").forEach((btn) => {
     btn.addEventListener("click", async () => {
-      navigateToSettingsPage(btn.dataset.settingsNav);
-      if (btn.dataset.settingsNav === "data-sync") await loadSyncData();
+      const nav = btn.dataset.settingsNav;
+      navigateToSettingsPage(nav);
+      if (nav === "data-sync") await loadSyncData();
+      if (nav === "team-structure") {
+        try { state.cache.teams = await api("/teams"); } catch (_) { /* best-effort */ }
+      }
       renderSettings();
     });
   });
@@ -5846,48 +5853,62 @@ function renderSettings() {
 
   qs("#branding-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const fd = new FormData(event.currentTarget);
-    const logoFile = fd.get("logoFile");
-    if (logoFile instanceof File && logoFile.size > 0) {
-      const uploadFd = new FormData();
-      uploadFd.append("file", logoFile, logoFile.name);
-      try {
-        const uploadResult = await api(`/tenants/${tenantId}/branding/logo`, { method: "POST", body: uploadFd });
-        if (uploadResult?.logoUrl) fd.set("logoUrl", uploadResult.logoUrl);
-        const previewSrc = uploadResult?.logoDownloadUrl || uploadResult?.logoUrl;
-        if (previewSrc) { const p = qs("#logo-preview"); if (p) p.src = previewSrc; }
-      } catch (error) {
-        setStatus(`Logo upload failed: ${error.message}`, true);
-        return;
-      }
+    const form = event.currentTarget;
+    const submitBtn = form.querySelector('button[type="submit"]');
+    const originalBtnText = submitBtn?.textContent;
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Saving…";
     }
-    const faviconFile = fd.get("faviconFile");
-    if (faviconFile instanceof File && faviconFile.size > 0) {
-      const uploadFd = new FormData();
-      uploadFd.append("file", faviconFile, faviconFile.name);
-      try {
-        const uploadResult = await api(`/tenants/${tenantId}/branding/favicon`, { method: "POST", body: uploadFd });
-        if (uploadResult?.faviconUrl) fd.set("faviconUrl", uploadResult.faviconUrl);
-        const previewSrc = uploadResult?.faviconDownloadUrl || uploadResult?.faviconUrl;
-        if (previewSrc) { const p = qs("#favicon-preview"); if (p) p.src = previewSrc; }
-      } catch (error) {
-        setStatus(`Favicon upload failed: ${error.message}`, true);
-        return;
-      }
-    }
-    const payload = Object.fromEntries(fd.entries());
-    if (!payload.logoUrl) delete payload.logoUrl;
-    if (!payload.faviconUrl) delete payload.faviconUrl;
-    delete payload.logoFile;
-    delete payload.faviconFile;
-    delete payload.primaryColorPicker;
-    delete payload.secondaryColorPicker;
     try {
-      await api(`/tenants/${tenantId}/branding`, { method: "PUT", body: payload });
-      setStatus("Branding saved.");
-      await loadSettings();
-    } catch (error) {
-      setStatus(error.message, true);
+      const fd = new FormData(form);
+      const logoFile = fd.get("logoFile");
+      if (logoFile instanceof File && logoFile.size > 0) {
+        const uploadFd = new FormData();
+        uploadFd.append("file", logoFile, logoFile.name);
+        try {
+          const uploadResult = await api(`/tenants/${tenantId}/branding/logo`, { method: "POST", body: uploadFd });
+          if (uploadResult?.logoUrl) fd.set("logoUrl", uploadResult.logoUrl);
+          const previewSrc = uploadResult?.logoDownloadUrl || uploadResult?.logoUrl;
+          if (previewSrc) { const p = qs("#logo-preview"); if (p) p.src = previewSrc; }
+        } catch (error) {
+          setStatus(`Logo upload failed: ${error.message}`, true);
+          return;
+        }
+      }
+      const faviconFile = fd.get("faviconFile");
+      if (faviconFile instanceof File && faviconFile.size > 0) {
+        const uploadFd = new FormData();
+        uploadFd.append("file", faviconFile, faviconFile.name);
+        try {
+          const uploadResult = await api(`/tenants/${tenantId}/branding/favicon`, { method: "POST", body: uploadFd });
+          if (uploadResult?.faviconUrl) fd.set("faviconUrl", uploadResult.faviconUrl);
+          const previewSrc = uploadResult?.faviconDownloadUrl || uploadResult?.faviconUrl;
+          if (previewSrc) { const p = qs("#favicon-preview"); if (p) p.src = previewSrc; }
+        } catch (error) {
+          setStatus(`Favicon upload failed: ${error.message}`, true);
+          return;
+        }
+      }
+      const payload = Object.fromEntries(fd.entries());
+      if (!payload.logoUrl) delete payload.logoUrl;
+      if (!payload.faviconUrl) delete payload.faviconUrl;
+      delete payload.logoFile;
+      delete payload.faviconFile;
+      delete payload.primaryColorPicker;
+      delete payload.secondaryColorPicker;
+      try {
+        await api(`/tenants/${tenantId}/branding`, { method: "PUT", body: payload });
+        setStatus("Branding saved.");
+        await loadSettings();
+      } catch (error) {
+        setStatus(error.message, true);
+      }
+    } finally {
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = originalBtnText || "Save Branding";
+      }
     }
   });
 
