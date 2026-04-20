@@ -18,11 +18,13 @@ import { fmtBahtCurrency, fmtThaiDateTime } from "../../lib/format.js";
 import { validateCustomFields, asRecord } from "../../lib/custom-fields.js";
 import { getTenantUrl } from "../../lib/tenant-url.js";
 
+type DealNotifyKind = "CREATED" | typeof DealStatus.WON | typeof DealStatus.LOST;
+
 async function sendDealLineNotification(opts: {
   tenantId: string;
   ownerId: string;
   dealId: string;
-  status: typeof DealStatus.WON | typeof DealStatus.LOST;
+  status: DealNotifyKind;
 }) {
   try {
     const [owner, lineCredential, emailCredential, branding] = await Promise.all([
@@ -70,6 +72,7 @@ async function sendDealLineNotification(opts: {
         dealName: true,
         estimatedValue: true,
         lostNote: true,
+        followUpAt: true,
         customer: { select: { name: true } }
       }
     });
@@ -82,13 +85,18 @@ async function sendDealLineNotification(opts: {
     const value = deal?.estimatedValue != null
       ? fmtBahtCurrency(deal.estimatedValue)
       : "—";
-    const closedAt = fmtThaiDateTime(new Date());
 
+    const isCreated = opts.status === "CREATED";
     const isWon = opts.status === DealStatus.WON;
-    const emoji = isWon ? "🏆" : "❌";
-    const label = isWon ? "Deal WON" : "Deal LOST";
+    const emoji = isCreated ? "🆕" : isWon ? "🏆" : "❌";
+    const label = isCreated ? "New Deal" : isWon ? "Deal WON" : "Deal LOST";
 
-    const lostLine = !isWon && deal?.lostNote
+    const timeLabel = isCreated ? "Follow-up" : "Closed At";
+    const timeValue = isCreated && deal?.followUpAt
+      ? fmtThaiDateTime(deal.followUpAt)
+      : fmtThaiDateTime(new Date());
+
+    const lostLine = opts.status === DealStatus.LOST && deal?.lostNote
       ? `📝 Lost Reason : ${deal.lostNote}\n`
       : "";
 
@@ -101,7 +109,7 @@ async function sendDealLineNotification(opts: {
       `📋 Deal        : ${dealName}\n` +
       `💰 Value       : ${value}\n` +
       lostLine +
-      `🕐 Closed At   : ${closedAt}\n` +
+      `🕐 ${timeLabel.padEnd(11, " ")}: ${timeValue}\n` +
       `${"─".repeat(28)}\n` +
       `[${appName}]`;
 
@@ -120,12 +128,12 @@ async function sendDealLineNotification(opts: {
         { title: "Customer",   value: customerName },
         { title: "Deal",       value: dealName },
         { title: "Value",      value: value },
-        ...(!isWon && deal?.lostNote ? [{ title: "Lost Reason", value: deal.lostNote }] : []),
-        { title: "Closed At",  value: closedAt }
+        ...(opts.status === DealStatus.LOST && deal?.lostNote ? [{ title: "Lost Reason", value: deal.lostNote }] : []),
+        { title: timeLabel,    value: timeValue }
       ];
       teamsChannels.forEach(ch => sends.push(sendTeamsCard(ch.channelTarget, {
         title: `${emoji} ${label}`,
-        accentColor: isWon ? "good" : "attention",
+        accentColor: isCreated ? "accent" : isWon ? "good" : "attention",
         facts,
         footer: `[${appName}]`
       })));
@@ -145,8 +153,8 @@ async function sendDealLineNotification(opts: {
         { label: "Customer",    value: customerName },
         { label: "Deal",        value: dealName },
         { label: "Value",       value: value },
-        ...(!isWon && deal?.lostNote ? [{ label: "Lost Reason", value: deal.lostNote }] : []),
-        { label: "Closed At",   value: closedAt }
+        ...(opts.status === DealStatus.LOST && deal?.lostNote ? [{ label: "Lost Reason", value: deal.lostNote }] : []),
+        { label: timeLabel,     value: timeValue }
       ];
       const baseUrl = await getTenantUrl(opts.tenantId).catch(() => config.APP_URL ?? "");
       emailChannels.forEach(ch => sends.push(sendEmailCard(emailConfig, ch.channelTarget, {
@@ -807,6 +815,10 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
       });
       return row;
     });
+
+    sendDealLineNotification({ tenantId, ownerId, dealId: created.id, status: "CREATED" })
+      .catch(err => console.error("[deals] create notification error", err));
+
     return reply.code(201).send(created);
   });
 

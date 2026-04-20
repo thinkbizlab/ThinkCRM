@@ -225,6 +225,10 @@ body {
   margin-bottom: var(--sp-5);
 }
 
+.login-workspace[hidden] {
+  display: none;
+}
+
 .login-ws-label {
   font-size: 0.72rem;
   font-weight: 700;
