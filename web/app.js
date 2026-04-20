@@ -7854,9 +7854,11 @@ async function bootstrap() {
       switchView("repHub");
       paintRepHubFull();
     }
+    hideAppLoading();
   } catch {
     localStorage.removeItem("thinkcrm_token");
     state.token = "";
+    hideAppLoading();
   }
 }
 
