@@ -34,6 +34,14 @@ import {
   showEventDetail,
   setVisitsDeps
 } from "./modules/visits.js";
+import { openMapPicker, closeMapPicker, initMapPicker, setMapPickerDeps } from "./modules/map-picker.js";
+import {
+  getCustomFieldDefinitions,
+  collectCustomFieldPayload,
+  renderCustomFieldInputs,
+  renderCustomFieldDefinitionRows,
+  renderCustomFieldsSummary
+} from "./modules/custom-fields.js";
 
 const loginForm = qs("#login-form");
 const authMessage = qs("#auth-message");
@@ -266,12 +274,6 @@ const masterPageRouteMap = {
   items: "/master/items"
 };
 
-const customFieldEntityApiMap = {
-  "payment-terms": "payment-term",
-  customers: "customer",
-  items: "item"
-};
-
 function asMoney(value) {
   if (value == null || Number.isNaN(Number(value))) return "-";
   const num = Number(value);
@@ -303,117 +305,6 @@ function asMoney(value) {
   }
 }
 
-
-function getCustomFieldDefinitions(pageKey) {
-  return state.cache.customFieldDefinitions[pageKey] || [];
-}
-
-function collectCustomFieldPayload(formData, definitions) {
-  const customFields = {};
-  definitions
-    .filter((definition) => definition.isActive)
-    .forEach((definition) => {
-      const key = `cf__${definition.fieldKey}`;
-      if (definition.dataType === "BOOLEAN") {
-        customFields[definition.fieldKey] = formData.has(key);
-        return;
-      }
-      const rawValue = formData.get(key);
-      if (rawValue == null) return;
-      const value = String(rawValue).trim();
-      if (!value.length) return;
-      if (definition.dataType === "NUMBER") {
-        customFields[definition.fieldKey] = Number(value);
-        return;
-      }
-      customFields[definition.fieldKey] = value;
-    });
-  return customFields;
-}
-
-function renderCustomFieldInputs(definitions) {
-  const activeDefinitions = definitions.filter((definition) => definition.isActive);
-  if (!activeDefinitions.length) return "";
-  return `
-    <div class="list">
-      ${activeDefinitions
-        .map((definition) => {
-          const key = `cf__${definition.fieldKey}`;
-          const required = definition.isRequired ? "required" : "";
-          if (definition.dataType === "SELECT") {
-            const options = Array.isArray(definition.optionsJson) ? definition.optionsJson : [];
-            return `
-              <label>${escHtml(definition.label)}
-                <select name="${key}" ${required}>
-                  <option value="">Select...</option>
-                  ${options.map((option) => `<option value="${escHtml(option)}">${escHtml(option)}</option>`).join("")}
-                </select>
-              </label>
-            `;
-          }
-          if (definition.dataType === "BOOLEAN") {
-            return `
-              <label>
-                <input type="checkbox" name="${key}" />
-                ${escHtml(definition.label)}
-              </label>
-            `;
-          }
-          const inputType = definition.dataType === "NUMBER" ? "number" : definition.dataType === "DATE" ? "date" : "text";
-          return `
-            <label>${escHtml(definition.label)}
-              <input name="${key}" type="${inputType}" ${required} placeholder="${escHtml(definition.placeholder || "")}" />
-            </label>
-          `;
-        })
-        .join("")}
-    </div>
-  `;
-}
-
-function renderCustomFieldDefinitionRows(pageKey) {
-  const definitions = getCustomFieldDefinitions(pageKey);
-  if (!definitions.length) {
-    return '<div class="empty-state compact"><div><strong>No custom fields</strong><p>Add fields to configure tenant-specific metadata.</p></div></div>';
-  }
-  return definitions
-    .map(
-      (definition) => `
-      <div class="row">
-        <h4>${escHtml(definition.label)}</h4>
-        <div class="muted">${escHtml(definition.fieldKey)} · ${escHtml(definition.dataType)}</div>
-        <div class="muted">Required: ${definition.isRequired ? "Yes" : "No"} · Order: ${definition.displayOrder}</div>
-        <div class="inline-actions wrap">
-          <button
-            class="custom-field-toggle ghost"
-            data-id="${definition.id}"
-            data-entity="${customFieldEntityApiMap[pageKey]}"
-            data-active="${definition.isActive}"
-          >
-            ${definition.isActive ? "Deactivate" : "Activate"}
-          </button>
-        </div>
-      </div>
-    `
-    )
-    .join("");
-}
-
-function renderCustomFieldsSummary(values) {
-  if (!values || typeof values !== "object" || Array.isArray(values)) return "";
-  const entries = Object.entries(values);
-  if (!entries.length) return "";
-  return `
-    <div class="inline-actions wrap">
-      ${entries
-        .map(
-          ([key, value]) =>
-            `<span class="chip">${prettyLabel(key)}: ${typeof value === "boolean" ? (value ? "Yes" : "No") : escHtml(String(value))}</span>`
-        )
-        .join("")}
-    </div>
-  `;
-}
 
 function updateThemeToggleLabel() {
   if (!themeToggleBtn) return;
@@ -7469,197 +7360,8 @@ qs("#visit-create-modal")?.addEventListener("change", (e) => {
 });
 
 // ── Google Maps Picker ─────────────────────────────────────────────────────────
-let _gmapsLoaded = false;
-let _gmapsLoading = false;
-const _gmapsWaiters = [];
-
-function loadGoogleMapsApi(apiKey) {
-  return new Promise((resolve, reject) => {
-    if (_gmapsLoaded) { resolve(); return; }
-    _gmapsWaiters.push({ resolve, reject });
-    if (_gmapsLoading) return;
-    _gmapsLoading = true;
-    window.__gmapsReady = () => {
-      _gmapsLoaded = true;
-      _gmapsWaiters.splice(0).forEach(w => w.resolve());
-    };
-    const s = document.createElement("script");
-    s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&callback=__gmapsReady&libraries=places`;
-    s.async = true;
-    s.defer = true;
-    s.onerror = () => {
-      _gmapsLoading = false;
-      _gmapsWaiters.splice(0).forEach(w => w.reject(new Error("Failed to load Google Maps API.")));
-    };
-    document.head.appendChild(s);
-  });
-}
-
-let _mapInst = null;
-let _mapMarker = null;
-let _mapPickedCoords = null;
-let _mapPickerOnConfirm = null;
-
-function updateMapCoordsDisplay(lat, lng) {
-  _mapPickedCoords = { lat, lng };
-  const el = qs("#map-coords-display");
-  if (el) el.textContent = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
-  const btn = qs("#map-picker-confirm");
-  if (btn) btn.disabled = false;
-}
-
-function initGoogleMap(lat, lng) {
-  const canvas = qs("#map-picker-canvas");
-  if (!canvas) return;
-  qs("#map-picker-loading")?.remove();
-
-  const center = { lat, lng };
-  _mapInst = new google.maps.Map(canvas, {
-    center,
-    zoom: 15,
-    mapTypeControl: false,
-    streetViewControl: false,
-    fullscreenControl: false,
-    zoomControl: true
-  });
-
-  _mapMarker = new google.maps.Marker({
-    position: center,
-    map: _mapInst,
-    draggable: true,
-    title: "Visit location"
-  });
-
-  if (_mapPickedCoords) {
-    updateMapCoordsDisplay(_mapPickedCoords.lat, _mapPickedCoords.lng);
-  }
-
-  _mapInst.addListener("click", (e) => {
-    const lat = e.latLng.lat();
-    const lng = e.latLng.lng();
-    _mapMarker.setPosition(e.latLng);
-    updateMapCoordsDisplay(lat, lng);
-  });
-
-  _mapMarker.addListener("dragend", () => {
-    const pos = _mapMarker.getPosition();
-    updateMapCoordsDisplay(pos.lat(), pos.lng());
-  });
-
-  // Places autocomplete on the search input
-  const searchInput = qs("#map-search-input");
-  if (searchInput && window.google?.maps?.places) {
-    const autocomplete = new google.maps.places.Autocomplete(searchInput, {
-      fields: ["geometry", "name"]
-    });
-    autocomplete.addListener("place_changed", () => {
-      const place = autocomplete.getPlace();
-      if (place.geometry?.location) {
-        const lat = place.geometry.location.lat();
-        const lng = place.geometry.location.lng();
-        _mapInst.setCenter(place.geometry.location);
-        _mapInst.setZoom(16);
-        _mapMarker.setPosition(place.geometry.location);
-        updateMapCoordsDisplay(lat, lng);
-      }
-    });
-  }
-}
-
-async function openMapPicker(defaultLat, defaultLng, onConfirm) {
-  // Fetch key on-demand if not yet loaded (handles race with bootstrap)
-  if (!state.googleMapsApiKey) {
-    try {
-      const cfg = await fetch("/api/v1/config/public").then(r => r.ok ? r.json() : {});
-      state.googleMapsApiKey = cfg.googleMapsApiKey ?? null;
-    } catch (_) {}
-  }
-
-  const apiKey = state.googleMapsApiKey;
-  if (!apiKey) {
-    setStatus("Google Maps API key is not configured. Please set GOOGLE_MAPS_API_KEY in server settings.", true);
-    return;
-  }
-
-  _mapPickerOnConfirm = onConfirm;
-  // Reset state
-  _mapPickedCoords = defaultLat && defaultLng ? { lat: defaultLat, lng: defaultLng } : null;
-  const modal = qs("#map-picker-modal");
-  if (!modal) return;
-
-  // Reset UI
-  const canvas = qs("#map-picker-canvas");
-  if (canvas) {
-    canvas.innerHTML = `<div class="map-picker-loading" id="map-picker-loading">Loading map…</div>`;
-  }
-  const coordsEl = qs("#map-coords-display");
-  if (coordsEl) coordsEl.textContent = "Click on map to set location";
-  const confirmBtn = qs("#map-picker-confirm");
-  if (confirmBtn) confirmBtn.disabled = !_mapPickedCoords;
-  const searchInput = qs("#map-search-input");
-  if (searchInput) searchInput.value = "";
-
-  modal.hidden = false;
-  _mapInst = null;
-  _mapMarker = null;
-
-  try {
-    await loadGoogleMapsApi(apiKey);
-    const lat = defaultLat ?? 13.7563;
-    const lng = defaultLng ?? 100.5018;
-    initGoogleMap(lat, lng);
-    if (_mapPickedCoords) {
-      updateMapCoordsDisplay(_mapPickedCoords.lat, _mapPickedCoords.lng);
-    }
-  } catch (err) {
-    modal.hidden = true;
-    setStatus(err.message || "Failed to load Google Maps. Please check your connection.", true);
-  }
-}
-
-function closeMapPicker() {
-  const modal = qs("#map-picker-modal");
-  if (modal) modal.hidden = true;
-  _mapInst = null;
-  _mapMarker = null;
-  _mapPickerOnConfirm = null;
-}
-
-// Wire up map picker modal buttons
-qs("#map-picker-close")?.addEventListener("click", closeMapPicker);
-qs("#map-picker-cancel")?.addEventListener("click", closeMapPicker);
-qs("#map-picker-backdrop")?.addEventListener("click", closeMapPicker);
-
-qs("#map-picker-confirm")?.addEventListener("click", () => {
-  if (_mapPickedCoords && _mapPickerOnConfirm) {
-    _mapPickerOnConfirm(_mapPickedCoords.lat, _mapPickedCoords.lng);
-  }
-  closeMapPicker();
-});
-
-qs("#map-my-location-btn")?.addEventListener("click", () => {
-  if (!navigator.geolocation) {
-    alert("Geolocation is not supported by your browser.");
-    return;
-  }
-  navigator.geolocation.getCurrentPosition(
-    (pos) => {
-      if (!_mapInst) return;
-      const loc = new google.maps.LatLng(pos.coords.latitude, pos.coords.longitude);
-      _mapInst.setCenter(loc);
-      _mapInst.setZoom(16);
-      _mapMarker.setPosition(loc);
-      updateMapCoordsDisplay(pos.coords.latitude, pos.coords.longitude);
-    },
-    () => alert("Could not retrieve your location.")
-  );
-});
-
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && qs("#map-picker-modal") && !qs("#map-picker-modal").hidden) {
-    closeMapPicker();
-  }
-});
+setMapPickerDeps({ setStatus });
+initMapPicker();
 
 // Wire up "Pick on Map" button in visit form
 qs("#visit-pick-location-btn")?.addEventListener("click", () => {
