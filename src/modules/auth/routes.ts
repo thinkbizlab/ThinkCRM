@@ -345,14 +345,29 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
   // ── OAuth helpers ────────────────────────────────────────────────────────────
 
-  function oauthBase(request: { protocol: string; hostname: string }): string {
+  async function oauthBase(request: { protocol: string; hostname: string }): Promise<string> {
+    const requestHost = request.hostname?.trim().toLowerCase() ?? "";
+    const requestOrigin = `${request.protocol}://${requestHost}`;
+
+    // Trust the request host if it matches one of: APP_URL, a {slug}.BASE_DOMAIN
+    // subdomain, or a VERIFIED TenantCustomDomain — preserving the host the user
+    // started on so OAuth doesn't bounce them back to APP_URL.
+    if (requestHost) {
+      let appUrlHost: string | null = null;
+      if (config.APP_URL) {
+        try { appUrlHost = new URL(config.APP_URL).host.toLowerCase(); } catch { /* ignore */ }
+      }
+      if (appUrlHost && requestHost === appUrlHost) return requestOrigin;
+      const resolved = await resolveHostTenantSlug(requestHost);
+      if (resolved) return requestOrigin;
+    }
+
     if (config.APP_URL) return config.APP_URL.replace(/\/$/, "");
     // H12: In production APP_URL must be set — never derive the OAuth redirect base from headers.
     if (config.NODE_ENV === "production") {
       throw new Error("APP_URL must be configured in production for OAuth to work securely.");
     }
-    // Development fallback: use Fastify's parsed protocol/hostname (trustProxy handles forwarding).
-    return `${request.protocol}://${request.hostname}`;
+    return requestOrigin;
   }
 
   // Resolve MS365 / Google OAuth credentials, preferring per-tenant configuration
@@ -407,7 +422,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     const creds = await resolveMs365OAuthCreds(tenantSlug);
     if (!creds) throw app.httpErrors.notImplemented("MS365 OAuth is not configured.");
     const state = await createOAuthState(tenantSlug);
-    const base  = oauthBase(request);
+    const base  = await oauthBase(request);
     const params = new URLSearchParams({
       client_id: creds.clientId, response_type: "code",
       redirect_uri: `${base}/api/v1/auth/oauth/ms365/callback`,
@@ -418,7 +433,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
   app.get("/auth/oauth/ms365/callback", async (request, reply) => {
     const { code, state, error, error_description } = request.query as Record<string, string>;
-    const base = oauthBase(request);
+    const base = await oauthBase(request);
     if (error || !code || !state) {
       return reply.redirect(`${base}/?oauth_error=${encodeURIComponent(error_description ?? error ?? "OAuth cancelled")}`);
     }
@@ -489,7 +504,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     const creds = await resolveGoogleOAuthCreds(tenantSlug);
     if (!creds) throw app.httpErrors.notImplemented("Google OAuth is not configured.");
     const state = await createOAuthState(tenantSlug);
-    const base  = oauthBase(request);
+    const base  = await oauthBase(request);
     const params = new URLSearchParams({
       client_id: creds.clientId, response_type: "code",
       redirect_uri: `${base}/api/v1/auth/oauth/google/callback`,
@@ -500,7 +515,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
   app.get("/auth/oauth/google/callback", async (request, reply) => {
     const { code, state, error } = request.query as Record<string, string>;
-    const base = oauthBase(request);
+    const base = await oauthBase(request);
     if (error || !code || !state) {
       return reply.redirect(`${base}/?oauth_error=${encodeURIComponent(error ?? "OAuth cancelled")}`);
     }
@@ -592,7 +607,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const state = await createLineConnectState(tenantSlug, userId);
-    const base = oauthBase(request);
+    const base = await oauthBase(request);
     const params = new URLSearchParams({
       response_type: "code",
       client_id: cred.clientIdRef,
@@ -606,7 +621,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
   app.get("/auth/oauth/line-connect/callback", async (request, reply) => {
     const { code, state, error, error_description } = request.query as Record<string, string>;
-    const base = oauthBase(request);
+    const base = await oauthBase(request);
 
     if (error || !code || !state) {
       return reply.redirect(
@@ -709,7 +724,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     const aadTenantId = cred.webhookTokenRef ?? config.MS365_TENANT_ID;
 
     const state = await createConnectState(tenantSlug, userId);
-    const base = oauthBase(request);
+    const base = await oauthBase(request);
     const params = new URLSearchParams({
       client_id: cred.clientIdRef,
       response_type: "code",
@@ -723,7 +738,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
   app.get("/auth/oauth/ms-teams-connect/callback", async (request, reply) => {
     const { code, state, error, error_description } = request.query as Record<string, string>;
-    const base = oauthBase(request);
+    const base = await oauthBase(request);
 
     if (error || !code || !state) {
       return reply.redirect(
@@ -826,7 +841,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const state = await createConnectState(tenantSlug, userId);
-    const base = oauthBase(request);
+    const base = await oauthBase(request);
     const params = new URLSearchParams({
       response_type: "code",
       client_id: cred.clientIdRef,
@@ -839,7 +854,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
   app.get("/auth/oauth/slack-connect/callback", async (request, reply) => {
     const { code, state, error } = request.query as Record<string, string>;
-    const base = oauthBase(request);
+    const base = await oauthBase(request);
 
     if (error || !code || !state) {
       return reply.redirect(
