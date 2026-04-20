@@ -3710,11 +3710,15 @@ function renderSettings() {
             </div>
           </div>
           <div class="gradient-section">
-            <label class="gradient-toggle">
-              <input type="checkbox" name="accentGradientEnabled" ${branding.accentGradientEnabled ? "checked" : ""} />
-              <span class="gradient-toggle-label">Use gradient accent</span>
-              <span class="muted" style="font-size:0.78rem">Blends primary color into a second color on buttons, login hero, and KPI highlights.</span>
-            </label>
+            <div class="accent-mode-row">
+              <label class="theme-editor-label">Accent Style</label>
+              <div class="segmented" role="tablist" aria-label="Accent style">
+                <button type="button" class="segmented-item" role="tab" data-value="false" aria-selected="${!branding.accentGradientEnabled}">Solid</button>
+                <button type="button" class="segmented-item" role="tab" data-value="true" aria-selected="${!!branding.accentGradientEnabled}">Gradient</button>
+              </div>
+              <input type="hidden" name="accentGradientEnabled" value="${branding.accentGradientEnabled ? "true" : "false"}" />
+              <span class="muted" style="font-size:0.78rem">Gradient blends primary into a second color on buttons, login hero, and KPI highlights.</span>
+            </div>
             <div class="gradient-controls" ${branding.accentGradientEnabled ? "" : 'style="display:none"'}>
               <div class="settings-field-row">
                 <label class="form-label">Gradient End Color
@@ -6103,8 +6107,8 @@ function renderSettings() {
     if (picker && /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(e.target.value)) picker.value = e.target.value;
   });
 
-  // Gradient controls: toggle visibility, sync picker↔text, live preview
-  const gradientToggle = qs('[name="accentGradientEnabled"]');
+  // Gradient controls: segmented Solid/Gradient pill, sync picker↔text, live preview
+  const gradientHidden = qs('[name="accentGradientEnabled"]');
   const gradientControls = document.querySelector(".gradient-controls");
   const refreshGradientPreview = () => {
     const swatch = qs("#gradient-preview-swatch");
@@ -6114,8 +6118,15 @@ function renderSettings() {
     const a = qs('[name="accentGradientAngle"]')?.value || 135;
     swatch.style.background = `linear-gradient(${a}deg, ${p}, ${g})`;
   };
-  gradientToggle?.addEventListener("change", () => {
-    if (gradientControls) gradientControls.style.display = gradientToggle.checked ? "" : "none";
+  const segmentedItems = document.querySelectorAll(".accent-mode-row .segmented-item");
+  segmentedItems.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const enabled = btn.dataset.value === "true";
+      segmentedItems.forEach((b) => b.setAttribute("aria-selected", String(b === btn)));
+      if (gradientHidden) gradientHidden.value = enabled ? "true" : "false";
+      if (gradientControls) gradientControls.style.display = enabled ? "" : "none";
+      if (typeof livePreview === "function") livePreview();
+    });
   });
   qs('[name="accentGradientColorPicker"]')?.addEventListener("input", (e) => {
     const hex = qs('[name="accentGradientColor"]');
@@ -6165,7 +6176,7 @@ function renderSettings() {
         radius:      Number(read("tokenRadius")) || 12,
         shadow:      read("tokenShadow") || "MD"
       },
-      accentGradientEnabled: qs('[name="accentGradientEnabled"]')?.checked === true,
+      accentGradientEnabled: qs('[name="accentGradientEnabled"]')?.value === "true",
       accentGradientColor:   read("accentGradientColor"),
       accentGradientAngle:   Number(read("accentGradientAngle")) || 135,
       themeMode:             read("themeMode") || "LIGHT",
@@ -6308,7 +6319,7 @@ function renderSettings() {
       delete payload.secondaryColorPicker;
       delete payload.accentGradientColorPicker;
       delete payload.accentGradientAngleRange;
-      payload.accentGradientEnabled = fd.get("accentGradientEnabled") === "on" ? "true" : "false";
+      payload.accentGradientEnabled = fd.get("accentGradientEnabled") === "true" ? "true" : "false";
 
       // Assemble themeTokens from the grouped editor fields, then strip the
       // per-field entries and helper Picker/Range inputs from the payload.
