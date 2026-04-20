@@ -336,15 +336,15 @@ export async function buildApp() {
     if (!shellTemplate) shellTemplate = await readFile(shellPath, "utf8");
     return shellTemplate;
   }
-  const brandingCache = new Map<string, { appName: string; faviconUrl: string | null; expiresAt: number }>();
+  const brandingCache = new Map<string, { appName: string; faviconUrl: string | null; tenantSlug: string | null; expiresAt: number }>();
   const BRANDING_TTL_MS = 60_000;
   function escapeHtml(s: string): string {
     return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   }
-  async function resolveHostBranding(host: string): Promise<{ appName: string; faviconUrl: string | null }> {
+  async function resolveHostBranding(host: string): Promise<{ appName: string; faviconUrl: string | null; tenantSlug: string | null }> {
     const cached = brandingCache.get(host);
     if (cached && cached.expiresAt > Date.now()) {
-      return { appName: cached.appName, faviconUrl: cached.faviconUrl };
+      return { appName: cached.appName, faviconUrl: cached.faviconUrl, tenantSlug: cached.tenantSlug };
     }
     let slug: string | null = null;
     const baseDomain = config.BASE_DOMAIN?.toLowerCase();
@@ -364,6 +364,7 @@ export async function buildApp() {
     }
     let appName = "ThinkCRM";
     let faviconUrl: string | null = null;
+    const tenantSlug: string | null = tenant?.slug ?? null;
     if (tenant) {
       appName = tenant.branding?.appName ?? tenant.name;
       const raw = tenant.branding?.faviconUrl;
@@ -384,8 +385,8 @@ export async function buildApp() {
         }
       }
     }
-    brandingCache.set(host, { appName, faviconUrl, expiresAt: Date.now() + BRANDING_TTL_MS });
-    return { appName, faviconUrl };
+    brandingCache.set(host, { appName, faviconUrl, tenantSlug, expiresAt: Date.now() + BRANDING_TTL_MS });
+    return { appName, faviconUrl, tenantSlug };
   }
   async function renderAppShell(request: { hostname?: string }, reply: import("fastify").FastifyReply) {
     const html = await loadShellTemplate();
@@ -393,9 +394,23 @@ export async function buildApp() {
     let rendered = html;
     if (host && host !== "localhost" && host !== "127.0.0.1") {
       try {
-        const { appName, faviconUrl } = await resolveHostBranding(host);
+        const { appName, faviconUrl, tenantSlug } = await resolveHostBranding(host);
         const safeName = escapeHtml(appName);
         rendered = rendered.replace("<title>ThinkCRM</title>", `<title>${safeName}</title>`);
+        if (tenantSlug) {
+          // Prefill the workspace slug and hide the workspace row — on a tenant
+          // host there's nothing for the user to choose. Avoids the field
+          // flashing visible before JS can resolve-domain.
+          const safeSlug = escapeHtml(tenantSlug);
+          rendered = rendered.replace(
+            '<div class="login-workspace" id="login-workspace-row">',
+            '<div class="login-workspace" id="login-workspace-row" hidden>'
+          );
+          rendered = rendered.replace(
+            '<input class="login-ws-input" name="tenantSlug" placeholder="your-workspace" required />',
+            `<input class="login-ws-input" name="tenantSlug" placeholder="your-workspace" required value="${safeSlug}" readonly />`
+          );
+        }
         if (faviconUrl) {
           const safeFavicon = escapeHtml(faviconUrl);
           const lower = (faviconUrl.split("?")[0] ?? "").toLowerCase();
