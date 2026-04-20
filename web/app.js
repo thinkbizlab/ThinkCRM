@@ -5056,6 +5056,12 @@ function renderSettings() {
     });
   });
 
+  // Keep the Team Structure view in sync after inline role/team/manager edits
+  // in the Roles page — otherwise users have to F5 to see the change reflected.
+  const refreshTeamsCache = async () => {
+    try { state.cache.teams = await api("/teams"); } catch (_) { /* best-effort */ }
+  };
+
   views.settings.querySelectorAll(".rp-role-select").forEach((sel) => {
     sel.addEventListener("change", async () => {
       const uid = sel.dataset.uid;
@@ -5068,6 +5074,7 @@ function renderSettings() {
           body: { fullName: user.fullName, email: user.email, role: newRole, managerUserId: user.managerUserId ?? null }
         });
         setStatus(`Role updated to ${newRole}.`);
+        await refreshTeamsCache();
         // If role changed away from/to REP/SUPERVISOR, refresh so Reports To column updates
         if (prevRole !== newRole && (prevRole === "REP" || prevRole === "SUPERVISOR" || newRole === "REP" || newRole === "SUPERVISOR")) {
           await loadSettings();
@@ -5092,6 +5099,7 @@ function renderSettings() {
         setStatus("Reports To updated.");
         const u = state.cache.allUsers.find(u => u.id === uid);
         if (u) u.managerUserId = managerId;
+        await refreshTeamsCache();
       } catch (error) {
         setStatus(error.message, true);
         await loadSettings();
@@ -5120,6 +5128,7 @@ function renderSettings() {
         user.teamId = newTeamId;
         sel.dataset.currentTeam = newTeamId || "";
         setStatus(newTeamId ? "Team updated." : "Team cleared.");
+        await refreshTeamsCache();
       } catch (error) {
         setStatus(error.message, true);
         sel.value = prev;
