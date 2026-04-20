@@ -2528,7 +2528,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     fullName:      z.string().min(1).max(120),
     email:         z.string().email(),
     role:          z.nativeEnum(UserRole),
-    managerUserId: z.preprocess(v => (v === "" ? null : v), z.string().min(1).nullable().optional())
+    managerUserId: z.preprocess(v => (v === "" ? null : v), z.string().min(1).nullable().optional()),
+    teamId:        z.preprocess(v => (v === "" ? null : v), z.string().min(1).nullable().optional())
   });
 
   app.patch("/users/:id", async (request) => {
@@ -2542,7 +2543,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     const parsed = userEditSchema.safeParse(request.body);
     if (!parsed.success) throw app.httpErrors.badRequest(zodMsg(parsed.error));
 
-    const { fullName, email, role, managerUserId } = parsed.data;
+    const { fullName, email, role, managerUserId, teamId } = parsed.data;
 
     // Validate managerUserId belongs to same tenant if provided
     if (managerUserId) {
@@ -2551,10 +2552,30 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       if (managerUserId === id) throw app.httpErrors.badRequest("User cannot be their own manager.");
     }
 
+    // Validate teamId belongs to same tenant if provided
+    if (teamId) {
+      const team = await prisma.team.findFirst({ where: { id: teamId, tenantId } });
+      if (!team) throw app.httpErrors.badRequest("Team not found in tenant.");
+    }
+
+    const updateData: {
+      fullName: string;
+      email: string;
+      role: UserRole;
+      managerUserId: string | null;
+      teamId?: string | null;
+    } = {
+      fullName,
+      email,
+      role,
+      managerUserId: managerUserId ?? null
+    };
+    if (teamId !== undefined) updateData.teamId = teamId;
+
     return prisma.user.update({
       where: { id },
-      data: { fullName, email, role, managerUserId: managerUserId ?? null },
-      select: { id: true, fullName: true, email: true, role: true, managerUserId: true }
+      data: updateData,
+      select: { id: true, fullName: true, email: true, role: true, managerUserId: true, teamId: true }
     });
   });
 

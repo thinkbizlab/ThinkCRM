@@ -3576,6 +3576,15 @@ function renderSettings() {
               const isSelf = u.id === me?.id;
               const initials = (u.fullName || "?").split(" ").filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join("");
               const teamName = state.cache.teams?.find(t => t.id === u.teamId)?.teamName || "";
+              const teamOpts = (state.cache.teams || [])
+                .map(t => `<option value="${t.id}" ${t.id === u.teamId ? "selected" : ""}>${escHtml(t.teamName)}</option>`)
+                .join("");
+              const teamCell = isAdmin
+                ? `<select class="rp-select rp-team-select" data-uid="${u.id}" data-current-team="${u.teamId || ""}">
+                     <option value="">— no team —</option>
+                     ${teamOpts}
+                   </select>`
+                : (teamName ? escHtml(teamName) : '<span class="rp-dash">—</span>');
               return `
               <div class="rp-row" data-uid="${u.id}">
                 <div class="rp-user-cell">
@@ -3585,7 +3594,7 @@ function renderSettings() {
                     <span class="rp-user-email">${escHtml(u.email)}</span>
                   </div>
                 </div>
-                <span class="rp-team-cell">${teamName ? escHtml(teamName) : '<span class="rp-dash">—</span>'}</span>
+                <span class="rp-team-cell">${teamCell}</span>
                 <span><span class="rp-badge ${roleCls[u.role] || ""}">${roleLabel[u.role] || u.role}</span></span>
                 <span>${reportsToOptions(u)}</span>
                 <span class="rp-role-change-cell">
@@ -5086,6 +5095,34 @@ function renderSettings() {
       } catch (error) {
         setStatus(error.message, true);
         await loadSettings();
+      }
+    });
+  });
+
+  views.settings.querySelectorAll(".rp-team-select").forEach((sel) => {
+    sel.addEventListener("change", async () => {
+      const uid = sel.dataset.uid;
+      const prev = sel.dataset.currentTeam || "";
+      const newTeamId = sel.value || null;
+      const user = state.cache.allUsers.find(u => u.id === uid);
+      if (!user) return;
+      try {
+        await api(`/users/${uid}`, {
+          method: "PATCH",
+          body: {
+            fullName: user.fullName,
+            email: user.email,
+            role: user.role,
+            managerUserId: user.managerUserId ?? null,
+            teamId: newTeamId
+          }
+        });
+        user.teamId = newTeamId;
+        sel.dataset.currentTeam = newTeamId || "";
+        setStatus(newTeamId ? "Team updated." : "Team cleared.");
+      } catch (error) {
+        setStatus(error.message, true);
+        sel.value = prev;
       }
     });
   });
