@@ -67,6 +67,8 @@ function applyLoginBranding(b) {
   document.documentElement.style.setProperty("--accent", primary);
   document.documentElement.style.setProperty("--accent-dim", primary);
   document.documentElement.style.setProperty("--secondary", secondary);
+
+  applyFavicon(b.faviconUrl || null);
 }
 
 async function fetchLoginBranding(slug) {

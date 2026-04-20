@@ -12,6 +12,7 @@ import { createRemoteJWKSet, jwtVerify } from "jose";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdirSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { Sentry } from "./lib/sentry.js";
 
 // Bot Framework JWKS — cached once, jose handles key rotation internally
@@ -39,6 +40,7 @@ import { startScheduler, WORKER_TAG } from "./lib/scheduler.js";
 import { prisma } from "./lib/prisma.js";
 import { decryptField, migrateCredentialsEncryption } from "./lib/secrets.js";
 import { requireActiveTenant } from "./lib/http.js";
+import { buildR2PublicUrl, createR2PresignedDownload } from "./lib/r2-storage.js";
 
 function trustProxyFromConfig(): boolean {
   return (
@@ -326,28 +328,115 @@ export async function buildApp() {
     startScheduler().catch(err => app.log.error({ err }, "[scheduler] startup error"));
   }
 
-  app.get("/", async (_, reply) => reply.sendFile("index.html"));
-  app.get("/dashboard", async (_, reply) => reply.sendFile("index.html"));
-  app.get("/deals", async (_, reply) => reply.sendFile("index.html"));
-  app.get("/visits", async (_, reply) => reply.sendFile("index.html"));
-  app.get("/calendar", async (_, reply) => reply.sendFile("index.html"));
-  app.get("/integrations", async (_, reply) => reply.sendFile("index.html"));
-  app.get("/master/:page", async (_, reply) => reply.sendFile("index.html"));
-  app.get("/settings/:page", async (_, reply) => reply.sendFile("index.html"));
-  app.get("/settings/scheduled-jobs", async (_, reply) => reply.sendFile("index.html"));
-  app.get("/customers/:code", async (_, reply) => reply.sendFile("index.html"));
-  app.get("/task", async (_, reply) => reply.sendFile("index.html"));
-  app.get("/settings/users/:id", async (_, reply) => reply.sendFile("index.html"));
-  app.get("/reset-password", async (_, reply) => reply.sendFile("index.html"));
-  app.get("/accept-invite", async (_, reply) => reply.sendFile("index.html"));
-  app.get("/signup", async (_, reply) => reply.sendFile("index.html"));
-  app.get("/super-admin", async (_, reply) => reply.sendFile("index.html"));
-  app.get("/verify-email", async (_, reply) => reply.sendFile("index.html"));
+  // Server-side render the app shell with tenant branding (title, favicon, wordmark)
+  // so custom domains don't flash "ThinkCRM" before JS loads and applies branding.
+  const shellPath = join(__dirname, "..", "web", "index.html");
+  let shellTemplate: string | null = null;
+  async function loadShellTemplate(): Promise<string> {
+    if (!shellTemplate) shellTemplate = await readFile(shellPath, "utf8");
+    return shellTemplate;
+  }
+  const brandingCache = new Map<string, { appName: string; faviconUrl: string | null; expiresAt: number }>();
+  const BRANDING_TTL_MS = 60_000;
+  function escapeHtml(s: string): string {
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+  async function resolveHostBranding(host: string): Promise<{ appName: string; faviconUrl: string | null }> {
+    const cached = brandingCache.get(host);
+    if (cached && cached.expiresAt > Date.now()) {
+      return { appName: cached.appName, faviconUrl: cached.faviconUrl };
+    }
+    let slug: string | null = null;
+    const baseDomain = config.BASE_DOMAIN?.toLowerCase();
+    if (baseDomain && host.endsWith(`.${baseDomain}`)) {
+      const sub = host.slice(0, -(baseDomain.length + 1));
+      if (sub && !sub.includes(".")) slug = sub;
+    }
+    let tenant: { slug: string; name: string; branding: { appName?: string | null; faviconUrl?: string | null } | null } | null = null;
+    if (slug) {
+      tenant = await prisma.tenant.findUnique({ where: { slug }, select: { slug: true, name: true, branding: true } });
+    } else {
+      const cd = await prisma.tenantCustomDomain.findFirst({
+        where: { domain: host, status: "VERIFIED" },
+        select: { tenant: { select: { slug: true, name: true, branding: true } } }
+      });
+      if (cd) tenant = cd.tenant;
+    }
+    let appName = "ThinkCRM";
+    let faviconUrl: string | null = null;
+    if (tenant) {
+      appName = tenant.branding?.appName ?? tenant.name;
+      const raw = tenant.branding?.faviconUrl;
+      if (raw) {
+        if (!raw.startsWith("r2://")) {
+          faviconUrl = raw;
+        } else {
+          const pub = buildR2PublicUrl(raw);
+          if (pub) faviconUrl = pub;
+          else {
+            try {
+              const { downloadUrl } = await createR2PresignedDownload({
+                tenantSlug: tenant.slug, objectKeyOrRef: raw, expiresInSeconds: 3600
+              });
+              faviconUrl = downloadUrl;
+            } catch { /* ignore — fall back to default */ }
+          }
+        }
+      }
+    }
+    brandingCache.set(host, { appName, faviconUrl, expiresAt: Date.now() + BRANDING_TTL_MS });
+    return { appName, faviconUrl };
+  }
+  async function renderAppShell(request: { hostname?: string }, reply: import("fastify").FastifyReply) {
+    const html = await loadShellTemplate();
+    const host = request.hostname?.trim().toLowerCase() ?? "";
+    let rendered = html;
+    if (host && host !== "localhost" && host !== "127.0.0.1") {
+      try {
+        const { appName, faviconUrl } = await resolveHostBranding(host);
+        const safeName = escapeHtml(appName);
+        rendered = rendered.replace("<title>ThinkCRM</title>", `<title>${safeName}</title>`);
+        if (faviconUrl) {
+          const safeFavicon = escapeHtml(faviconUrl);
+          const type = faviconUrl.toLowerCase().endsWith(".svg") ? "image/svg+xml" : "image/png";
+          rendered = rendered.replace(
+            '<link rel="icon" type="image/svg+xml" href="/default-brand.svg" />',
+            `<link rel="icon" type="${type}" href="${safeFavicon}" />`
+          );
+        }
+        rendered = rendered.replace(
+          '<span id="login-app-name" class="branding-pending">ThinkCRM</span>',
+          `<span id="login-app-name">${safeName}</span>`
+        );
+      } catch (err) {
+        app.log.warn({ err, host }, "[shell] branding render failed — serving default shell");
+      }
+    }
+    return reply.type("text/html; charset=utf-8").send(rendered);
+  }
+
+  app.get("/", async (request, reply) => renderAppShell(request, reply));
+  app.get("/dashboard", async (request, reply) => renderAppShell(request, reply));
+  app.get("/deals", async (request, reply) => renderAppShell(request, reply));
+  app.get("/visits", async (request, reply) => renderAppShell(request, reply));
+  app.get("/calendar", async (request, reply) => renderAppShell(request, reply));
+  app.get("/integrations", async (request, reply) => renderAppShell(request, reply));
+  app.get("/master/:page", async (request, reply) => renderAppShell(request, reply));
+  app.get("/settings/:page", async (request, reply) => renderAppShell(request, reply));
+  app.get("/settings/scheduled-jobs", async (request, reply) => renderAppShell(request, reply));
+  app.get("/customers/:code", async (request, reply) => renderAppShell(request, reply));
+  app.get("/task", async (request, reply) => renderAppShell(request, reply));
+  app.get("/settings/users/:id", async (request, reply) => renderAppShell(request, reply));
+  app.get("/reset-password", async (request, reply) => renderAppShell(request, reply));
+  app.get("/accept-invite", async (request, reply) => renderAppShell(request, reply));
+  app.get("/signup", async (request, reply) => renderAppShell(request, reply));
+  app.get("/super-admin", async (request, reply) => renderAppShell(request, reply));
+  app.get("/verify-email", async (request, reply) => renderAppShell(request, reply));
 
   // SPA catch-all: serve index.html for any unmatched GET that isn't an API/file request
   app.setNotFoundHandler(async (request, reply) => {
     if (request.method === "GET" && !request.url.startsWith("/api/")) {
-      return reply.sendFile("index.html");
+      return renderAppShell(request, reply);
     }
     return reply.code(404).send({ statusCode: 404, error: "Not Found", message: `Route ${request.method}:${request.url} not found` });
   });
