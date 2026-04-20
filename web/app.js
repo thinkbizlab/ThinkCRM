@@ -68,7 +68,7 @@ function applyLoginBranding(b) {
   document.documentElement.style.setProperty("--accent-dim", primary);
   document.documentElement.style.setProperty("--secondary", secondary);
 
-  applyFavicon(b.faviconUrl || null);
+  if (b.faviconUrl) applyFavicon(b.faviconUrl);
 }
 
 async function fetchLoginBranding(slug) {
@@ -382,10 +382,12 @@ function applyBrandingTheme(branding) {
     themeMeta.setAttribute("content", primary);
   }
 
-  const appName = b.appName || "ThinkCRM";
-  document.title = appName;
-  if (brandTitle) {
-    brandTitle.textContent = appName;
+  // Only override title/favicon when branding actually provides values, so the
+  // server-rendered shell (already populated per host) isn't reset to "ThinkCRM"
+  // whenever this runs before branding has loaded.
+  if (b.appName) {
+    document.title = b.appName;
+    if (brandTitle) brandTitle.textContent = b.appName;
   }
   if (brandMark) {
     const logoSrc = b.logoUrl || "/default-brand.svg";
@@ -393,7 +395,7 @@ function applyBrandingTheme(branding) {
   }
 
   applyThemeMode(b.themeMode || "LIGHT");
-  applyFavicon(b.faviconUrl || null);
+  if (b.faviconUrl) applyFavicon(b.faviconUrl);
 }
 
 function applyFavicon(url) {
@@ -405,7 +407,12 @@ function applyFavicon(url) {
   }
   const src = url || "/default-brand.svg";
   link.href = src;
-  link.type = src.endsWith(".svg") ? "image/svg+xml" : "image/png";
+  const lower = src.split("?")[0].toLowerCase();
+  if (lower.endsWith(".svg")) link.type = "image/svg+xml";
+  else if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) link.type = "image/jpeg";
+  else if (lower.endsWith(".ico")) link.type = "image/x-icon";
+  else if (lower.endsWith(".webp")) link.type = "image/webp";
+  else link.type = "image/png";
 }
 
 function renderThemeDebugChip() {

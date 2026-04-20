@@ -398,7 +398,12 @@ export async function buildApp() {
         rendered = rendered.replace("<title>ThinkCRM</title>", `<title>${safeName}</title>`);
         if (faviconUrl) {
           const safeFavicon = escapeHtml(faviconUrl);
-          const type = faviconUrl.toLowerCase().endsWith(".svg") ? "image/svg+xml" : "image/png";
+          const lower = (faviconUrl.split("?")[0] ?? "").toLowerCase();
+          let type = "image/png";
+          if (lower.endsWith(".svg")) type = "image/svg+xml";
+          else if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) type = "image/jpeg";
+          else if (lower.endsWith(".ico")) type = "image/x-icon";
+          else if (lower.endsWith(".webp")) type = "image/webp";
           rendered = rendered.replace(
             '<link rel="icon" type="image/svg+xml" href="/default-brand.svg" />',
             `<link rel="icon" type="${type}" href="${safeFavicon}" />`
