@@ -56,6 +56,7 @@ const P = {
   folder:     '<path d="M3 7a2 2 0 0 1 2-2h3.5l2 2H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/>',
   clock:      '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   hash:       '<path d="M4 9h16"/><path d="M4 15h16"/><path d="M10 3 8 21"/><path d="M16 3l-2 18"/>',
+  activity:   '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>',
 };
 
 export function icon(name, size = 16, className = "") {

@@ -382,6 +382,20 @@ function applyBrandingTheme(branding) {
   document.documentElement.style.setProperty("--accent-subtle", tintHex(primary, 0.88));
   document.documentElement.style.setProperty("--accent-text", "#fefefe");
 
+  const gradientEnabled = b.accentGradientEnabled === true || b.accentGradientEnabled === "true";
+  if (gradientEnabled) {
+    const gradColor = normalizeHex(b.accentGradientColor, "#ec4899");
+    const gradAngle = Number.isFinite(Number(b.accentGradientAngle)) ? Number(b.accentGradientAngle) : 135;
+    const gradient = `linear-gradient(${gradAngle}deg, ${primary}, ${gradColor})`;
+    document.documentElement.style.setProperty("--accent-gradient", gradient);
+    document.documentElement.style.setProperty("--accent-gradient-color", gradColor);
+    document.documentElement.classList.add("accent-gradient-on");
+  } else {
+    document.documentElement.style.setProperty("--accent-gradient", primary);
+    document.documentElement.style.removeProperty("--accent-gradient-color");
+    document.documentElement.classList.remove("accent-gradient-on");
+  }
+
   const themeMeta = document.querySelector('meta[name="theme-color"]');
   if (themeMeta) {
     themeMeta.setAttribute("content", primary);
@@ -3105,12 +3119,15 @@ function renderSettings() {
     { page: "integrations",   label: "Integrations",          ic: "plug", roles: ["ADMIN"] },
     { page: "custom-domain",  label: "Custom Domain",          ic: "globe", roles: ["ADMIN"] },
     { page: "data-sync",      label: "Data Sync",              ic: "refresh", roles: ["ADMIN"] },
-    { page: "cron-jobs",      label: "Scheduled Jobs",         ic: "clock", roles: ["ADMIN"] }
+    { page: "cron-jobs",      label: "Scheduled Jobs",         ic: "clock", roles: ["ADMIN"] },
+    { page: "logs",           label: "Logs",                   ic: "activity", roles: ["ADMIN"], view: "integrations" }
   ];
   const navItems = allNavItems.filter(item => item.roles.includes(role));
 
-  // Redirect to my-profile if current page is not accessible
-  const allAllowedPages = [...personalNavItems.map(i => i.page), ...navItems.map(i => i.page)];
+  // Redirect to my-profile if current page is not accessible.
+  // "logs" is a cross-link item (switches to the Integrations view), not a real settings page,
+  // so exclude it from the allowed-pages set.
+  const allAllowedPages = [...personalNavItems.map(i => i.page), ...navItems.filter(i => !i.view).map(i => i.page)];
   if (!allAllowedPages.includes(page)) {
     state.settingsPage = "my-profile";
     return renderSettings();
@@ -3575,6 +3592,36 @@ function renderSettings() {
                 <input class="form-input" name="secondaryColor" placeholder="#0f172a" value="${branding.secondaryColor || "#0f172a"}" required style="flex:1" />
               </div>
             </label>
+          </div>
+          <div class="gradient-section">
+            <label class="gradient-toggle">
+              <input type="checkbox" name="accentGradientEnabled" ${branding.accentGradientEnabled ? "checked" : ""} />
+              <span class="gradient-toggle-label">Use gradient accent</span>
+              <span class="muted" style="font-size:0.78rem">Blends primary color into a second color on buttons, login hero, and KPI highlights.</span>
+            </label>
+            <div class="gradient-controls" ${branding.accentGradientEnabled ? "" : 'style="display:none"'}>
+              <div class="settings-field-row">
+                <label class="form-label">Gradient End Color
+                  <div class="color-input-row">
+                    <input type="color" name="accentGradientColorPicker" value="${branding.accentGradientColor || "#ec4899"}" class="color-swatch" />
+                    <input class="form-input" name="accentGradientColor" placeholder="#ec4899" value="${branding.accentGradientColor || "#ec4899"}" style="flex:1" />
+                  </div>
+                </label>
+                <label class="form-label">Angle
+                  <div class="color-input-row">
+                    <input type="range" name="accentGradientAngleRange" min="0" max="360" step="5" value="${branding.accentGradientAngle ?? 135}" style="flex:1" />
+                    <input type="number" name="accentGradientAngle" min="0" max="360" step="5" value="${branding.accentGradientAngle ?? 135}" class="form-input" style="width:70px" />
+                    <span class="muted" style="font-size:0.78rem">°</span>
+                  </div>
+                </label>
+              </div>
+              <div class="gradient-preview" aria-label="Gradient preview">
+                <div class="gradient-preview-swatch" id="gradient-preview-swatch"
+                     style="background:linear-gradient(${branding.accentGradientAngle ?? 135}deg, ${branding.primaryColor || "#7c3aed"}, ${branding.accentGradientColor || "#ec4899"})">
+                  <span>Preview</span>
+                </div>
+              </div>
+            </div>
           </div>
           <div class="settings-field-row">
             <label class="form-label">Default Theme
@@ -4624,7 +4671,7 @@ function renderSettings() {
         `).join("")}
         <p class="settings-sidenav-label" style="margin-top:var(--sp-3)">ORGANIZATION</p>
         ${navItems.map((item) => `
-          <button class="settings-nav-item ${page === item.page ? "active" : ""}" data-settings-nav="${item.page}" title="${navCollapsed ? item.label : ""}">
+          <button class="settings-nav-item ${page === item.page ? "active" : ""}" data-settings-nav="${item.page}"${item.view ? ` data-view-target="${item.view}"` : ""} title="${navCollapsed ? item.label : ""}">
             <span class="settings-nav-emoji" aria-hidden="true">${icon(item.ic, 16)}</span>
             <span class="settings-nav-label">${item.label}</span>
           </button>
@@ -5004,6 +5051,16 @@ function renderSettings() {
   views.settings.querySelectorAll("[data-settings-nav]").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const nav = btn.dataset.settingsNav;
+      const viewTarget = btn.dataset.viewTarget;
+      // Cross-link items (e.g. Logs → Integration Logs view) jump out of Settings.
+      if (viewTarget) {
+        navigateToView(viewTarget);
+        switchView(viewTarget);
+        try {
+          if (viewTarget === "integrations") await loadIntegrations();
+        } catch (error) { setStatus(error.message, true); }
+        return;
+      }
       navigateToSettingsPage(nav);
       if (nav === "data-sync") await loadSyncData();
       if (nav === "team-structure") {
@@ -5927,6 +5984,43 @@ function renderSettings() {
     if (picker && /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(e.target.value)) picker.value = e.target.value;
   });
 
+  // Gradient controls: toggle visibility, sync picker↔text, live preview
+  const gradientToggle = qs('[name="accentGradientEnabled"]');
+  const gradientControls = document.querySelector(".gradient-controls");
+  const refreshGradientPreview = () => {
+    const swatch = qs("#gradient-preview-swatch");
+    if (!swatch) return;
+    const p = qs('[name="primaryColor"]')?.value || "#7c3aed";
+    const g = qs('[name="accentGradientColor"]')?.value || "#ec4899";
+    const a = qs('[name="accentGradientAngle"]')?.value || 135;
+    swatch.style.background = `linear-gradient(${a}deg, ${p}, ${g})`;
+  };
+  gradientToggle?.addEventListener("change", () => {
+    if (gradientControls) gradientControls.style.display = gradientToggle.checked ? "" : "none";
+  });
+  qs('[name="accentGradientColorPicker"]')?.addEventListener("input", (e) => {
+    const hex = qs('[name="accentGradientColor"]');
+    if (hex) hex.value = e.target.value;
+    refreshGradientPreview();
+  });
+  qs('[name="accentGradientColor"]')?.addEventListener("input", (e) => {
+    const picker = qs('[name="accentGradientColorPicker"]');
+    if (picker && /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(e.target.value)) picker.value = e.target.value;
+    refreshGradientPreview();
+  });
+  qs('[name="accentGradientAngleRange"]')?.addEventListener("input", (e) => {
+    const num = qs('[name="accentGradientAngle"]');
+    if (num) num.value = e.target.value;
+    refreshGradientPreview();
+  });
+  qs('[name="accentGradientAngle"]')?.addEventListener("input", (e) => {
+    const range = qs('[name="accentGradientAngleRange"]');
+    if (range) range.value = e.target.value;
+    refreshGradientPreview();
+  });
+  qs('[name="primaryColor"]')?.addEventListener("input", refreshGradientPreview);
+  qs('[name="primaryColorPicker"]')?.addEventListener("input", refreshGradientPreview);
+
   qs("#branding-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -5973,6 +6067,9 @@ function renderSettings() {
       delete payload.faviconFile;
       delete payload.primaryColorPicker;
       delete payload.secondaryColorPicker;
+      delete payload.accentGradientColorPicker;
+      delete payload.accentGradientAngleRange;
+      payload.accentGradientEnabled = fd.get("accentGradientEnabled") === "on" ? "true" : "false";
       try {
         await api(`/tenants/${tenantId}/branding`, { method: "PUT", body: payload });
         setStatus("Branding saved.");
@@ -8115,9 +8212,18 @@ qs("#logout-btn").addEventListener("click", () => {
   authMessage.textContent = "";
 });
 
-// Close dropdown when its nav items are clicked
-userDropdown?.querySelectorAll(".nav-btn[data-view]").forEach((item) => {
-  item.addEventListener("click", () => closeUserDropdown());
+// User-dropdown nav items (My Profile / Notification Preferences) — route explicitly
+// in the capture phase so we beat the global .nav-btn handler, then halt further
+// dispatch so only one navigation fires.
+userDropdown?.querySelectorAll("[data-settings-page]").forEach((item) => {
+  item.addEventListener("click", async (e) => {
+    e.stopImmediatePropagation();
+    closeUserDropdown();
+    const settingsPage = item.dataset.settingsPage;
+    navigateToSettingsPage(settingsPage);
+    switchView("settings");
+    try { await loadSettings(); } catch (error) { setStatus(error.message, true); }
+  }, { capture: true });
 });
 
 themeToggleBtn?.addEventListener("click", () => {
@@ -8326,12 +8432,6 @@ qs("#gear-settings-item")?.addEventListener("click", () => {
   closeGearDropdown();
   const isOpen = settingsPanel && !settingsPanel.hidden;
   isOpen ? closeAllPanels() : openPanel(settingsPanel);
-});
-
-qs("#gear-logs-item")?.addEventListener("click", () => {
-  closeGearDropdown();
-  navigateToView("integrations");
-  switchView("integrations");
 });
 
 document.addEventListener("click", (e) => {
