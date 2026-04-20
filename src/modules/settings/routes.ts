@@ -30,6 +30,7 @@ import { smtpPort } from "../../lib/smtp-port.js";
 import { stableTeamsAppId } from "../../lib/ms-teams-app-id.js";
 import { JOB_DEFS, rescheduleJob, runJobNow } from "../../lib/scheduler.js";
 import { prisma } from "../../lib/prisma.js";
+import { logAuditEvent } from "../../lib/audit.js";
 import {
   buildR2PublicUrl,
   createR2PresignedDownload,
@@ -100,6 +101,14 @@ const kpiTargetListQuerySchema = z.object({
   targetMonth: z.string().regex(kpiMonthPattern).optional(),
   userId: z.string().cuid().optional(),
   teamId: z.string().cuid().optional()
+});
+
+const kpiTargetImportRowSchema = z.object({
+  email: z.string().email().transform((s) => s.toLowerCase()),
+  targetMonth: z.string().regex(kpiMonthPattern, "targetMonth must be in YYYY-MM format."),
+  visitTargetCount: z.coerce.number().int().min(0),
+  newDealValueTarget: z.coerce.number().min(0),
+  revenueTarget: z.coerce.number().min(0)
 });
 
 const teamCreateSchema = z.object({
@@ -2106,6 +2115,117 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       }
       throw error;
     }
+  });
+
+  app.get("/import-logs", async (request) => {
+    requireRoleAtLeast(request, UserRole.MANAGER);
+    const tenantId = requireTenantId(request);
+    const q = request.query as { type?: string };
+    const typeFilter = q.type === "users" ? ["USER_IMPORT"]
+      : q.type === "kpi" ? ["KPI_TARGET_IMPORT"]
+      : q.type === "customers" ? ["CUSTOMER_IMPORT"]
+      : q.type === "items" ? ["ITEM_IMPORT"]
+      : q.type === "payment-terms" ? ["PAYMENT_TERM_IMPORT"]
+      : ["USER_IMPORT", "KPI_TARGET_IMPORT", "CUSTOMER_IMPORT", "ITEM_IMPORT", "PAYMENT_TERM_IMPORT"];
+
+    const rows = await prisma.auditLog.findMany({
+      where: { tenantId, action: { in: typeFilter } },
+      orderBy: { createdAt: "desc" },
+      take: 50
+    });
+
+    const actorIds = [...new Set(rows.map((r) => r.userId).filter((id): id is string => !!id))];
+    const actors = actorIds.length
+      ? await prisma.user.findMany({
+          where: { id: { in: actorIds }, tenantId },
+          select: { id: true, fullName: true, email: true }
+        })
+      : [];
+    const actorById = new Map(actors.map((a) => [a.id, a]));
+
+    return rows.map((r) => ({
+      id: r.id,
+      action: r.action,
+      createdAt: r.createdAt,
+      detail: r.detail,
+      actor: r.userId ? (actorById.get(r.userId) ?? { id: r.userId, fullName: null, email: null }) : null
+    }));
+  });
+
+  app.post("/kpi-targets/import", async (request) => {
+    requireRoleAtLeast(request, UserRole.MANAGER);
+    const tenantId = requireTenantId(request);
+
+    const body = request.body as unknown;
+    const rawRows: unknown[] = Array.isArray(body)
+      ? body
+      : (body as Record<string, unknown>)?.targets as unknown[] ?? [];
+
+    if (!Array.isArray(rawRows) || rawRows.length === 0) {
+      throw app.httpErrors.badRequest("Expected a non-empty array of targets or { targets: [...] }.");
+    }
+    if (rawRows.length > 500) {
+      throw app.httpErrors.badRequest("Maximum 500 rows per import.");
+    }
+
+    const repsInTenant = await prisma.user.findMany({
+      where: { tenantId, isActive: true, role: UserRole.REP },
+      select: { id: true, email: true }
+    });
+    const userIdByEmail = new Map(repsInTenant.map((u) => [u.email.toLowerCase(), u.id]));
+
+    const errors: { row: number; email?: string; error: string }[] = [];
+    let imported = 0;
+
+    for (let i = 0; i < rawRows.length; i++) {
+      const parsed = kpiTargetImportRowSchema.safeParse(rawRows[i]);
+      if (!parsed.success) {
+        errors.push({ row: i + 1, error: zodMsg(parsed.error) });
+        continue;
+      }
+      const row = parsed.data;
+      const userId = userIdByEmail.get(row.email);
+      if (!userId) {
+        errors.push({ row: i + 1, email: row.email, error: "No active sales rep with this email in this tenant." });
+        continue;
+      }
+      try {
+        await prisma.salesKpiTarget.upsert({
+          where: { tenantId_userId_targetMonth: { tenantId, userId, targetMonth: row.targetMonth } },
+          update: {
+            visitTargetCount: row.visitTargetCount,
+            newDealValueTarget: row.newDealValueTarget,
+            revenueTarget: row.revenueTarget
+          },
+          create: {
+            tenantId,
+            userId,
+            targetMonth: row.targetMonth,
+            visitTargetCount: row.visitTargetCount,
+            newDealValueTarget: row.newDealValueTarget,
+            revenueTarget: row.revenueTarget
+          }
+        });
+        imported += 1;
+      } catch (error) {
+        errors.push({ row: i + 1, email: row.email, error: (error as Error).message });
+      }
+    }
+
+    await logAuditEvent(
+      tenantId,
+      request.requestContext.userId,
+      "KPI_TARGET_IMPORT",
+      {
+        total: rawRows.length,
+        imported,
+        errors: errors.length,
+        errorSample: errors.slice(0, 5)
+      },
+      request.ip
+    );
+
+    return { imported, errors: errors.length, errorDetails: errors };
   });
 
   app.get("/kpi-targets", async (request) => {

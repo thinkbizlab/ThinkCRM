@@ -6,7 +6,7 @@ import { qs } from "./dom.js";
 
 // Show / hide the MS365, Google, and passkey buttons based on what the
 // server reports as configured for this workspace and what the browser supports.
-export async function loadOAuthProviderButtons() {
+export async function loadOAuthProviderButtons({ getTenantSlug } = {}) {
   const panel = qs("#oauth-providers");
   const ms365Btn  = qs("#oauth-ms365-btn");
   const googleBtn = qs("#oauth-google-btn");
@@ -15,7 +15,11 @@ export async function loadOAuthProviderButtons() {
   const webauthnSupported = !!(window.PublicKeyCredential);
   if (passkeyBtn) passkeyBtn.hidden = !webauthnSupported;
   try {
-    const res = await fetch("/api/v1/auth/oauth/providers");
+    const slug = getTenantSlug?.();
+    const url = slug
+      ? `/api/v1/auth/oauth/providers?tenantSlug=${encodeURIComponent(slug)}`
+      : "/api/v1/auth/oauth/providers";
+    const res = await fetch(url);
     if (!res.ok) return;
     const { ms365, google } = await res.json();
     ms365Btn.hidden  = !ms365;

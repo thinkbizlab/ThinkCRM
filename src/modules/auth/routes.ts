@@ -25,6 +25,10 @@ import { isR2Configured, uploadBufferToR2, buildR2PublicUrl, buildR2ObjectRef, c
 import { IntegrationPlatform, AccountStatus, SourceStatus, UserRole } from "@prisma/client";
 import { getTenantUrl } from "../../lib/tenant-url.js";
 
+const superAdminEmailSet: Set<string> = new Set(
+  (config.SUPER_ADMIN_EMAILS ?? "").split(",").map(e => e.trim().toLowerCase()).filter(Boolean)
+);
+
 const loginSchema = z.object({
   tenantSlug: z.string().min(2),
   email: z.string().email().transform(s => s.toLowerCase()),  // M9
@@ -86,29 +90,51 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
+    const emailIsSuperAdmin = superAdminEmailSet.has(parsed.data.email);
+
     const tenant = await prisma.tenant.findUnique({
       where: { slug: parsed.data.tenantSlug },
       select: { id: true, slug: true, name: true }
     });
-    if (!tenant) {
+    if (!tenant && !emailIsSuperAdmin) {
       throw app.httpErrors.unauthorized("Invalid tenant or credentials.");
     }
 
-    const user = await prisma.user.findFirst({
-      where: {
-        tenantId: tenant.id,
-        email: parsed.data.email,
-        isActive: true
-      }
-    });
+    let user = tenant
+      ? await prisma.user.findFirst({
+          where: { tenantId: tenant.id, email: parsed.data.email, isActive: true }
+        })
+      : null;
+
+    // Super-admin cross-tenant fallback: allow login at any workspace URL by resolving
+    // the super admin's home tenant (where their User row actually lives).
+    if (!user && emailIsSuperAdmin) {
+      user = await prisma.user.findFirst({
+        where: { email: parsed.data.email, isActive: true },
+        orderBy: { createdAt: "asc" }
+      });
+    }
+
     // Always run verifyPassword to pay the scrypt cost even when user is not found (timing attack defence).
     const passwordOk = verifyPassword(parsed.data.password, user?.passwordHash ?? DUMMY_HASH);
     if (!user || !passwordOk) {
-      try { await logAuditEvent(tenant.id, user?.id ?? null, "LOGIN_FAILED", { email: parsed.data.email, reason: "invalid_credentials" }, request.ip); } catch { /* best-effort */ }
+      const auditTenantId = tenant?.id ?? user?.tenantId;
+      if (auditTenantId) {
+        try { await logAuditEvent(auditTenantId, user?.id ?? null, "LOGIN_FAILED", { email: parsed.data.email, reason: "invalid_credentials" }, request.ip); } catch { /* best-effort */ }
+      }
       throw app.httpErrors.unauthorized("Invalid tenant or credentials.");
     }
+
+    // Resolve the tenant the JWT will be signed for — always the user's home tenant.
+    const homeTenant = tenant && user.tenantId === tenant.id
+      ? tenant
+      : await prisma.tenant.findUnique({ where: { id: user.tenantId }, select: { id: true, slug: true, name: true } });
+    if (!homeTenant) {
+      throw app.httpErrors.unauthorized("Invalid tenant or credentials.");
+    }
+
     if (!user.emailVerified) {
-      return { needsEmailVerification: true, tenantSlug: tenant.slug, email: user.email };
+      return { needsEmailVerification: true, tenantSlug: homeTenant.slug, email: user.email };
     }
     if (user.mustResetPassword) {
       throw app.httpErrors.forbidden("First login password reset required.");
@@ -116,14 +142,14 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
     const accessToken = await app.jwt.sign({
       userId: user.id,
-      tenantId: tenant.id,
+      tenantId: homeTenant.id,
       role: user.role,
       email: user.email
     }, { expiresIn: "1h" });
 
-    await logAuditEvent(user.tenantId, user.id, "LOGIN", { email: user.email, method: "password" }, request.ip);
+    await logAuditEvent(user.tenantId, user.id, "LOGIN", { email: user.email, method: "password", crossTenant: tenant ? tenant.id !== user.tenantId : true }, request.ip);
 
-    const refreshToken = await createRefreshToken(tenant.id, user.id);
+    const refreshToken = await createRefreshToken(homeTenant.id, user.id);
 
     return {
       accessToken,
@@ -131,11 +157,12 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       tokenType: "Bearer",
       user: {
         id: user.id,
-        tenantId: tenant.id,
+        tenantId: homeTenant.id,
+        tenantSlug: homeTenant.slug,
         role: user.role,
         email: user.email,
         fullName: user.fullName,
-        avatarUrl: resolveAvatarUrl(user.id, user.avatarUrl, tenant.id)
+        avatarUrl: resolveAvatarUrl(user.id, user.avatarUrl, homeTenant.id)
       }
     };
   });
@@ -320,20 +347,65 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     return `${request.protocol}://${request.hostname}`;
   }
 
+  // Resolve MS365 / Google OAuth credentials, preferring per-tenant configuration
+  // (TenantIntegrationCredential, ENABLED) and falling back to server-level env.
+  async function resolveMs365OAuthCreds(tenantSlug: string):
+    Promise<{ clientId: string; clientSecret: string; msTenantId: string } | null> {
+    const tenant = await prisma.tenant.findUnique({ where: { slug: tenantSlug }, select: { id: true } });
+    if (tenant) {
+      const cred = decryptCredential(await prisma.tenantIntegrationCredential.findFirst({
+        where: { tenantId: tenant.id, platform: IntegrationPlatform.MS365, status: SourceStatus.ENABLED }
+      }));
+      if (cred?.clientIdRef && cred?.clientSecretRef) {
+        return {
+          clientId: cred.clientIdRef,
+          clientSecret: cred.clientSecretRef,
+          msTenantId: cred.webhookTokenRef ?? config.MS365_TENANT_ID ?? "common"
+        };
+      }
+    }
+    if (config.MS365_CLIENT_ID && config.MS365_CLIENT_SECRET) {
+      return {
+        clientId: config.MS365_CLIENT_ID,
+        clientSecret: config.MS365_CLIENT_SECRET,
+        msTenantId: config.MS365_TENANT_ID ?? "common"
+      };
+    }
+    return null;
+  }
+
+  async function resolveGoogleOAuthCreds(tenantSlug: string):
+    Promise<{ clientId: string; clientSecret: string } | null> {
+    const tenant = await prisma.tenant.findUnique({ where: { slug: tenantSlug }, select: { id: true } });
+    if (tenant) {
+      const cred = decryptCredential(await prisma.tenantIntegrationCredential.findFirst({
+        where: { tenantId: tenant.id, platform: IntegrationPlatform.GOOGLE, status: SourceStatus.ENABLED }
+      }));
+      if (cred?.clientIdRef && cred?.clientSecretRef) {
+        return { clientId: cred.clientIdRef, clientSecret: cred.clientSecretRef };
+      }
+    }
+    if (config.GOOGLE_CLIENT_ID && config.GOOGLE_CLIENT_SECRET) {
+      return { clientId: config.GOOGLE_CLIENT_ID, clientSecret: config.GOOGLE_CLIENT_SECRET };
+    }
+    return null;
+  }
+
   // ── MS365 OAuth ──────────────────────────────────────────────────────────────
 
   app.get("/auth/oauth/ms365", async (request, reply) => {
-    if (!config.MS365_CLIENT_ID) throw app.httpErrors.notImplemented("MS365 OAuth is not configured.");
     const { tenantSlug } = request.query as { tenantSlug?: string };
     if (!tenantSlug) throw app.httpErrors.badRequest("tenantSlug is required.");
+    const creds = await resolveMs365OAuthCreds(tenantSlug);
+    if (!creds) throw app.httpErrors.notImplemented("MS365 OAuth is not configured.");
     const state = await createOAuthState(tenantSlug);
     const base  = oauthBase(request);
     const params = new URLSearchParams({
-      client_id: config.MS365_CLIENT_ID, response_type: "code",
+      client_id: creds.clientId, response_type: "code",
       redirect_uri: `${base}/api/v1/auth/oauth/ms365/callback`,
       scope: "openid email profile User.Read", response_mode: "query", state
     });
-    return reply.redirect(`https://login.microsoftonline.com/${config.MS365_TENANT_ID}/oauth2/v2.0/authorize?${params}`);
+    return reply.redirect(`https://login.microsoftonline.com/${creds.msTenantId}/oauth2/v2.0/authorize?${params}`);
   });
 
   app.get("/auth/oauth/ms365/callback", async (request, reply) => {
@@ -347,10 +419,12 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       return reply.redirect(`${base}/?oauth_error=${encodeURIComponent("Invalid or expired state. Please try again.")}`);
     }
     try {
+      const creds = await resolveMs365OAuthCreds(tenantSlug);
+      if (!creds) throw new Error("MS365 OAuth is not configured.");
       const redirectUri = `${base}/api/v1/auth/oauth/ms365/callback`;
-      const tokenRes = await fetch(`https://login.microsoftonline.com/${config.MS365_TENANT_ID}/oauth2/v2.0/token`, {
+      const tokenRes = await fetch(`https://login.microsoftonline.com/${creds.msTenantId}/oauth2/v2.0/token`, {
         method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({ client_id: config.MS365_CLIENT_ID!, client_secret: config.MS365_CLIENT_SECRET!,
+        body: new URLSearchParams({ client_id: creds.clientId, client_secret: creds.clientSecret,
           code, redirect_uri: redirectUri, grant_type: "authorization_code" })
       });
       const tok = await tokenRes.json() as { access_token?: string; error_description?: string };
@@ -402,13 +476,14 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
   // ── Google OAuth ─────────────────────────────────────────────────────────────
 
   app.get("/auth/oauth/google", async (request, reply) => {
-    if (!config.GOOGLE_CLIENT_ID) throw app.httpErrors.notImplemented("Google OAuth is not configured.");
     const { tenantSlug } = request.query as { tenantSlug?: string };
     if (!tenantSlug) throw app.httpErrors.badRequest("tenantSlug is required.");
+    const creds = await resolveGoogleOAuthCreds(tenantSlug);
+    if (!creds) throw app.httpErrors.notImplemented("Google OAuth is not configured.");
     const state = await createOAuthState(tenantSlug);
     const base  = oauthBase(request);
     const params = new URLSearchParams({
-      client_id: config.GOOGLE_CLIENT_ID, response_type: "code",
+      client_id: creds.clientId, response_type: "code",
       redirect_uri: `${base}/api/v1/auth/oauth/google/callback`,
       scope: "openid email profile", access_type: "online", state
     });
@@ -426,10 +501,12 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       return reply.redirect(`${base}/?oauth_error=${encodeURIComponent("Invalid or expired state. Please try again.")}`);
     }
     try {
+      const creds = await resolveGoogleOAuthCreds(tenantSlug);
+      if (!creds) throw new Error("Google OAuth is not configured.");
       const redirectUri = `${base}/api/v1/auth/oauth/google/callback`;
       const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
         method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({ client_id: config.GOOGLE_CLIENT_ID!, client_secret: config.GOOGLE_CLIENT_SECRET!,
+        body: new URLSearchParams({ client_id: creds.clientId, client_secret: creds.clientSecret,
           code, redirect_uri: redirectUri, grant_type: "authorization_code" })
       });
       const tok = await tokenRes.json() as { id_token?: string; error_description?: string };
@@ -438,7 +515,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       // Verify Google ID token signature against Google's JWKS, and validate aud + iss claims
       const { payload } = await jwtVerify(tok.id_token, GOOGLE_JWKS, {
         issuer: ["https://accounts.google.com", "accounts.google.com"],
-        audience: config.GOOGLE_CLIENT_ID!,
+        audience: creds.clientId,
       });
       const email = (typeof payload["email"] === "string" ? payload["email"] : "").toLowerCase();
       if (!email) throw new Error("Could not read email from Google profile.");
@@ -825,11 +902,23 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     }
   });
 
-  // Returns which server-level OAuth providers are configured — used by the login page
-  app.get("/auth/oauth/providers", async () => ({
-    ms365:  Boolean(config.MS365_CLIENT_ID),
-    google: Boolean(config.GOOGLE_CLIENT_ID)
-  }));
+  // Returns which OAuth providers are configured — tenant-level credentials take
+  // precedence over server-level env fallbacks. Used by the login page.
+  app.get("/auth/oauth/providers", async (request) => {
+    const { tenantSlug } = request.query as { tenantSlug?: string };
+    const slug = tenantSlug?.trim();
+    if (slug) {
+      const [ms365, google] = await Promise.all([
+        resolveMs365OAuthCreds(slug),
+        resolveGoogleOAuthCreds(slug)
+      ]);
+      return { ms365: Boolean(ms365), google: Boolean(google) };
+    }
+    return {
+      ms365:  Boolean(config.MS365_CLIENT_ID && config.MS365_CLIENT_SECRET),
+      google: Boolean(config.GOOGLE_CLIENT_ID && config.GOOGLE_CLIENT_SECRET)
+    };
+  });
 
   app.get("/auth/resolve-domain", async (request, reply) => {
     const host = (request.query as { host?: string }).host?.trim().toLowerCase();

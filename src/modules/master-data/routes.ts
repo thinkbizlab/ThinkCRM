@@ -5,6 +5,7 @@ import { listVisibleUserIds, requireRoleAtLeast, requireTenantId, requireUserId,
 import { writeEntityChangelog } from "../../lib/changelog.js";
 import { prisma } from "../../lib/prisma.js";
 import { validateCustomFields, asRecord } from "../../lib/custom-fields.js";
+import { logAuditEvent } from "../../lib/audit.js";
 
 const customFieldValuesSchema = z.record(z.string(), z.unknown());
 
@@ -75,7 +76,7 @@ const customerSchema = z.object({
   externalRef: z.string().trim().max(100).optional(),
   customFields: customFieldValuesSchema.optional()
 });
-const customerUpdateSchema = customerSchema.partial().extend({
+const customerUpdateSchema = customerSchema.omit({ customerCode: true }).partial().extend({
   defaultTermId: z.string().min(1).optional()
 });
 
@@ -451,7 +452,6 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       const updated = await tx.customer.update({
         where: { id: params.id },
         data: {
-          customerCode: parsed.data.customerCode,
           name: parsed.data.name,
           customerType: parsed.data.customerType,
           taxId: parsed.data.taxId,
@@ -842,5 +842,175 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     } catch {
       return []; // Fail gracefully — autocomplete is non-critical
     }
+  });
+
+  // ── Master data bulk import (xlsx-friendly) ───────────────────────────────
+  // All three endpoints accept { rows: [...] } and upsert on the natural unique key.
+  // Rows with validation issues are collected into errorDetails; valid rows are applied.
+
+  const readRows = (body: unknown): unknown[] => {
+    if (Array.isArray(body)) return body;
+    const r = (body as Record<string, unknown>)?.rows;
+    return Array.isArray(r) ? r : [];
+  };
+
+  const paymentTermImportRow = z.object({
+    code: z.string().trim().min(2).max(30),
+    name: z.string().trim().min(2).max(120),
+    dueDays: z.coerce.number().int().min(0).max(365)
+  });
+
+  app.post("/payment-terms/import", async (request) => {
+    requireRoleAtLeast(request, UserRole.MANAGER);
+    const tenantId = requireTenantId(request);
+    const rawRows = readRows(request.body);
+    if (!rawRows.length) throw app.httpErrors.badRequest("Expected { rows: [...] } with at least one row.");
+    if (rawRows.length > 1000) throw app.httpErrors.badRequest("Maximum 1000 rows per import.");
+
+    const errors: { row: number; code?: string; error: string }[] = [];
+    let imported = 0;
+    for (let i = 0; i < rawRows.length; i++) {
+      const parsed = paymentTermImportRow.safeParse(rawRows[i]);
+      if (!parsed.success) {
+        errors.push({ row: i + 1, error: zodMsg(parsed.error) });
+        continue;
+      }
+      const row = parsed.data;
+      try {
+        await prisma.paymentTerm.upsert({
+          where: { tenantId_code: { tenantId, code: row.code } },
+          update: { name: row.name, dueDays: row.dueDays },
+          create: { tenantId, code: row.code, name: row.name, dueDays: row.dueDays }
+        });
+        imported += 1;
+      } catch (error) {
+        errors.push({ row: i + 1, code: row.code, error: (error as Error).message });
+      }
+    }
+
+    await logAuditEvent(tenantId, requireUserId(request), "PAYMENT_TERM_IMPORT", {
+      total: rawRows.length, imported, errors: errors.length, errorSample: errors.slice(0, 5)
+    }, request.ip);
+
+    return { imported, errors: errors.length, errorDetails: errors };
+  });
+
+  const itemImportRow = z.object({
+    itemCode: z.string().trim().min(1).max(40),
+    name: z.string().trim().min(2).max(200),
+    unitPrice: z.coerce.number().nonnegative(),
+    externalRef: z.string().trim().max(100).optional()
+  });
+
+  app.post("/items/import", async (request) => {
+    requireRoleAtLeast(request, UserRole.MANAGER);
+    const tenantId = requireTenantId(request);
+    const rawRows = readRows(request.body);
+    if (!rawRows.length) throw app.httpErrors.badRequest("Expected { rows: [...] } with at least one row.");
+    if (rawRows.length > 1000) throw app.httpErrors.badRequest("Maximum 1000 rows per import.");
+
+    const errors: { row: number; itemCode?: string; error: string }[] = [];
+    let imported = 0;
+    for (let i = 0; i < rawRows.length; i++) {
+      const parsed = itemImportRow.safeParse(rawRows[i]);
+      if (!parsed.success) {
+        errors.push({ row: i + 1, error: zodMsg(parsed.error) });
+        continue;
+      }
+      const row = parsed.data;
+      try {
+        await prisma.item.upsert({
+          where: { tenantId_itemCode: { tenantId, itemCode: row.itemCode } },
+          update: { name: row.name, unitPrice: row.unitPrice, externalRef: row.externalRef || null },
+          create: { tenantId, itemCode: row.itemCode, name: row.name, unitPrice: row.unitPrice, externalRef: row.externalRef || null }
+        });
+        imported += 1;
+      } catch (error) {
+        errors.push({ row: i + 1, itemCode: row.itemCode, error: (error as Error).message });
+      }
+    }
+
+    await logAuditEvent(tenantId, requireUserId(request), "ITEM_IMPORT", {
+      total: rawRows.length, imported, errors: errors.length, errorSample: errors.slice(0, 5)
+    }, request.ip);
+
+    return { imported, errors: errors.length, errorDetails: errors };
+  });
+
+  const customerImportRow = z.object({
+    customerCode: z.string().trim().min(2).max(40),
+    name: z.string().trim().min(2).max(200),
+    paymentTermCode: z.string().trim().min(1).max(30),
+    customerType: z.nativeEnum(CustomerType).optional(),
+    taxId: z.string().trim().max(20).optional(),
+    externalRef: z.string().trim().max(100).optional(),
+    siteLat: z.coerce.number().min(-90).max(90).optional(),
+    siteLng: z.coerce.number().min(-180).max(180).optional()
+  });
+
+  app.post("/customers/import", async (request) => {
+    requireRoleAtLeast(request, UserRole.MANAGER);
+    const tenantId = requireTenantId(request);
+    const ownerId = requireUserId(request);
+    const rawRows = readRows(request.body);
+    if (!rawRows.length) throw app.httpErrors.badRequest("Expected { rows: [...] } with at least one row.");
+    if (rawRows.length > 1000) throw app.httpErrors.badRequest("Maximum 1000 rows per import.");
+
+    const terms = await prisma.paymentTerm.findMany({
+      where: { tenantId, isActive: true },
+      select: { id: true, code: true }
+    });
+    const termIdByCode = new Map(terms.map((t) => [t.code.toLowerCase(), t.id]));
+
+    const errors: { row: number; customerCode?: string; error: string }[] = [];
+    let imported = 0;
+    for (let i = 0; i < rawRows.length; i++) {
+      const parsed = customerImportRow.safeParse(rawRows[i]);
+      if (!parsed.success) {
+        errors.push({ row: i + 1, error: zodMsg(parsed.error) });
+        continue;
+      }
+      const row = parsed.data;
+      const defaultTermId = termIdByCode.get(row.paymentTermCode.toLowerCase());
+      if (!defaultTermId) {
+        errors.push({ row: i + 1, customerCode: row.customerCode, error: `paymentTermCode "${row.paymentTermCode}" not found.` });
+        continue;
+      }
+      try {
+        await prisma.customer.upsert({
+          where: { tenantId_customerCode: { tenantId, customerCode: row.customerCode } },
+          update: {
+            name: row.name,
+            defaultTermId,
+            customerType: row.customerType,
+            taxId: row.taxId || null,
+            externalRef: row.externalRef || null,
+            siteLat: row.siteLat,
+            siteLng: row.siteLng
+          },
+          create: {
+            tenantId,
+            ownerId,
+            customerCode: row.customerCode,
+            name: row.name,
+            defaultTermId,
+            customerType: row.customerType ?? CustomerType.COMPANY,
+            taxId: row.taxId || null,
+            externalRef: row.externalRef || null,
+            siteLat: row.siteLat,
+            siteLng: row.siteLng
+          }
+        });
+        imported += 1;
+      } catch (error) {
+        errors.push({ row: i + 1, customerCode: row.customerCode, error: (error as Error).message });
+      }
+    }
+
+    await logAuditEvent(tenantId, ownerId, "CUSTOMER_IMPORT", {
+      total: rawRows.length, imported, errors: errors.length, errorSample: errors.slice(0, 5)
+    }, request.ip);
+
+    return { imported, errors: errors.length, errorDetails: errors };
   });
 };

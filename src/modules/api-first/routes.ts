@@ -13,6 +13,7 @@ import {
 } from "../../lib/http.js";
 import { hashPassword } from "../../lib/password.js";
 import { prisma } from "../../lib/prisma.js";
+import { logAuditEvent } from "../../lib/audit.js";
 import { assertSeatAvailable } from "../../lib/plan-limits.js";
 import { updateSubscriptionSeatCount } from "../../lib/subscription-seats.js";
 import { validateCustomFields, asRecord as asRecordCf } from "../../lib/custom-fields.js";
@@ -532,6 +533,19 @@ export const apiFirstRoutes: FastifyPluginAsync = async (app) => {
         created.push({ email: row.email, role: row.role });
       }
     }
+
+    await logAuditEvent(
+      tenantId,
+      requireUserId(request),
+      "USER_IMPORT",
+      {
+        total: rawRows.length,
+        created: created.length,
+        errors: errors.length,
+        errorSample: errors.slice(0, 5)
+      },
+      request.ip
+    );
 
     return reply.code(created.length > 0 ? 201 : 200).send({
       created: created.length,

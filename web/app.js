@@ -82,7 +82,9 @@ async function fetchLoginBranding(slug) {
     // Still try to apply branding from the prefilled workspace slug
     const slugInput = loginForm.querySelector('[name="tenantSlug"]');
     if (slugInput?.value) fetchLoginBranding(slugInput.value);
-    loadOAuthProviderButtons();
+    loadOAuthProviderButtons({
+      getTenantSlug: () => loginForm.querySelector('[name="tenantSlug"]')?.value?.trim()
+    });
     return;
   }
   try {
@@ -110,7 +112,9 @@ async function fetchLoginBranding(slug) {
     debounceTimer = setTimeout(() => {
       const slug = slugInput.value.trim();
       fetchLoginBranding(slug);
-      loadOAuthProviderButtons();
+      loadOAuthProviderButtons({
+      getTenantSlug: () => loginForm.querySelector('[name="tenantSlug"]')?.value?.trim()
+    });
     }, 500);
   });
 })();
@@ -680,6 +684,241 @@ function syncUserEditFromLocation() {
 }
 
 
+// ── Import History / Import Modal / Template download (module-level helpers) ──
+
+async function openImportHistoryModal(type, title) {
+  const overlay = document.createElement("div");
+  overlay.className = "popup-overlay";
+  overlay.innerHTML = `
+    <div class="popup-box popup-box--wide" role="dialog" aria-modal="true">
+      <div class="popup-header">
+        <p class="popup-title">${escHtml(title)}</p>
+        <button class="popup-close-btn" aria-label="Close">✕</button>
+      </div>
+      <div style="padding:var(--sp-3) 0;display:flex;flex-direction:column;gap:var(--sp-2)">
+        <p class="muted small">Showing the 50 most recent imports for this workspace.</p>
+        <div class="history-body"><div class="muted small">Loading…</div></div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  requestAnimationFrame(() => overlay.classList.add("popup-visible"));
+  const close = () => {
+    overlay.classList.remove("popup-visible");
+    overlay.addEventListener("transitionend", () => overlay.remove(), { once: true });
+  };
+  overlay.querySelector(".popup-close-btn").addEventListener("click", close);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+
+  const body = overlay.querySelector(".history-body");
+  try {
+    const rows = await api(`/import-logs?type=${encodeURIComponent(type)}`);
+    if (!rows.length) {
+      body.innerHTML = `<div class="empty-state compact"><div><strong>No imports yet</strong><p>Import results will appear here.</p></div></div>`;
+      return;
+    }
+    body.innerHTML = `
+      <div class="list" style="max-height:60vh;overflow:auto">
+        ${rows.map((r) => {
+          const d = r.detail || {};
+          const success = type === "users" ? d.created ?? 0 : d.imported ?? 0;
+          const successLabel = type === "users" ? "created" : "imported";
+          const errorCount = d.errors ?? 0;
+          const total = d.total ?? (success + errorCount);
+          const actorLabel = r.actor?.fullName || r.actor?.email || "—";
+          const errSample = Array.isArray(d.errorSample) ? d.errorSample : [];
+          const errHtml = errSample.length
+            ? `<details style="margin-top:var(--sp-1)"><summary class="small muted" style="cursor:pointer">Sample errors (${errorCount})</summary>
+                 <div class="small" style="margin-top:var(--sp-1);color:var(--clr-danger)">
+                   ${errSample.map((e) => `Row ${e.row}${e.email ? ` (${escHtml(e.email)})` : ""}: ${escHtml(e.error || "")}`).join("<br>")}
+                 </div>
+               </details>`
+            : "";
+          return `
+            <div class="row">
+              <div style="display:flex;justify-content:space-between;gap:var(--sp-2);flex-wrap:wrap">
+                <div>
+                  <strong>${asDate(r.createdAt)}</strong>
+                  <div class="muted small">by ${escHtml(actorLabel)}</div>
+                </div>
+                <div style="text-align:right">
+                  <span class="chip ${errorCount ? "chip-warning" : "chip-success"}">${success} ${successLabel}</span>
+                  ${errorCount ? `<span class="chip chip-danger">${errorCount} error${errorCount === 1 ? "" : "s"}</span>` : ""}
+                  <div class="muted small">${total} total row(s)</div>
+                </div>
+              </div>
+              ${errHtml}
+            </div>`;
+        }).join("")}
+      </div>`;
+  } catch (err) {
+    body.innerHTML = `<div class="small" style="color:var(--clr-danger)">${escHtml(err.message || "Failed to load history.")}</div>`;
+  }
+}
+
+const MASTER_DATA_IMPORT_SPECS = {
+  "payment-terms": {
+    label: "Payment Terms",
+    endpoint: "/payment-terms/import",
+    columns: ["code", "name", "dueDays"],
+    sample: [
+      { code: "NET30",  name: "Net 30 days",  dueDays: 30 },
+      { code: "NET60",  name: "Net 60 days",  dueDays: 60 },
+      { code: "COD",    name: "Cash on delivery", dueDays: 0 }
+    ],
+    sourceRows: () => (state.cache.paymentTerms || []).map((p) => ({
+      code: p.code, name: p.name, dueDays: p.dueDays
+    })),
+    fileBase: "payment-terms"
+  },
+  "items": {
+    label: "Items",
+    endpoint: "/items/import",
+    columns: ["itemCode", "name", "unitPrice", "externalRef"],
+    sample: [
+      { itemCode: "SKU-001", name: "Example Product A", unitPrice: 500,  externalRef: "" },
+      { itemCode: "SKU-002", name: "Example Product B", unitPrice: 1250, externalRef: "LEGACY-42" }
+    ],
+    sourceRows: () => (state.cache.items || []).map((it) => ({
+      itemCode: it.itemCode, name: it.name, unitPrice: it.unitPrice, externalRef: it.externalRef || ""
+    })),
+    fileBase: "items"
+  },
+  "customers": {
+    label: "Customers",
+    endpoint: "/customers/import",
+    columns: ["customerCode", "name", "paymentTermCode", "customerType", "taxId", "externalRef", "siteLat", "siteLng"],
+    sample: [
+      { customerCode: "CUST-0001", name: "Acme Co., Ltd.", paymentTermCode: "NET30", customerType: "COMPANY", taxId: "0105555123456", externalRef: "", siteLat: 13.7563, siteLng: 100.5018 },
+      { customerCode: "CUST-0002", name: "Jane Individual",  paymentTermCode: "COD",   customerType: "INDIVIDUAL", taxId: "", externalRef: "", siteLat: "", siteLng: "" }
+    ],
+    sourceRows: () => {
+      const terms = state.cache.paymentTerms || [];
+      const codeById = new Map(terms.map((t) => [t.id, t.code]));
+      return (state.cache.customers || []).map((c) => ({
+        customerCode: c.customerCode,
+        name: c.name,
+        paymentTermCode: c.paymentTerm?.code || codeById.get(c.defaultTermId) || "",
+        customerType: c.customerType || "COMPANY",
+        taxId: c.taxId || "",
+        externalRef: c.externalRef || "",
+        siteLat: c.siteLat ?? "",
+        siteLng: c.siteLng ?? ""
+      }));
+    },
+    fileBase: "customers"
+  }
+};
+
+function downloadMasterDataTemplate(entity) {
+  const spec = MASTER_DATA_IMPORT_SPECS[entity];
+  if (!spec) return;
+  const historyRows = spec.sourceRows();
+  const rows = historyRows.length ? historyRows : spec.sample;
+  const ws = XLSX.utils.json_to_sheet(rows, { header: spec.columns });
+  ws["!cols"] = spec.columns.map(() => ({ wch: 20 }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, spec.label.slice(0, 31));
+  XLSX.writeFile(wb, `${spec.fileBase}-template.xlsx`);
+}
+
+function openMasterDataImportModal(entity) {
+  const spec = MASTER_DATA_IMPORT_SPECS[entity];
+  if (!spec) return;
+  const overlay = document.createElement("div");
+  overlay.className = "popup-overlay";
+  overlay.innerHTML = `
+    <div class="popup-box popup-box--wide" role="dialog" aria-modal="true">
+      <div class="popup-header">
+        <p class="popup-title">Import ${escHtml(spec.label)}</p>
+        <button class="popup-close-btn" aria-label="Close">✕</button>
+      </div>
+      <div style="padding:var(--sp-3) 0;display:flex;flex-direction:column;gap:var(--sp-3)">
+        <p class="muted small">Upload an Excel (.xlsx) file. Required columns: ${spec.columns.map(c => `<code>${c}</code>`).join(", ")}. Existing rows (matched by natural key) are overwritten.</p>
+        <input type="file" class="md-import-file" accept=".xlsx,.xls" style="font-size:0.85rem" />
+        <p class="md-import-msg muted small" style="min-height:1.2em"></p>
+        <div class="md-import-results" hidden></div>
+        <div class="popup-actions">
+          <button class="popup-cancel-btn">Cancel</button>
+          <button class="md-import-submit-btn" disabled>Import</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  requestAnimationFrame(() => overlay.classList.add("popup-visible"));
+  const close = () => {
+    overlay.classList.remove("popup-visible");
+    overlay.addEventListener("transitionend", () => overlay.remove(), { once: true });
+  };
+  overlay.querySelector(".popup-close-btn").addEventListener("click", close);
+  overlay.querySelector(".popup-cancel-btn").addEventListener("click", close);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+
+  const fileInput = overlay.querySelector(".md-import-file");
+  const submitBtn = overlay.querySelector(".md-import-submit-btn");
+  const msg = overlay.querySelector(".md-import-msg");
+  const resultsDiv = overlay.querySelector(".md-import-results");
+  let parsedRows = null;
+
+  fileInput.addEventListener("change", async () => {
+    const file = fileInput.files[0];
+    if (!file) { submitBtn.disabled = true; parsedRows = null; return; }
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array" });
+      const sheetName = wb.SheetNames[0];
+      if (!sheetName) throw new Error("Excel file has no sheets.");
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "", raw: false });
+      const normalized = rows
+        .map((r) => {
+          const out = {};
+          for (const k of Object.keys(r)) {
+            const v = r[k];
+            if (v === "" || v == null) continue;
+            out[String(k).trim()] = typeof v === "string" ? v.trim() : v;
+          }
+          return out;
+        })
+        .filter((r) => Object.keys(r).length > 0);
+      if (!normalized.length) throw new Error("No data rows found.");
+      parsedRows = normalized;
+      msg.textContent = `${normalized.length} row(s) found in file.`;
+      msg.style.color = "";
+      submitBtn.disabled = false;
+    } catch (err) {
+      msg.textContent = err.message || "Could not read Excel file.";
+      msg.style.color = "var(--clr-danger)";
+      submitBtn.disabled = true;
+      parsedRows = null;
+    }
+  });
+
+  submitBtn.addEventListener("click", async () => {
+    if (!parsedRows) return;
+    submitBtn.disabled = true;
+    msg.textContent = "Importing…";
+    msg.style.color = "";
+    try {
+      const res = await api(spec.endpoint, { method: "POST", body: { rows: parsedRows } });
+      msg.textContent = `Done — ${res.imported} imported, ${res.errors} error(s).`;
+      msg.style.color = res.errors ? "var(--clr-warning)" : "var(--clr-success)";
+      if (res.errorDetails?.length) {
+        resultsDiv.hidden = false;
+        resultsDiv.innerHTML = `<div class="small" style="max-height:200px;overflow:auto;background:var(--clr-surface);padding:var(--sp-2);border-radius:6px">`
+          + res.errorDetails.map((e) => {
+              const hint = e.customerCode || e.itemCode || e.code;
+              return `<div style="color:var(--clr-danger)">Row ${e.row}${hint ? ` (${escHtml(hint)})` : ""}: ${escHtml(e.error)}</div>`;
+            }).join("")
+          + `</div>`;
+      }
+      if (res.imported > 0) setTimeout(() => { loadMaster(); }, 800);
+    } catch (err) {
+      msg.textContent = err.message || "Import failed.";
+      msg.style.color = "var(--clr-danger)";
+      submitBtn.disabled = false;
+    }
+  });
+}
+
 function renderMasterData(paymentTerms) {
   const termOptions = paymentTerms
     .map((term) => `<option value="${term.id}">${escHtml(term.code)} - ${escHtml(term.name)}</option>`)
@@ -687,10 +926,17 @@ function renderMasterData(paymentTerms) {
   const paymentTermFieldDefinitions = getCustomFieldDefinitions("payment-terms");
   const itemFieldDefinitions = getCustomFieldDefinitions("items");
   const isAdmin = state.user?.role === "ADMIN";
+  const canManageMaster = isAdmin || state.user?.role === "DIRECTOR" || state.user?.role === "MANAGER";
   const exportBtn = (id) => isAdmin ? `
     <div style="margin-left:auto;display:inline-flex">
       <button class="ghost export-btn" data-export="${id}" data-format="xlsx" style="font-size:0.8rem;border-right:none;border-radius:var(--r) 0 0 var(--r);padding-right:var(--sp-2)">↓ Excel</button>
       <button class="ghost export-chevron" data-export="${id}" style="font-size:0.8rem;border-radius:0 var(--r) var(--r) 0;padding:0 var(--sp-2)" aria-label="More export formats">▾</button>
+    </div>` : "";
+  const importBtns = (id) => canManageMaster ? `
+    <div style="display:inline-flex;gap:var(--sp-1);margin-left:var(--sp-2)">
+      <button class="ghost small md-template-btn" data-entity="${id}" style="font-size:0.8rem">⬇ Template</button>
+      <button class="ghost small md-import-btn"   data-entity="${id}" style="font-size:0.8rem">Import</button>
+      <button class="ghost small md-history-btn"  data-entity="${id}" style="font-size:0.8rem">History</button>
     </div>` : "";
 
   views.master.innerHTML = `
@@ -704,6 +950,7 @@ function renderMasterData(paymentTerms) {
     <section class="card" ${state.masterPage !== "payment-terms" ? 'style="display:none"' : ""}>
       <div style="display:flex;align-items:center;margin-bottom:var(--sp-4)">
         <h3 class="section-title" style="margin:0">Payment Terms</h3>
+        ${importBtns("payment-terms")}
         ${exportBtn("payment-terms")}
       </div>
       <form id="payment-term-form" class="mini-form">
@@ -753,6 +1000,7 @@ function renderMasterData(paymentTerms) {
     <section class="card" ${state.masterPage !== "customers" ? 'style="display:none"' : ""} id="customers-section">
       <div style="display:flex;align-items:center;margin-bottom:var(--sp-4)">
         <h3 class="section-title" style="margin:0">Customers</h3>
+        ${importBtns("customers")}
         ${exportBtn("customers")}
       </div>
       <div id="cust-list-mount"></div>
@@ -760,6 +1008,7 @@ function renderMasterData(paymentTerms) {
     <section class="card" ${state.masterPage !== "items" ? 'style="display:none"' : ""}>
       <div style="display:flex;align-items:center;margin-bottom:var(--sp-4)">
         <h3 class="section-title" style="margin:0">Items</h3>
+        ${importBtns("items")}
         ${exportBtn("items")}
       </div>
       <form id="item-form" class="mini-form">
@@ -892,6 +1141,22 @@ function renderMasterData(paymentTerms) {
     } catch (error) {
       setStatus(error.message, true);
     }
+  });
+
+  views.master.querySelectorAll(".md-template-btn").forEach((btn) => {
+    btn.addEventListener("click", () => downloadMasterDataTemplate(btn.dataset.entity));
+  });
+  views.master.querySelectorAll(".md-import-btn").forEach((btn) => {
+    btn.addEventListener("click", () => openMasterDataImportModal(btn.dataset.entity));
+  });
+  views.master.querySelectorAll(".md-history-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const entity = btn.dataset.entity;
+      const title = entity === "customers" ? "Customer Import History"
+        : entity === "items" ? "Item Import History"
+        : "Payment Term Import History";
+      openImportHistoryModal(entity, title);
+    });
   });
 
   views.master.querySelectorAll(".payment-term-toggle").forEach((btn) => {
@@ -3547,7 +3812,8 @@ function renderSettings() {
         </select>
         <button class="rp-refresh-btn" id="rp-refresh-btn">↻ Refresh</button>
         ${isAdmin ? `<button class="ghost small" id="rp-invite-btn">+ Invite User</button>
-        <button class="ghost small" id="rp-import-btn">Import Users</button>` : ""}
+        <button class="ghost small" id="rp-import-btn">Import Users</button>
+        <button class="ghost small" id="rp-import-history-btn">Import History</button>` : ""}
         <span class="rp-user-count">${allUsers.length} users</span>
       </div>
 
@@ -3653,7 +3919,16 @@ function renderSettings() {
       </section>
 
       <section class="card">
-        <h3 class="section-title">📊 KPI Targets</h3>
+        <div class="inline-actions wrap" style="justify-content:space-between;align-items:center;margin-bottom:var(--sp-3)">
+          <h3 class="section-title" style="margin:0">📊 KPI Targets</h3>
+          ${canEditKpi ? `
+            <div class="inline-actions">
+              <button class="ghost small" id="kpi-template-btn" type="button">⬇ Download Template</button>
+              <button class="ghost small" id="kpi-import-btn" type="button">Import KPI Targets</button>
+              <button class="ghost small" id="kpi-import-history-btn" type="button">Import History</button>
+            </div>
+          ` : ""}
+        </div>
         ${state.cache.kpiTargets.length ? `
           <div class="roles-table kpi-table">
             <div class="roles-table-head">
@@ -4965,6 +5240,9 @@ function renderSettings() {
     });
   });
 
+  qs("#rp-import-history-btn")?.addEventListener("click", () => openImportHistoryModal("users", "User Import History"));
+  qs("#kpi-import-history-btn")?.addEventListener("click", () => openImportHistoryModal("kpi", "KPI Target Import History"));
+
   // ── Import Users (S12) ──────────────────────────────────────────
   qs("#rp-import-btn")?.addEventListener("click", () => {
     const overlay = document.createElement("div");
@@ -4976,12 +5254,11 @@ function renderSettings() {
           <button class="popup-close-btn" aria-label="Close">✕</button>
         </div>
         <div style="padding:var(--sp-3) 0;display:flex;flex-direction:column;gap:var(--sp-3)">
-          <p class="muted small">Upload a JSON file with an array of users. Each user needs: <code>email</code>, <code>fullName</code>, <code>role</code> (REP, SUPERVISOR, MANAGER, DIRECTOR, ADMIN). Optional: <code>teamName</code> (matched by name) or <code>teamId</code>.</p>
-          <pre class="small" style="background:var(--clr-surface);padding:var(--sp-2);border-radius:6px;overflow-x:auto">[
-  { "email": "rep@co.com", "fullName": "John Doe", "role": "REP", "teamName": "Bangkok North" },
-  { "email": "mgr@co.com", "fullName": "Jane Mgr", "role": "MANAGER" }
-]</pre>
-          <input type="file" id="import-file-input" accept=".json" style="font-size:0.85rem" />
+          <p class="muted small">Upload an Excel (.xlsx) file. Required columns: <code>email</code>, <code>fullName</code>, <code>role</code> (REP, SUPERVISOR, MANAGER, DIRECTOR, ADMIN). Optional: <code>teamName</code>.</p>
+          <div class="inline-actions">
+            <button class="ghost small import-template-btn" type="button">⬇ Download Template</button>
+          </div>
+          <input type="file" id="import-file-input" accept=".xlsx,.xls" style="font-size:0.85rem" />
           <p class="import-form-msg muted small" style="min-height:1.2em"></p>
           <div class="import-results" hidden></div>
           <div class="popup-actions">
@@ -5006,28 +5283,54 @@ function renderSettings() {
     const submitBtn = overlay.querySelector(".import-submit-btn");
     const msg = overlay.querySelector(".import-form-msg");
     const resultsDiv = overlay.querySelector(".import-results");
+    const templateBtn = overlay.querySelector(".import-template-btn");
 
-    fileInput.addEventListener("change", () => {
+    templateBtn?.addEventListener("click", () => {
+      const sample = [
+        { email: "rep@example.com",        fullName: "John Doe",   role: "REP",        teamName: "Bangkok North" },
+        { email: "supervisor@example.com", fullName: "Alice Sup",  role: "SUPERVISOR", teamName: "Bangkok North" },
+        { email: "manager@example.com",    fullName: "Jane Mgr",   role: "MANAGER",    teamName: "" },
+        { email: "director@example.com",   fullName: "Bob Dir",    role: "DIRECTOR",   teamName: "" }
+      ];
+      const ws = XLSX.utils.json_to_sheet(sample, { header: ["email", "fullName", "role", "teamName"] });
+      ws["!cols"] = [{ wch: 28 }, { wch: 22 }, { wch: 12 }, { wch: 22 }];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Users");
+      XLSX.writeFile(wb, "user-import-template.xlsx");
+    });
+
+    fileInput.addEventListener("change", async () => {
       const file = fileInput.files[0];
-      if (!file) { submitBtn.disabled = true; return; }
-      const reader = new FileReader();
-      reader.onload = () => {
-        try {
-          let data = JSON.parse(reader.result);
-          if (data && !Array.isArray(data) && Array.isArray(data.users)) data = data.users;
-          if (!Array.isArray(data)) throw new Error("File must contain a JSON array.");
-          parsedUsers = data;
-          msg.textContent = `${data.length} user(s) found in file.`;
-          msg.style.color = "";
-          submitBtn.disabled = false;
-        } catch (err) {
-          msg.textContent = err.message;
-          msg.style.color = "var(--clr-danger)";
-          submitBtn.disabled = true;
-          parsedUsers = null;
-        }
-      };
-      reader.readAsText(file);
+      if (!file) { submitBtn.disabled = true; parsedUsers = null; return; }
+      try {
+        const buf = await file.arrayBuffer();
+        const wb = XLSX.read(buf, { type: "array" });
+        const sheetName = wb.SheetNames[0];
+        if (!sheetName) throw new Error("Excel file has no sheets.");
+        const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "", raw: false });
+        const normalized = rows
+          .map((r) => {
+            const out = {};
+            for (const k of Object.keys(r)) {
+              const v = r[k];
+              if (v === "" || v == null) continue;
+              out[String(k).trim()] = typeof v === "string" ? v.trim() : v;
+            }
+            if (out.role) out.role = String(out.role).toUpperCase();
+            return out;
+          })
+          .filter((r) => r.email);
+        if (!normalized.length) throw new Error("No rows with an email column found.");
+        parsedUsers = normalized;
+        msg.textContent = `${normalized.length} user(s) found in file.`;
+        msg.style.color = "";
+        submitBtn.disabled = false;
+      } catch (err) {
+        msg.textContent = err.message || "Could not read Excel file.";
+        msg.style.color = "var(--clr-danger)";
+        submitBtn.disabled = true;
+        parsedUsers = null;
+      }
     });
 
     submitBtn.addEventListener("click", async () => {
@@ -5281,6 +5584,148 @@ function renderSettings() {
       }
     });
   }
+
+  qs("#kpi-template-btn")?.addEventListener("click", () => {
+    const reps = Array.isArray(state.cache.salesReps) ? state.cache.salesReps : [];
+    const targets = Array.isArray(state.cache.kpiTargets) ? state.cache.kpiTargets : [];
+    const currentMonth = new Date().toISOString().slice(0, 7);
+    const rows = [];
+    for (const t of targets) {
+      if (!t.rep?.email) continue;
+      rows.push({
+        email: t.rep.email,
+        fullName: t.rep.fullName || "",
+        targetMonth: t.targetMonth,
+        visitTargetCount: t.visitTargetCount,
+        newDealValueTarget: t.newDealValueTarget,
+        revenueTarget: t.revenueTarget
+      });
+    }
+    const repsWithHistory = new Set(rows.map((r) => r.email.toLowerCase()));
+    for (const rep of reps) {
+      if (!rep.email || repsWithHistory.has(rep.email.toLowerCase())) continue;
+      rows.push({
+        email: rep.email,
+        fullName: rep.fullName || "",
+        targetMonth: currentMonth,
+        visitTargetCount: 0,
+        newDealValueTarget: 0,
+        revenueTarget: 0
+      });
+    }
+    rows.sort((a, b) => (a.email.localeCompare(b.email) || b.targetMonth.localeCompare(a.targetMonth)));
+    if (!rows.length) {
+      rows.push({ email: "rep@example.com", fullName: "Example Rep", targetMonth: currentMonth, visitTargetCount: 20, newDealValueTarget: 500000, revenueTarget: 300000 });
+    }
+    const header = ["email", "fullName", "targetMonth", "visitTargetCount", "newDealValueTarget", "revenueTarget"];
+    const ws = XLSX.utils.json_to_sheet(rows, { header });
+    ws["!cols"] = [{ wch: 28 }, { wch: 22 }, { wch: 12 }, { wch: 14 }, { wch: 20 }, { wch: 16 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "KPI Targets");
+    XLSX.writeFile(wb, `kpi-target-template-${currentMonth}.xlsx`);
+  });
+
+  qs("#kpi-import-btn")?.addEventListener("click", () => {
+    const overlay = document.createElement("div");
+    overlay.className = "popup-overlay";
+    overlay.innerHTML = `
+      <div class="popup-box popup-box--wide" role="dialog" aria-modal="true">
+        <div class="popup-header">
+          <p class="popup-title">Import KPI Targets</p>
+          <button class="popup-close-btn" aria-label="Close">✕</button>
+        </div>
+        <div style="padding:var(--sp-3) 0;display:flex;flex-direction:column;gap:var(--sp-3)">
+          <p class="muted small">Upload an Excel (.xlsx) file. Required columns: <code>email</code>, <code>targetMonth</code> (YYYY-MM), <code>visitTargetCount</code>, <code>newDealValueTarget</code>, <code>revenueTarget</code>. Existing rows for the same rep + month are overwritten.</p>
+          <input type="file" id="kpi-import-file" accept=".xlsx,.xls" style="font-size:0.85rem" />
+          <p class="kpi-import-msg muted small" style="min-height:1.2em"></p>
+          <div class="kpi-import-results" hidden></div>
+          <div class="popup-actions">
+            <button class="popup-cancel-btn">Cancel</button>
+            <button class="kpi-import-submit-btn" disabled>Import</button>
+          </div>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add("popup-visible"));
+    const close = () => {
+      overlay.classList.remove("popup-visible");
+      overlay.addEventListener("transitionend", () => overlay.remove(), { once: true });
+    };
+    overlay.querySelector(".popup-close-btn").addEventListener("click", close);
+    overlay.querySelector(".popup-cancel-btn").addEventListener("click", close);
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+
+    const fileInput = overlay.querySelector("#kpi-import-file");
+    const submitBtn = overlay.querySelector(".kpi-import-submit-btn");
+    const msg = overlay.querySelector(".kpi-import-msg");
+    const resultsDiv = overlay.querySelector(".kpi-import-results");
+    let parsedRows = null;
+
+    fileInput.addEventListener("change", async () => {
+      const file = fileInput.files[0];
+      if (!file) { submitBtn.disabled = true; parsedRows = null; return; }
+      try {
+        const buf = await file.arrayBuffer();
+        const wb = XLSX.read(buf, { type: "array" });
+        const sheetName = wb.SheetNames[0];
+        if (!sheetName) throw new Error("Excel file has no sheets.");
+        const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "", raw: false });
+        const normalized = rows
+          .map((r) => {
+            const out = {};
+            for (const k of Object.keys(r)) {
+              const v = r[k];
+              if (v === "" || v == null) continue;
+              out[String(k).trim()] = typeof v === "string" ? v.trim() : v;
+            }
+            return out;
+          })
+          .filter((r) => r.email && r.targetMonth)
+          .map((r) => ({
+            email: String(r.email).toLowerCase(),
+            targetMonth: String(r.targetMonth).slice(0, 7),
+            visitTargetCount: Number(r.visitTargetCount ?? 0),
+            newDealValueTarget: Number(r.newDealValueTarget ?? 0),
+            revenueTarget: Number(r.revenueTarget ?? 0)
+          }));
+        if (!normalized.length) throw new Error("No rows with email + targetMonth found.");
+        parsedRows = normalized;
+        msg.textContent = `${normalized.length} row(s) found in file.`;
+        msg.style.color = "";
+        submitBtn.disabled = false;
+      } catch (err) {
+        msg.textContent = err.message || "Could not read Excel file.";
+        msg.style.color = "var(--clr-danger)";
+        submitBtn.disabled = true;
+        parsedRows = null;
+      }
+    });
+
+    submitBtn.addEventListener("click", async () => {
+      if (!parsedRows) return;
+      submitBtn.disabled = true;
+      msg.textContent = "Importing…";
+      msg.style.color = "";
+      try {
+        const res = await api("/kpi-targets/import", { method: "POST", body: { targets: parsedRows } });
+        msg.textContent = `Done — ${res.imported} imported, ${res.errors} error(s).`;
+        msg.style.color = res.errors ? "var(--clr-warning)" : "var(--clr-success)";
+        if (res.errorDetails?.length) {
+          resultsDiv.hidden = false;
+          resultsDiv.innerHTML = `<div class="small" style="max-height:200px;overflow:auto;background:var(--clr-surface);padding:var(--sp-2);border-radius:6px">`
+            + res.errorDetails.map((e) => `<div style="color:var(--clr-danger)">Row ${e.row}${e.email ? ` (${escHtml(e.email)})` : ""}: ${escHtml(e.error)}</div>`).join("")
+            + `</div>`;
+        }
+        if (res.imported > 0) {
+          setTimeout(() => { loadSettings(); loadDashboard(); }, 800);
+        }
+      } catch (err) {
+        msg.textContent = err.message || "Import failed.";
+        msg.style.color = "var(--clr-danger)";
+        submitBtn.disabled = false;
+      }
+    });
+  });
 
   views.settings.querySelectorAll(".kpi-edit").forEach((btn) => {
     btn.addEventListener("click", async () => {
@@ -6143,7 +6588,8 @@ function openNewCustomerModal(termOptions) {
             </div>
             <div class="ncm-field">
               <label class="ncm-label" for="ncm-code">Customer Code <span class="ncm-req">*</span></label>
-              <input class="ncm-input" id="ncm-code" name="customerCode" placeholder="e.g. CUST-000001" required />
+              <input class="ncm-input" id="ncm-code" name="customerCode" placeholder="Auto-generated" readonly aria-readonly="true" tabindex="-1" required />
+              <small class="muted">Auto-generated by the system.</small>
             </div>
           </div>
 
@@ -6570,7 +7016,8 @@ function openEditCustomerModal(cust, termOptions) {
       <form id="edit-cust-form" class="ncm-body" novalidate>
         <div class="ncm-row">
           <label class="ncm-label" for="ecm-code">Customer Code</label>
-          <input class="ncm-input" id="ecm-code" name="customerCode" value="${escHtml(cust.customerCode || "")}" required />
+          <input class="ncm-input" id="ecm-code" name="customerCode" value="${escHtml(cust.customerCode || "")}" readonly aria-readonly="true" tabindex="-1" required />
+          <small class="muted">System-generated. Not editable.</small>
         </div>
         <div class="ncm-row">
           <label class="ncm-label" for="ecm-name">Name</label>
