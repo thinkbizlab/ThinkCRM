@@ -1359,6 +1359,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 .chip {
   display: inline-flex;
   align-items: center;
+  gap: 5px;
   background: var(--surface-inset);
   border: 1px solid var(--border);
   border-radius: var(--r);
@@ -1371,6 +1372,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   white-space: nowrap;
   line-height: 1.6;
 }
+.chip svg { flex-shrink: 0; }
 
 .chip-primary  { background: var(--accent-subtle); border-color: oklch(82% 0.08 258); color: var(--accent-dim); }
 .chip-success  { background: var(--success-bg); border-color: oklch(74% 0.12 145); color: var(--success); }
