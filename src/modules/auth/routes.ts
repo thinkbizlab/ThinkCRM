@@ -1457,8 +1457,23 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
   // ── WebAuthn Passkey ──────────────────────────────────────────────────────────
 
-  /** Derive RP ID and origin from APP_URL config. */
-  function getWebAuthnRP(): { rpId: string; rpName: string; origin: string } {
+  /**
+   * Derive WebAuthn RP ID / origin from the incoming request so passkeys work on
+   * custom domains and subdomains. Falls back to APP_URL when no request is
+   * provided (e.g. unit tests). The browser enforces that rpId matches the
+   * current page's effective domain, so trusting request.hostname is safe.
+   */
+  function getWebAuthnRP(
+    request?: { protocol?: string; hostname?: string }
+  ): { rpId: string; rpName: string; origin: string } {
+    if (request?.hostname) {
+      const proto = request.protocol ?? "https";
+      return {
+        rpId: request.hostname,
+        rpName: "ThinkCRM",
+        origin: `${proto}://${request.hostname}`
+      };
+    }
     const appUrl = config.APP_URL ?? "http://localhost:3000";
     const url = new URL(appUrl);
     return {
@@ -1497,7 +1512,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.badRequest(`Maximum of ${MAX_PASSKEYS_PER_USER} passkeys per user. Remove an existing passkey first.`);
     }
 
-    const { rpId, rpName } = getWebAuthnRP();
+    const { rpId, rpName } = getWebAuthnRP(request);
 
     const options = await generateRegistrationOptions({
       rpName,
@@ -1553,7 +1568,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.badRequest("No pending registration challenge. Please start again.");
     }
 
-    const { rpId, origin } = getWebAuthnRP();
+    const { rpId, origin } = getWebAuthnRP(request);
 
     // Consume challenge immediately — single-use regardless of verification outcome
     await prisma.webAuthnChallenge.delete({ where: { id: challengeRecord.id } });
@@ -1621,7 +1636,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     // Return generic options even if user not found (timing attack defence)
     if (!user || user.passkeys.length === 0) {
       const dummyOptions = await generateAuthenticationOptions({
-        rpID: getWebAuthnRP().rpId,
+        rpID: getWebAuthnRP(request).rpId,
         userVerification: "preferred",
         allowCredentials: []
       });
@@ -1629,7 +1644,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       return dummyOptions;
     }
 
-    const { rpId } = getWebAuthnRP();
+    const { rpId } = getWebAuthnRP(request);
 
     const options = await generateAuthenticationOptions({
       rpID: rpId,
@@ -1702,7 +1717,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.unauthorized("Invalid tenant or credentials.");
     }
 
-    const { rpId, origin } = getWebAuthnRP();
+    const { rpId, origin } = getWebAuthnRP(request);
 
     // Consume challenge immediately — single-use regardless of verification outcome
     await prisma.webAuthnChallenge.delete({ where: { id: challengeRecord.id } });
