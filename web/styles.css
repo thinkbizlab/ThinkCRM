@@ -5926,6 +5926,52 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   border-radius: var(--r-lg) var(--r-lg) 0 0;
 }
 
+.modal-box {
+  position: relative;
+  background: var(--surface);
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+  box-shadow: 0 20px 60px rgba(0,0,0,.15), 0 4px 16px rgba(0,0,0,.06);
+  padding: 0 var(--sp-6) var(--sp-6);
+  width: 100%;
+  max-width: 560px;
+  max-height: 90vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  animation: modal-slide-up .3s cubic-bezier(.16,1,.3,1);
+}
+@media (min-width: 600px) {
+  .modal-box { border-radius: var(--r-lg); }
+}
+.modal-box::before {
+  content: "";
+  display: block;
+  height: 4px;
+  margin: 0 calc(-1 * var(--sp-6));
+  background: linear-gradient(90deg, var(--accent-dim), var(--accent-bright));
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+}
+
+.modal-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.modal-body {
+  padding-top: var(--sp-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  margin-top: var(--sp-4);
+}
+
 .modal-head {
   display: flex;
   align-items: flex-start;
