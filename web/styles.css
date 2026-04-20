@@ -5372,6 +5372,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   white-space: nowrap;
 }
 .rp-badge--admin      { background: oklch(35% 0.15 310 / 0.25); color: oklch(78% 0.18 310); border: 1px solid oklch(55% 0.18 310 / 0.3); }
+.rp-badge--director   { background: oklch(35% 0.15 340 / 0.25); color: oklch(78% 0.18 340); border: 1px solid oklch(55% 0.18 340 / 0.3); }
 .rp-badge--manager    { background: oklch(35% 0.15 240 / 0.25); color: oklch(75% 0.18 240); border: 1px solid oklch(55% 0.18 240 / 0.3); }
 .rp-badge--supervisor { background: oklch(40% 0.15 55  / 0.25); color: oklch(80% 0.18 55);  border: 1px solid oklch(65% 0.18 55  / 0.3); }
 .rp-badge--rep        { background: oklch(35% 0.15 150 / 0.25); color: oklch(75% 0.18 150); border: 1px solid oklch(55% 0.18 150 / 0.3); }
@@ -5445,26 +5446,27 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 
 .rp-thead {
   display: grid;
-  grid-template-columns: minmax(180px, 2fr) 140px minmax(150px, 1fr) 150px;
+  grid-template-columns: minmax(180px, 2fr) minmax(120px, 1fr) 140px minmax(150px, 1fr) 150px;
   gap: var(--sp-3);
   padding: var(--sp-2) var(--sp-4);
   font-size: 0.72rem; font-weight: 600; letter-spacing: 0.04em;
   color: var(--muted-color); text-transform: uppercase;
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
-  min-width: 560px;
+  min-width: 680px;
 }
 .rp-thead-note { text-transform: none; font-weight: 400; letter-spacing: 0; font-size: 0.68rem; }
 .rp-row {
   display: grid;
-  grid-template-columns: minmax(180px, 2fr) 140px minmax(150px, 1fr) 150px;
+  grid-template-columns: minmax(180px, 2fr) minmax(120px, 1fr) 140px minmax(150px, 1fr) 150px;
   gap: var(--sp-3);
   align-items: center;
   padding: var(--sp-3) var(--sp-4);
   border-bottom: 1px solid var(--border);
   transition: background 0.1s;
-  min-width: 560px;
+  min-width: 680px;
 }
+.rp-team-cell { font-size: 0.84rem; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rp-row:last-child { border-bottom: none; }
 .rp-row:hover { background: var(--surface); }
 
@@ -5543,8 +5545,8 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 
 @media (max-width: 900px) {
   .rp-thead, .rp-row { grid-template-columns: 1fr 130px; min-width: unset; }
-  .rp-thead span:nth-child(3), .rp-thead span:nth-child(4),
-  .rp-row span:nth-child(3), .rp-row .rp-role-change-cell { display: none; }
+  .rp-thead span:nth-child(2), .rp-thead span:nth-child(4), .rp-thead span:nth-child(5),
+  .rp-row .rp-team-cell, .rp-row span:nth-child(4), .rp-row .rp-role-change-cell { display: none; }
 }
 
 @media (max-width: 768px) {

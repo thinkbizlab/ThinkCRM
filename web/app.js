@@ -204,6 +204,7 @@ qs("#oauth-passkey-btn")?.addEventListener("click", loginWithPasskey);
   window.history.replaceState({ view: "repHub" }, "", "/task");
   switchView("repHub");
   paintRepHubFull();
+  hideAppLoading();
 })();
 // Handle platform Connect redirect-backs (?xxx_connected=1 or ?xxx_error=…)
 // Stash params before app loads; act on them once the shell is ready.
@@ -2818,8 +2819,8 @@ function renderSettings() {
 
   if (page === "my-profile") {
     const me = state.user;
-    const roleLabels = { ADMIN: "Admin", MANAGER: "Sales Manager", SUPERVISOR: "Supervisor", REP: "Sales Rep" };
-    const roleCls    = { ADMIN: "rp-badge--admin", MANAGER: "rp-badge--manager", SUPERVISOR: "rp-badge--supervisor", REP: "rp-badge--rep" };
+    const roleLabels = { ADMIN: "Admin", DIRECTOR: "Sales Director", MANAGER: "Sales Manager", SUPERVISOR: "Supervisor", REP: "Sales Rep" };
+    const roleCls    = { ADMIN: "rp-badge--admin", DIRECTOR: "rp-badge--director", MANAGER: "rp-badge--manager", SUPERVISOR: "rp-badge--supervisor", REP: "rp-badge--rep" };
     const teamName   = state.cache.teams?.find(t => t.id === me?.teamId)?.teamName || "—";
     const managerName = state.cache.allUsers?.find(u => u.id === me?.managerUserId)?.fullName || "—";
     pageHtml = `
@@ -3438,21 +3439,33 @@ function renderSettings() {
     `;
   } else if (page === "roles") {
     const me = state.user;
-    const roleLabel = { ADMIN: "Admin", MANAGER: "Sales Manager", SUPERVISOR: "Supervisor", REP: "Sales Rep" };
-    const roleCls   = { ADMIN: "rp-badge--admin", MANAGER: "rp-badge--manager", SUPERVISOR: "rp-badge--supervisor", REP: "rp-badge--rep" };
-    const roleCounts = { ADMIN: 0, MANAGER: 0, SUPERVISOR: 0, REP: 0 };
+    const roleLabel = { ADMIN: "Admin", DIRECTOR: "Sales Director", MANAGER: "Sales Manager", SUPERVISOR: "Supervisor", REP: "Sales Rep" };
+    const roleCls   = { ADMIN: "rp-badge--admin", DIRECTOR: "rp-badge--director", MANAGER: "rp-badge--manager", SUPERVISOR: "rp-badge--supervisor", REP: "rp-badge--rep" };
+    const roleCounts = { ADMIN: 0, DIRECTOR: 0, MANAGER: 0, SUPERVISOR: 0, REP: 0 };
     for (const u of allUsers) if (u.role in roleCounts) roleCounts[u.role]++;
 
-    // Build manager options for each role (Reports To)
+    // Build manager options for each role (Reports To).
+    // Sales Rep can report to a Supervisor, or a Sales Manager if their team has no Supervisor.
+    // Supervisor can report to a Sales Manager, or a Sales Director if their team has no Manager.
+    // Sales Manager can report to a Sales Director.
+    const directors   = allUsers.filter(u => u.role === "DIRECTOR");
     const managers    = allUsers.filter(u => u.role === "MANAGER");
     const supervisors = allUsers.filter(u => u.role === "SUPERVISOR");
 
+    function reportsToPool(u) {
+      if (u.role === "REP")        return [...supervisors, ...managers];
+      if (u.role === "SUPERVISOR") return [...managers, ...directors];
+      if (u.role === "MANAGER")    return directors;
+      return [];
+    }
+
     function reportsToOptions(u) {
-      if (u.role === "ADMIN" || u.role === "MANAGER") return '<span class="rp-dash">—</span>';
-      const pool   = u.role === "SUPERVISOR" ? managers : supervisors;
-      const cur    = u.managerUserId || "";
-      const opts   = pool.map(m =>
-        `<option value="${m.id}" ${m.id === cur ? "selected" : ""}>${escHtml(m.fullName)}</option>`
+      if (u.role === "ADMIN" || u.role === "DIRECTOR") return '<span class="rp-dash">—</span>';
+      const pool = reportsToPool(u);
+      if (!pool.length) return '<span class="rp-dash">—</span>';
+      const cur = u.managerUserId || "";
+      const opts = pool.map(m =>
+        `<option value="${m.id}" ${m.id === cur ? "selected" : ""}>${escHtml(m.fullName)} · ${escHtml(roleLabel[m.role] || m.role)}</option>`
       ).join("");
       return `<select class="rp-select rp-reports-select" data-uid="${u.id}" ${!isAdmin ? "disabled" : ""}>
         <option value="">— unassigned —</option>
@@ -3487,18 +3500,24 @@ function renderSettings() {
             <div class="rp-hierarchy-flow">
               <span class="rp-badge rp-badge--admin">👑 Admin</span>
               <span class="rp-arrow">→</span>
+              <span class="rp-badge rp-badge--director">🎖 Sales Director</span>
+              <span class="rp-arrow">→ (multiple)</span>
               <span class="rp-badge rp-badge--manager">🏢 Sales Manager</span>
               <span class="rp-arrow">→ (multiple)</span>
               <span class="rp-badge rp-badge--supervisor">👤 Supervisor</span>
               <span class="rp-arrow">→ (multiple)</span>
               <span class="rp-badge rp-badge--rep">👥 Sales Rep</span>
             </div>
-            <p class="rp-hierarchy-note">Use the <strong>Reports To</strong> column to assign each Sales Rep to a Supervisor, and each Supervisor to a Sales Manager.</p>
+            <p class="rp-hierarchy-note">Use the <strong>Reports To</strong> column to chain each level. When a level is empty (e.g. Supervisor resigned), a Sales Rep may report directly to a Sales Manager, and a Supervisor may report directly to a Sales Director.</p>
           </div>
           <div class="rp-cards">
             <div class="rp-card">
               <div class="rp-card-head"><span class="rp-card-icon">👑</span><span class="rp-card-label">Admin</span><span class="rp-card-count">${roleCounts.ADMIN}</span></div>
               <p class="rp-card-desc">Full access: manage users, all data, reports</p>
+            </div>
+            <div class="rp-card">
+              <div class="rp-card-head"><span class="rp-card-icon">🎖</span><span class="rp-card-label">Sales Director</span><span class="rp-card-count">${roleCounts.DIRECTOR}</span></div>
+              <p class="rp-card-desc">Oversees multiple Sales Managers</p>
             </div>
             <div class="rp-card">
               <div class="rp-card-head"><span class="rp-card-icon">🏢</span><span class="rp-card-label">Sales Manager</span><span class="rp-card-count">${roleCounts.MANAGER}</span></div>
@@ -3542,6 +3561,7 @@ function renderSettings() {
         <div class="rp-table-scroll"><div class="rp-table">
           <div class="rp-thead">
             <span>User</span>
+            <span>Team</span>
             <span>Current Role</span>
             <span>Reports To</span>
             <span>Change Role</span>
@@ -3563,9 +3583,9 @@ function renderSettings() {
                   <div class="rp-user-info">
                     <span class="rp-user-name">${escHtml(u.fullName || "—")}${isSelf ? '<span class="rp-you-badge">You</span>' : ""}</span>
                     <span class="rp-user-email">${escHtml(u.email)}</span>
-                    ${teamName ? `<span class="rp-user-team">${escHtml(teamName)}</span>` : ""}
                   </div>
                 </div>
+                <span class="rp-team-cell">${teamName ? escHtml(teamName) : '<span class="rp-dash">—</span>'}</span>
                 <span><span class="rp-badge ${roleCls[u.role] || ""}">${roleLabel[u.role] || u.role}</span></span>
                 <span>${reportsToOptions(u)}</span>
                 <span class="rp-role-change-cell">
@@ -3581,9 +3601,10 @@ function renderSettings() {
       <div class="rp-role-guide">
         <h4 class="rp-role-guide-title">How roles work</h4>
         <ul class="rp-role-guide-list">
-          <li><span class="rp-badge rp-badge--rep">Sales Rep</span> Default role. Can only view and manage their own visits, check-ins, and calendar.</li>
-          <li><span class="rp-badge rp-badge--supervisor">Supervisor</span> Can view all their team's (assigned Sales Reps') data, filter calendar, and access reports.</li>
-          <li><span class="rp-badge rp-badge--manager">Sales Manager</span> Can view data for all Supervisors assigned to them and all Sales Reps under those Supervisors. Assign Supervisors using the <strong>Reports To</strong> column above.</li>
+          <li><span class="rp-badge rp-badge--rep">Sales Rep</span> Default role. Can only view and manage their own visits, check-ins, and calendar. Reports to a Supervisor (or directly to a Sales Manager when no Supervisor is assigned).</li>
+          <li><span class="rp-badge rp-badge--supervisor">Supervisor</span> Can view all their team's (assigned Sales Reps') data, filter calendar, and access reports. Reports to a Sales Manager (or directly to a Sales Director when no Manager is assigned).</li>
+          <li><span class="rp-badge rp-badge--manager">Sales Manager</span> Can view data for all Supervisors assigned to them and all Sales Reps under those Supervisors. Reports to a Sales Director.</li>
+          <li><span class="rp-badge rp-badge--director">Sales Director</span> Oversees multiple Sales Managers and all their downstream teams. Full visibility across their organisation branch.</li>
           <li><span class="rp-badge rp-badge--admin">Admin</span> Full access including this User Access Management page. Cannot remove their own Admin role.</li>
         </ul>
       </div>
@@ -4870,20 +4891,23 @@ function renderSettings() {
           <button class="popup-close-btn" aria-label="Close">✕</button>
         </div>
         <form id="invite-user-form" style="display:flex;flex-direction:column;gap:var(--sp-3);padding:var(--sp-3) 0">
+          <label class="form-label">Full name <input class="form-input" name="fullName" type="text" required placeholder="Jane Smith" autocomplete="name" minlength="2" maxlength="120" /></label>
           <label class="form-label">Email <input class="form-input" name="email" type="email" required placeholder="colleague@company.com" /></label>
           <label class="form-label">Role
             <select class="form-input" name="role">
               <option value="REP">Sales Rep</option>
               <option value="SUPERVISOR">Supervisor</option>
               <option value="MANAGER">Sales Manager</option>
+              <option value="DIRECTOR">Sales Director</option>
               <option value="ADMIN">Admin</option>
             </select>
           </label>
-          <label class="form-label">Team (optional)
+          <label class="form-label">Team name (optional)
             <select class="form-input" name="teamId">
               <option value="">— No team —</option>
               ${teamOpts}
             </select>
+            ${(state.cache.teams || []).length === 0 ? '<span class="muted small" style="margin-top:4px">No teams yet — create them in Team Structure first.</span>' : ""}
           </label>
           <p class="invite-form-msg muted small" style="min-height:1.2em"></p>
           <div class="popup-actions">
@@ -4909,13 +4933,14 @@ function renderSettings() {
       const msg = overlay.querySelector(".invite-form-msg");
       const btn = form.querySelector('button[type="submit"]');
       const email = form.email.value.trim();
+      const fullName = form.fullName.value.trim();
       const role = form.role.value;
       const teamId = form.teamId.value || undefined;
       btn.disabled = true;
       msg.textContent = "Sending…";
       msg.className = "invite-form-msg muted small";
       try {
-        const res = await api("/users/invite", { method: "POST", body: { email, role, teamId } });
+        const res = await api("/users/invite", { method: "POST", body: { email, fullName, role, teamId } });
         msg.textContent = res.emailSent
           ? `Invite sent to ${email}.`
           : `Invite created (email delivery not configured). Share this link: ${res.acceptUrl || ""}`;
@@ -4942,9 +4967,9 @@ function renderSettings() {
           <button class="popup-close-btn" aria-label="Close">✕</button>
         </div>
         <div style="padding:var(--sp-3) 0;display:flex;flex-direction:column;gap:var(--sp-3)">
-          <p class="muted small">Upload a JSON file with an array of users. Each user needs: <code>email</code>, <code>fullName</code>, <code>role</code> (REP, SUPERVISOR, MANAGER, ADMIN). Optional: <code>teamId</code>.</p>
+          <p class="muted small">Upload a JSON file with an array of users. Each user needs: <code>email</code>, <code>fullName</code>, <code>role</code> (REP, SUPERVISOR, MANAGER, DIRECTOR, ADMIN). Optional: <code>teamName</code> (matched by name) or <code>teamId</code>.</p>
           <pre class="small" style="background:var(--clr-surface);padding:var(--sp-2);border-radius:6px;overflow-x:auto">[
-  { "email": "rep@co.com", "fullName": "John Doe", "role": "REP" },
+  { "email": "rep@co.com", "fullName": "John Doe", "role": "REP", "teamName": "Bangkok North" },
   { "email": "mgr@co.com", "fullName": "Jane Mgr", "role": "MANAGER" }
 ]</pre>
           <input type="file" id="import-file-input" accept=".json" style="font-size:0.85rem" />
@@ -6683,7 +6708,7 @@ async function loadDeals() {
 
 
 async function loadIntegrations() {
-  const isAtLeastManager = state.user?.role === "ADMIN" || state.user?.role === "MANAGER";
+  const isAtLeastManager = state.user?.role === "ADMIN" || state.user?.role === "DIRECTOR" || state.user?.role === "MANAGER";
   if (!isAtLeastManager) return;
   const data = await api("/integrations/logs");
   state.cache.logs = data;
@@ -6709,9 +6734,9 @@ async function loadSettings() {
   const tenantId = state.user?.tenantId;
   if (!tenantId) return;
   const isAdmin   = state.user?.role === "ADMIN";
-  const isManager = state.user?.role === "ADMIN" || state.user?.role === "MANAGER";
+  const isManager = state.user?.role === "ADMIN" || state.user?.role === "DIRECTOR" || state.user?.role === "MANAGER";
   // branding, taxConfig, visitConfig, and integrationCredentials require MANAGER+
-  // — skip them for REP so the Promise.all doesn't fail with 403
+  // — skip them for REP/SUPERVISOR so the Promise.all doesn't fail with 403
   const isAtLeastManager = isManager;
   const [branding, taxConfig, visitConfig, kpiTargets, salesReps, integrationCredentials, teams, tenantSummary] = await Promise.all([
     api(`/tenants/${tenantId}/branding`),
@@ -6798,7 +6823,9 @@ loginForm.addEventListener("submit", async (event) => {
       switchView("repHub");
       paintRepHubFull();
     }
+    hideAppLoading();
   } catch (error) {
+    hideAppLoading();
     authMessage.textContent = error.message;
   }
 });

@@ -431,7 +431,8 @@ export const apiFirstRoutes: FastifyPluginAsync = async (app) => {
     email: z.string().email(),
     fullName: z.string().min(2).max(120),
     role: z.nativeEnum(UserRole).default(UserRole.REP),
-    teamId: z.string().cuid().optional()
+    teamId: z.string().cuid().optional(),
+    teamName: z.string().trim().min(1).max(120).optional()
   });
 
   app.post("/users/import", async (request, reply) => {
@@ -451,12 +452,13 @@ export const apiFirstRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.badRequest("Maximum 200 users per import.");
     }
 
-    // Pre-fetch valid team IDs for this tenant.
+    // Pre-fetch valid team IDs and a name→id lookup for this tenant.
     const tenantTeams = await prisma.team.findMany({
       where: { tenantId },
-      select: { id: true }
+      select: { id: true, teamName: true }
     });
     const validTeamIds = new Set(tenantTeams.map(t => t.id));
+    const teamIdByName = new Map(tenantTeams.map(t => [t.teamName.toLowerCase(), t.id]));
 
     // Pre-fetch existing emails to avoid duplicates.
     const existingUsers = await prisma.user.findMany({
@@ -491,6 +493,14 @@ export const apiFirstRoutes: FastifyPluginAsync = async (app) => {
       if (parsed.data.teamId && !validTeamIds.has(parsed.data.teamId)) {
         errors.push({ row: i + 1, email, error: "teamId does not belong to tenant." });
         continue;
+      }
+      if (!parsed.data.teamId && parsed.data.teamName) {
+        const resolved = teamIdByName.get(parsed.data.teamName.toLowerCase());
+        if (!resolved) {
+          errors.push({ row: i + 1, email, error: `teamName "${parsed.data.teamName}" not found in tenant.` });
+          continue;
+        }
+        parsed.data.teamId = resolved;
       }
       seenEmails.add(email);
       validRows.push(parsed.data);
