@@ -1,8 +1,8 @@
 /* ============================================================
-   THINKCRM — Design System v2
-   Font: Kanit (Google Fonts)
-   Accent: ClickUp purple oklch(60% 0.23 278)
-   Layout: Horizontal topnav · Light-first · Slide panels
+   THINKCRM — Design System v3 (Apple-style)
+   Font stack: system UI (SF Pro on Apple, Segoe UI on Windows, Inter fallback)
+   Accent: Apple systemic blue (overridable by tenant branding)
+   Layout: Horizontal topnav · Light-first · Soft neutrals · Hairline borders
    ============================================================ */
 
 /* Prevent login flash when a stored token exists */
@@ -22,84 +22,90 @@ html.has-token #auth-screen { display: none !important; }
   --sp-12: 48px;
   --sp-16: 64px;
 
-  /* Accent — purple */
-  --accent:         oklch(60% 0.23 278);
-  --accent-dim:     oklch(53% 0.22 278);
-  --accent-bright:  oklch(66% 0.24 278);
-  --accent-subtle:  oklch(95.5% 0.025 278);
-  --accent-text:    oklch(99% 0.003 278);
+  /* Accent — Apple systemic blue (#007AFF-ish). Tenant branding overrides this. */
+  --accent:         oklch(59% 0.18 258);
+  --accent-dim:     oklch(52% 0.17 258);
+  --accent-bright:  oklch(66% 0.19 258);
+  --accent-subtle:  oklch(96% 0.02 258);
+  --accent-text:    #ffffff;
 
-  /* Surface stack — light mode */
-  --bg:            oklch(96.5% 0.006 278);
-  --surface:       oklch(99.5% 0.003 278);
-  --surface-soft:  oklch(97.5% 0.007 278);
-  --surface-inset: oklch(94.5% 0.008 278);
+  /* Surface stack — light mode: near-white with minimal tint */
+  --bg:            oklch(98% 0.002 260);
+  --surface:       #ffffff;
+  --surface-soft:  oklch(97% 0.003 260);
+  --surface-inset: oklch(95% 0.004 260);
 
   /* Text */
-  --text:          oklch(14% 0.022 278);
-  --text-2:        oklch(34% 0.022 278);
-  --muted-color:   oklch(52% 0.018 278);
+  --text:          oklch(17% 0.01 260);
+  --text-2:        oklch(38% 0.008 260);
+  --muted-color:   oklch(55% 0.006 260);
 
-  /* Borders */
-  --border:        oklch(88% 0.012 278);
-  --border-strong: oklch(77% 0.016 278);
+  /* Borders — hairline, low saturation */
+  --border:        oklch(91% 0.003 260);
+  --border-strong: oklch(82% 0.004 260);
 
-  /* Shadows */
-  --shadow-sm: 0 1px 3px oklch(16% 0.022 278 / 0.06), 0 1px 1px oklch(16% 0.022 278 / 0.03);
-  --shadow:    0 2px 8px oklch(16% 0.022 278 / 0.07), 0 4px 20px oklch(16% 0.022 278 / 0.04);
-  --shadow-lg: 0 8px 32px oklch(16% 0.022 278 / 0.10), 0 2px 8px oklch(16% 0.022 278 / 0.05);
+  /* Shadows — barely there (Apple relies on hairlines, not elevation) */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow:    0 2px 6px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.03);
+  --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.09), 0 2px 6px rgba(0, 0, 0, 0.04);
 
-  /* Status colours */
-  --success:    oklch(50% 0.17 145);
-  --success-bg: oklch(94% 0.04 145);
-  --warning:    oklch(60% 0.17 75);
-  --warning-bg: oklch(94% 0.05 75);
-  --danger:     oklch(50% 0.22 25);
-  --danger-bg:  oklch(95% 0.04 25);
-  --info:       oklch(56% 0.18 240);
-  --info-bg:    oklch(94% 0.04 240);
+  /* Status colours — Apple system palette (red/orange/green/blue) */
+  --success:    oklch(58% 0.16 150);
+  --success-bg: oklch(95% 0.04 150);
+  --warning:    oklch(72% 0.17 65);
+  --warning-bg: oklch(95% 0.05 65);
+  --danger:     oklch(57% 0.22 27);
+  --danger-bg:  oklch(95% 0.04 27);
+  --info:       oklch(59% 0.18 258);
+  --info-bg:    oklch(95% 0.04 258);
 
   /* Topnav */
   --nav-h:     56px;
-  --nav-bg:    oklch(99.5% 0.003 278);
-  --nav-border:oklch(88% 0.012 278);
+  --nav-bg:    rgba(255, 255, 255, 0.82);
+  --nav-border:oklch(91% 0.003 260);
 
-  /* Radius */
-  --r:    6px;
-  --r-md: 10px;
-  --r-lg: 14px;
+  /* Radius — softer, more iOS-like */
+  --r:    8px;
+  --r-md: 12px;
+  --r-lg: 18px;
+  --r-xl: 24px;
 
-  /* Stage accent palette */
-  --stage-0: oklch(60% 0.23 278);   /* purple — opportunity */
-  --stage-1: oklch(66% 0.19 55);    /* amber  — quotation  */
-  --stage-2: oklch(57% 0.18 240);   /* blue   — negotiation*/
-  --stage-3: oklch(54% 0.17 145);   /* green  — won        */
-  --stage-4: oklch(54% 0.2 25);     /* red    — lost / 5th */
+  /* Stage accent palette (kept as semantic hints, tuned toward Apple hues) */
+  --stage-0: oklch(59% 0.18 258);   /* blue   — opportunity */
+  --stage-1: oklch(72% 0.17 65);    /* orange — quotation  */
+  --stage-2: oklch(62% 0.13 295);   /* indigo — negotiation*/
+  --stage-3: oklch(58% 0.16 150);   /* green  — won        */
+  --stage-4: oklch(57% 0.22 27);    /* red    — lost       */
 
-  font-family: 'Kanit', system-ui, -apple-system, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+               "Inter", "Helvetica Neue", "Segoe UI", "Kanit", Arial,
+               "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
+  font-feature-settings: "cv11", "ss01", "ss03";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* Dark mode overrides */
+/* Dark mode overrides — near-black surfaces, cool neutrals */
 :root[data-theme="dark"] {
-  --bg:            oklch(11% 0.024 278);
-  --surface:       oklch(15% 0.028 278);
-  --surface-soft:  oklch(13% 0.026 278);
-  --surface-inset: oklch(9.5% 0.02 278);
-  --text:          oklch(91% 0.008 278);
-  --text-2:        oklch(72% 0.014 278);
-  --muted-color:   oklch(56% 0.016 278);
-  --border:        oklch(23% 0.026 278);
-  --border-strong: oklch(30% 0.028 278);
-  --shadow-sm: 0 1px 3px oklch(4% 0.01 278 / 0.4);
-  --shadow:    0 2px 8px oklch(4% 0.01 278 / 0.5), 0 4px 20px oklch(4% 0.01 278 / 0.3);
-  --shadow-lg: 0 8px 32px oklch(4% 0.01 278 / 0.6);
-  --nav-bg:    oklch(13% 0.028 278);
-  --nav-border:oklch(20% 0.028 278);
-  --accent-subtle: oklch(21% 0.045 278);
-  --success-bg: oklch(16% 0.06 145);
-  --warning-bg: oklch(16% 0.05 75);
-  --danger-bg:  oklch(16% 0.06 25);
-  --info-bg:    oklch(16% 0.06 240);
+  --bg:            oklch(12% 0.003 260);
+  --surface:       oklch(16% 0.004 260);
+  --surface-soft:  oklch(14% 0.004 260);
+  --surface-inset: oklch(10% 0.003 260);
+  --text:          oklch(95% 0.003 260);
+  --text-2:        oklch(75% 0.005 260);
+  --muted-color:   oklch(58% 0.006 260);
+  --border:        oklch(24% 0.006 260);
+  --border-strong: oklch(32% 0.008 260);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.6);
+  --shadow:    0 2px 8px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.7);
+  --nav-bg:    rgba(22, 22, 24, 0.78);
+  --nav-border:oklch(22% 0.006 260);
+  --accent-subtle: oklch(22% 0.05 258);
+  --success-bg: oklch(18% 0.06 150);
+  --warning-bg: oklch(18% 0.06 65);
+  --danger-bg:  oklch(18% 0.06 27);
+  --info-bg:    oklch(18% 0.06 258);
 }
 
 /* ── RESET ────────────────────────────────────────────────── */
@@ -110,9 +116,6 @@ body {
   margin: 0;
   min-height: 100%;
   background: var(--bg);
-  background-image:
-    radial-gradient(ellipse 80% 55% at 65% -5%, oklch(60% 0.23 278 / 0.07) 0%, transparent 70%),
-    radial-gradient(ellipse 50% 40% at 10% 90%, oklch(57% 0.18 240 / 0.04) 0%, transparent 65%);
   color: var(--text);
   font-size: 0.9375rem;
   line-height: 1.5;
@@ -154,8 +157,8 @@ body {
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(ellipse 60% 50% at 30% 40%, oklch(60% 0.23 278 / 0.18) 0%, transparent 60%),
-    radial-gradient(ellipse 40% 60% at 80% 70%, oklch(60% 0.23 278 / 0.08) 0%, transparent 50%);
+    radial-gradient(ellipse 60% 50% at 30% 40%, oklch(60% 0.18 258 / 0.18) 0%, transparent 60%),
+    radial-gradient(ellipse 40% 60% at 80% 70%, oklch(60% 0.18 258 / 0.08) 0%, transparent 50%);
   pointer-events: none;
 }
 
@@ -299,10 +302,10 @@ body {
   font-weight: 700;
   cursor: pointer;
   transition: opacity 0.15s, box-shadow 0.15s;
-  box-shadow: 0 4px 14px oklch(60% 0.23 278 / 0.28);
+  box-shadow: 0 4px 14px oklch(60% 0.18 258 / 0.28);
 }
 
-.login-submit:hover  { opacity: 0.9; box-shadow: 0 6px 20px oklch(60% 0.23 278 / 0.36); }
+.login-submit:hover  { opacity: 0.9; box-shadow: 0 6px 20px oklch(60% 0.18 258 / 0.36); }
 .login-submit:disabled { opacity: 0.55; cursor: default; }
 
 /* OAuth provider buttons */
@@ -979,7 +982,7 @@ body {
 }
 .ob-step-action:hover {
   transform: scale(1.04);
-  box-shadow: 0 2px 8px oklch(60% 0.23 278 / .3);
+  box-shadow: 0 2px 8px oklch(60% 0.18 258 / .3);
 }
 
 /* Completed check */
@@ -1020,8 +1023,8 @@ body {
   animation: ob-pulse 2s ease-in-out infinite;
 }
 @keyframes ob-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 oklch(60% 0.23 278 / .4); }
-  50%      { box-shadow: 0 0 0 4px oklch(60% 0.23 278 / 0); }
+  0%, 100% { box-shadow: 0 0 0 0 oklch(60% 0.18 258 / .4); }
+  50%      { box-shadow: 0 0 0 4px oklch(60% 0.18 258 / 0); }
 }
 #onboarding-nav-btn[hidden] { display: none; }
 .topnav-icon-btn[hidden] { display: none; }
@@ -1172,12 +1175,12 @@ button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-l
   letter-spacing: 0.01em;
   transition: opacity 0.12s, box-shadow 0.12s;
   line-height: 1.4;
-  box-shadow: 0 2px 8px oklch(60% 0.23 278 / 0.22);
+  box-shadow: 0 2px 8px oklch(60% 0.18 258 / 0.22);
 }
 
 button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-logout-btn):not(.topnav-user):not(.login-submit):not(.sp-close-btn):not(.sp-text-btn):not(.sp-view-all-btn):not(.spi):not(.master-page-btn):not(.user-dropdown-item):not(.cal-filter-apply):not(.cal-filter-reset):not(.cal-autocomplete-clear):not(.cal-autocomplete-item):not(.ms-dropdown-btn):not(.ms-select-all):not(.ms-clear):not(.vp-chip):not(.vn-lang-btn):not(.section-info-btn):not(.modal-close-btn):not(.deal-detail-btn):not(.deal-menu-btn):not(.cron-run-now-btn):not(.cron-save-btn):not(.cron-load-more-btn):not(.cron-history-toggle):not(.cron-help-btn):not(.notif-channel-help-btn):not(.teams-app-pkg-btn):not(.notif-teams-dm-test-btn):not(.teams-push-all-btn):not(.onboarding-wizard-dismiss):not(.demo-generate-btn):not(.demo-delete-btn):not(.btn-danger):not(.btn-danger-outline):not(.passkey-register-btn):not(.passkey-delete-btn):not(.passkey-admin-btn):hover {
   opacity: 0.88;
-  box-shadow: 0 4px 12px oklch(60% 0.23 278 / 0.32);
+  box-shadow: 0 4px 12px oklch(60% 0.18 258 / 0.32);
 }
 
 button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-logout-btn):not(.topnav-user):not(.login-submit):not(.sp-close-btn):not(.sp-text-btn):not(.sp-view-all-btn):not(.spi):not(.master-page-btn):not(.user-dropdown-item):not(.cal-filter-apply):not(.cal-filter-reset):not(.cal-autocomplete-clear):not(.cal-autocomplete-item):not(.ms-dropdown-btn):not(.ms-select-all):not(.ms-clear):not(.vp-chip):not(.vn-lang-btn):not(.section-info-btn):not(.modal-close-btn):not(.notif-channel-help-btn):not(.teams-app-pkg-btn):not(.notif-teams-dm-test-btn):not(.teams-push-all-btn):not(.onboarding-wizard-dismiss):not(.demo-generate-btn):not(.demo-delete-btn):not(.btn-danger):not(.btn-danger-outline):not(.passkey-register-btn):not(.passkey-delete-btn):not(.passkey-admin-btn):disabled {
@@ -1215,7 +1218,7 @@ input, select, textarea {
 input:focus, select:focus, textarea:focus {
   border-color: var(--accent);
   background: var(--surface);
-  box-shadow: 0 0 0 3px oklch(60% 0.23 278 / .1);
+  box-shadow: 0 0 0 3px oklch(60% 0.18 258 / .1);
 }
 
 select {
@@ -1268,7 +1271,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 
 .form-input:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px oklch(60% 0.23 278 / .1);
+  box-shadow: 0 0 0 3px oklch(60% 0.18 258 / .1);
 }
 
 /* ── CUSTOMER AUTOCOMPLETE (modal forms) ─────────────────── */
@@ -1453,7 +1456,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   transition: box-shadow 0.15s, transform 0.12s;
 }
 .kpi:hover {
-  box-shadow: 0 4px 18px oklch(60% 0.23 278 / 0.12);
+  box-shadow: 0 4px 18px oklch(60% 0.18 258 / 0.12);
   transform: translateY(-2px);
 }
 
@@ -1471,7 +1474,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   right: 0;
   width: 60px;
   height: 60px;
-  background: radial-gradient(circle at 80% 20%, oklch(60% 0.23 278 / 0.08) 0%, transparent 70%);
+  background: radial-gradient(circle at 80% 20%, oklch(60% 0.18 258 / 0.08) 0%, transparent 70%);
   pointer-events: none;
 }
 
@@ -1728,7 +1731,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   font-weight: 600;
   cursor: pointer;
   transition: opacity 0.12s;
-  box-shadow: 0 2px 6px oklch(60% 0.23 278 / 0.22);
+  box-shadow: 0 2px 6px oklch(60% 0.18 258 / 0.22);
 }
 .ai-run-btn:hover:not(:disabled) { opacity: 0.88; }
 .ai-run-btn:disabled { opacity: 0.5; cursor: default; }
@@ -1913,7 +1916,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 .leaderboard-item + .leaderboard-item { margin-top: 6px; }
 .leaderboard-item:hover {
   background: oklch(97% 0.01 278);
-  box-shadow: 0 2px 10px oklch(60% 0.23 278 / 0.08);
+  box-shadow: 0 2px 10px oklch(60% 0.18 258 / 0.08);
 }
 .leaderboard-item--top {
   border-color: oklch(88% 0.06 85);
@@ -2074,7 +2077,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 .section-info-btn:hover {
   color: var(--accent);
   border-color: var(--accent);
-  background: oklch(60% 0.23 278 / 0.06);
+  background: oklch(60% 0.18 258 / 0.06);
 }
 
 /* ── Modal close button ───────────────────────────────────────────────── */
@@ -2109,8 +2112,8 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   font-family: 'Kanit', sans-serif;
   font-size: 0.88rem;
   font-weight: 600;
-  background: oklch(60% 0.23 278 / 0.07);
-  border: 1px solid oklch(60% 0.23 278 / 0.18);
+  background: oklch(60% 0.18 258 / 0.07);
+  border: 1px solid oklch(60% 0.18 258 / 0.18);
   border-radius: var(--r);
   padding: var(--sp-3) var(--sp-4);
   color: var(--accent);
@@ -2136,7 +2139,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: oklch(60% 0.23 278 / 0.1);
+  background: oklch(60% 0.18 258 / 0.1);
   color: var(--accent);
   font-family: 'Kanit', sans-serif;
   font-weight: 700;
@@ -2763,7 +2766,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   border-color: var(--accent);
   background: var(--accent-subtle);
   color: var(--accent-dim);
-  box-shadow: 0 0 0 3px oklch(60% 0.23 278 / .08);
+  box-shadow: 0 0 0 3px oklch(60% 0.18 258 / .08);
 }
 
 .visit-type-option input { display: none; }
@@ -3767,7 +3770,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   font-weight: 700;
   font-family: 'Kanit', sans-serif;
   flex-shrink: 0;
-  box-shadow: 0 4px 12px oklch(60% 0.23 278 / 0.28);
+  box-shadow: 0 4px 12px oklch(60% 0.18 258 / 0.28);
 }
 
 .c360-header-info { min-width: 0; }
@@ -4892,7 +4895,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   border-radius: var(--r-md);
   padding: var(--sp-3) var(--sp-4);
   width: 100%;
-  box-shadow: 0 2px 8px oklch(60% 0.23 278 / 0.22);
+  box-shadow: 0 2px 8px oklch(60% 0.18 258 / 0.22);
   margin-bottom: 0;
 }
 
@@ -5041,7 +5044,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   padding: var(--sp-3) var(--sp-4);
   min-width: 150px;
   text-align: center;
-  box-shadow: 0 4px 16px oklch(60% 0.23 278 / 0.3);
+  box-shadow: 0 4px 16px oklch(60% 0.18 258 / 0.3);
 }
 
 .org-director-node .org-node-name { color: #fff; font-size: 0.85rem; font-weight: 600; }
@@ -6408,7 +6411,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 .cal-filter-apply {
   background: linear-gradient(135deg, var(--accent-bright) 0%, var(--accent-dim) 100%);
   color: var(--accent-text);
-  box-shadow: 0 2px 6px oklch(60% 0.23 278 / 0.22);
+  box-shadow: 0 2px 6px oklch(60% 0.18 258 / 0.22);
 }
 .cal-filter-apply:hover { opacity: 0.88; }
 .cal-filter-reset { background: transparent; border-color: var(--border); color: var(--muted-color); }
@@ -7056,7 +7059,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
   box-shadow:
-    0 0 0 1px oklch(60% 0.23 278 / 0.1),
+    0 0 0 1px oklch(60% 0.18 258 / 0.1),
     0 8px 32px oklch(10% 0.02 278 / 0.22),
     0 40px 80px oklch(10% 0.02 278 / 0.18);
   width: 100%;
@@ -8474,7 +8477,7 @@ button.cust-badge-contact:hover { opacity: 0.7; }
 }
 .mt-card:hover {
   background: oklch(97% 0.01 278);
-  box-shadow: 0 2px 12px oklch(60% 0.23 278 / 0.1);
+  box-shadow: 0 2px 12px oklch(60% 0.18 258 / 0.1);
 }
 
 /* Card colour stripes via border-left */
@@ -9443,7 +9446,7 @@ button.cust-badge-contact:hover { opacity: 0.7; }
 .cron-expr-input:focus, .cron-tz-input:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px oklch(60% 0.23 278 / 0.15);
+  box-shadow: 0 0 0 2px oklch(60% 0.18 258 / 0.15);
 }
 
 .cron-expr-preview {
@@ -9648,7 +9651,7 @@ button.cust-badge-contact:hover { opacity: 0.7; }
   cursor: pointer;
   white-space: nowrap;
   transition: opacity 0.15s, transform 0.15s;
-  box-shadow: 0 2px 8px oklch(60% 0.23 278 / 0.2);
+  box-shadow: 0 2px 8px oklch(60% 0.18 258 / 0.2);
 }
 
 .demo-generate-btn:hover {
