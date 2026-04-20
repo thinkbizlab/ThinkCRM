@@ -7170,6 +7170,8 @@ setCustomer360Deps({
   openDealCreateModal
 });
 
+const showToast = (message, type) => setStatus(message, type === "error");
+
 setDeal360Deps({
   asMoney,
   avatarColor,
