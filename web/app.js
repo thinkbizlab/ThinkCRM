@@ -37,6 +37,7 @@ import {
 import { openMapPicker, closeMapPicker, initMapPicker, setMapPickerDeps } from "./modules/map-picker.js";
 import { renderCronPicker, initCronPicker } from "./modules/cron-picker.js";
 import { icon } from "./modules/icons.js";
+import { DEFAULT_TOKENS, SHADOW_PRESETS, PRESETS, findPresetBySlug, detectPresetSlug } from "./modules/theme-presets.js";
 import {
   getCustomFieldDefinitions,
   collectCustomFieldPayload,
@@ -382,6 +383,38 @@ function applyBrandingTheme(branding) {
   document.documentElement.style.setProperty("--accent-subtle", tintHex(primary, 0.88));
   document.documentElement.style.setProperty("--accent-text", "#fefefe");
 
+  // Full custom theme tokens — only apply keys the tenant explicitly set so
+  // the existing light/dark :root fallbacks in styles.css stay intact for
+  // everything they didn't customise.
+  const tokens = b.themeTokens || {};
+  const root = document.documentElement.style;
+  const setIf = (cssVar, val) => { if (val) root.setProperty(cssVar, val); };
+  setIf("--bg",            tokens.background);
+  setIf("--surface",       tokens.card);
+  setIf("--surface-soft",  tokens.muted);
+  setIf("--text",          tokens.text);
+  setIf("--text-2",        tokens.text);
+  setIf("--muted-color",   tokens.muted);
+  setIf("--border",        tokens.border);
+  setIf("--border-strong", tokens.border);
+  setIf("--danger",        tokens.destructive);
+  if (tokens.accent) root.setProperty("--accent-bright", tokens.accent);
+  if (tokens.radius !== undefined && tokens.radius !== null) {
+    const r = Math.max(0, Math.min(32, Number(tokens.radius) || 12));
+    root.setProperty("--r",     `${Math.max(2, Math.round(r * 0.67))}px`);
+    root.setProperty("--r-md",  `${r}px`);
+    root.setProperty("--r-lg",  `${Math.round(r * 1.5)}px`);
+    root.setProperty("--r-xl",  `${Math.round(r * 2)}px`);
+    root.setProperty("--radius", `${r}px`);
+  }
+  if (tokens.shadow) {
+    const shadowKey = String(tokens.shadow).toUpperCase();
+    const shadowValue = SHADOW_PRESETS[shadowKey] || SHADOW_PRESETS.MD;
+    root.setProperty("--shadow",    shadowValue);
+    root.setProperty("--shadow-sm", SHADOW_PRESETS.SM);
+    root.setProperty("--shadow-lg", SHADOW_PRESETS[shadowKey === "NONE" ? "MD" : (shadowKey === "XL" ? "XL" : "LG")]);
+  }
+
   const gradientEnabled = b.accentGradientEnabled === true || b.accentGradientEnabled === "true";
   if (gradientEnabled) {
     const gradColor = normalizeHex(b.accentGradientColor, "#ec4899");
@@ -436,6 +469,19 @@ function applyFavicon(url) {
 
 function renderThemeDebugChip() {
   return `<span class="chip theme-debug-chip">Tenant: ${state.tenantThemeMode} | User: ${state.themeOverride}</span>`;
+}
+
+function renderThemeRow(label, name, value, { required } = {}) {
+  const hex = value || "#ffffff";
+  const req = required ? " required" : "";
+  return `
+    <div class="theme-group-row">
+      <span class="theme-group-row-label">${escHtml(label)}</span>
+      <div class="color-input-row theme-group-row-control">
+        <input type="color" name="${name}Picker" value="${escHtml(hex)}" class="color-swatch" />
+        <input class="form-input theme-hex-input" name="${name}" value="${escHtml(hex)}" placeholder="${escHtml(hex)}"${req} />
+      </div>
+    </div>`;
 }
 
 function updateUserMeta() {
@@ -3086,6 +3132,8 @@ function renderSettings() {
   const isAdmin = state.user?.role === "ADMIN";
   const isManager = state.user?.role === "MANAGER";
   const branding = state.cache.branding || {};
+  const brandingTokens = { ...DEFAULT_TOKENS, ...(branding.themeTokens || {}) };
+  const activePresetSlug = detectPresetSlug({ ...brandingTokens, primaryColor: branding.primaryColor, secondaryColor: branding.secondaryColor });
   const tax = state.cache.taxConfig || { vatEnabled: true, vatRatePercent: 7 };
   const visitCfg = state.cache.visitConfig || { checkInMaxDistanceM: 1000, minVisitDurationMinutes: 15 };
   const tenantThemeMode = branding.themeMode || "LIGHT";
@@ -3579,19 +3627,87 @@ function renderSettings() {
               <span class="muted" style="font-size:0.78rem">Displayed next to the logo in the sidebar. Leave blank to use the default.</span>
             </label>
           </div>
-          <div class="settings-field-row">
-            <label class="form-label">Primary Color
-              <div class="color-input-row">
-                <input type="color" name="primaryColorPicker" value="${branding.primaryColor || "#7c3aed"}" class="color-swatch" />
-                <input class="form-input" name="primaryColor" placeholder="#7c3aed" value="${branding.primaryColor || "#7c3aed"}" required style="flex:1" />
+          <div class="theme-editor">
+            <div class="theme-preset-picker">
+              <label class="theme-editor-label">Theme</label>
+              <div class="theme-preset-trigger" data-role="preset-trigger">
+                <span class="theme-preset-swatches" data-role="preset-swatches">
+                  ${(findPresetBySlug(activePresetSlug)?.swatches || [brandingTokens.background, branding.secondaryColor || "#0f172a", branding.primaryColor || "#7c3aed"])
+                    .map((c) => `<span style="background:${escHtml(c)}"></span>`).join("")}
+                </span>
+                <span class="theme-preset-name" data-role="preset-name">${escHtml(findPresetBySlug(activePresetSlug)?.name || "Custom Theme")}</span>
+                ${icon("chevronDown", 14, "theme-preset-chevron")}
+                <select class="theme-preset-select" name="themePreset" aria-label="Theme preset">
+                  <option value="custom"${activePresetSlug === "custom" ? " selected" : ""}>Custom Theme</option>
+                  ${PRESETS.map((p) => `<option value="${p.slug}"${activePresetSlug === p.slug ? " selected" : ""}>${escHtml(p.name)}</option>`).join("")}
+                </select>
               </div>
-            </label>
-            <label class="form-label">Secondary Color
-              <div class="color-input-row">
-                <input type="color" name="secondaryColorPicker" value="${branding.secondaryColor || "#0f172a"}" class="color-swatch" />
-                <input class="form-input" name="secondaryColor" placeholder="#0f172a" value="${branding.secondaryColor || "#0f172a"}" required style="flex:1" />
+            </div>
+
+            <div class="theme-editor-label">Colors</div>
+
+            <details class="theme-group" open>
+              <summary class="theme-group-summary">
+                <span class="theme-group-swatches">
+                  <span style="background:${escHtml(brandingTokens.background)}"></span>
+                  <span style="background:${escHtml(brandingTokens.text)}"></span>
+                  <span style="background:${escHtml(branding.primaryColor || "#7c3aed")}"></span>
+                </span>
+                <span class="theme-group-title">Primary</span>
+                ${icon("chevronDown", 14, "theme-group-chevron")}
+              </summary>
+              ${renderThemeRow("Background", "tokenBackground", brandingTokens.background)}
+              ${renderThemeRow("Text", "tokenText", brandingTokens.text)}
+              ${renderThemeRow("Primary", "primaryColor", branding.primaryColor || "#7c3aed", { required: true })}
+            </details>
+
+            <details class="theme-group" open>
+              <summary class="theme-group-summary">
+                <span class="theme-group-swatches">
+                  <span style="background:${escHtml(branding.secondaryColor || "#0f172a")}"></span>
+                  <span style="background:${escHtml(brandingTokens.accent)}"></span>
+                </span>
+                <span class="theme-group-title">Secondary</span>
+                ${icon("chevronDown", 14, "theme-group-chevron")}
+              </summary>
+              ${renderThemeRow("Secondary", "secondaryColor", branding.secondaryColor || "#0f172a", { required: true })}
+              ${renderThemeRow("Accent", "tokenAccent", brandingTokens.accent)}
+            </details>
+
+            <details class="theme-group">
+              <summary class="theme-group-summary">
+                <span class="theme-group-swatches">
+                  <span style="background:${escHtml(brandingTokens.card)}"></span>
+                  <span style="background:${escHtml(brandingTokens.border)}"></span>
+                </span>
+                <span class="theme-group-title">Advanced</span>
+                ${icon("chevronDown", 14, "theme-group-chevron")}
+              </summary>
+              ${renderThemeRow("Card", "tokenCard", brandingTokens.card)}
+              ${renderThemeRow("Muted", "tokenMuted", brandingTokens.muted)}
+              ${renderThemeRow("Border", "tokenBorder", brandingTokens.border)}
+              ${renderThemeRow("Destructive", "tokenDestructive", brandingTokens.destructive)}
+            </details>
+
+            <div class="theme-radius">
+              <label class="theme-editor-label">Radius</label>
+              <div class="theme-radius-controls">
+                <input type="range" name="tokenRadiusRange" min="0" max="24" step="1" value="${brandingTokens.radius}" />
+                <input type="number" name="tokenRadius" min="0" max="32" step="1" value="${brandingTokens.radius}" class="form-input theme-radius-number" />
+                <span class="muted">px</span>
               </div>
-            </label>
+            </div>
+
+            <div class="theme-shadow">
+              <label class="theme-editor-label">Shadow</label>
+              <select class="form-input theme-shadow-select" name="tokenShadow">
+                <option value="NONE"${brandingTokens.shadow === "NONE" ? " selected" : ""}>None</option>
+                <option value="SM"${brandingTokens.shadow === "SM" ? " selected" : ""}>Small</option>
+                <option value="MD"${brandingTokens.shadow === "MD" ? " selected" : ""}>Medium</option>
+                <option value="LG"${brandingTokens.shadow === "LG" ? " selected" : ""}>Large</option>
+                <option value="XL"${brandingTokens.shadow === "XL" ? " selected" : ""}>Extra Large</option>
+              </select>
+            </div>
           </div>
           <div class="gradient-section">
             <label class="gradient-toggle">
@@ -3632,7 +3748,10 @@ function renderSettings() {
               <span class="muted" style="font-size:0.78rem">Tenant-wide default. Users can override with the theme toggle.</span>
             </label>
           </div>
-          <button type="submit">Save Branding</button>
+          <div style="display:flex;gap:var(--sp-2);align-items:center;flex-wrap:wrap">
+            <button type="submit">Save Branding</button>
+            <button type="button" id="branding-restore-default" class="ghost">Restore to Default</button>
+          </div>
         </form>
         ` : `<div class="muted">Admin access required.</div>`}
       </section>
@@ -6021,6 +6140,126 @@ function renderSettings() {
   qs('[name="primaryColor"]')?.addEventListener("input", refreshGradientPreview);
   qs('[name="primaryColorPicker"]')?.addEventListener("input", refreshGradientPreview);
 
+  // Full custom theme editor — wire picker/hex sync for all token rows, the
+  // radius range↔number pair, the shadow select, the preset selector, and a
+  // live preview that runs applyBrandingTheme() on every change so the whole
+  // app repaints as the admin tweaks values.
+  const THEME_TOKEN_INPUTS = [
+    "tokenBackground", "tokenText", "tokenAccent",
+    "tokenCard", "tokenMuted", "tokenBorder", "tokenDestructive"
+  ];
+  const BRAND_COLOR_INPUTS = ["primaryColor", "secondaryColor"];
+  const collectThemeDraft = () => {
+    const read = (n) => qs(`[name="${n}"]`)?.value || "";
+    return {
+      primaryColor:   read("primaryColor")   || "#7c3aed",
+      secondaryColor: read("secondaryColor") || "#0f172a",
+      themeTokens: {
+        background:  read("tokenBackground"),
+        text:        read("tokenText"),
+        accent:      read("tokenAccent"),
+        card:        read("tokenCard"),
+        muted:       read("tokenMuted"),
+        border:      read("tokenBorder"),
+        destructive: read("tokenDestructive"),
+        radius:      Number(read("tokenRadius")) || 12,
+        shadow:      read("tokenShadow") || "MD"
+      },
+      accentGradientEnabled: qs('[name="accentGradientEnabled"]')?.checked === true,
+      accentGradientColor:   read("accentGradientColor"),
+      accentGradientAngle:   Number(read("accentGradientAngle")) || 135,
+      themeMode:             read("themeMode") || "LIGHT",
+      appName:               branding.appName,
+      logoUrl:               branding.logoUrl,
+      faviconUrl:            branding.faviconUrl
+    };
+  };
+  const refreshPresetChrome = (slug) => {
+    const preset = findPresetBySlug(slug);
+    const nameEl = document.querySelector('[data-role="preset-name"]');
+    const swEl = document.querySelector('[data-role="preset-swatches"]');
+    if (nameEl) nameEl.textContent = preset?.name || "Custom Theme";
+    if (swEl) {
+      const swatches = preset?.swatches || (() => {
+        const d = collectThemeDraft();
+        return [d.themeTokens.background, d.secondaryColor, d.primaryColor];
+      })();
+      swEl.innerHTML = swatches.map((c) => `<span style="background:${escHtml(c)}"></span>`).join("");
+    }
+  };
+  const livePreview = () => {
+    applyBrandingTheme(collectThemeDraft());
+  };
+  const setPresetSelect = (slug) => {
+    const sel = qs('[name="themePreset"]');
+    if (sel && sel.value !== slug) sel.value = slug;
+    refreshPresetChrome(slug);
+  };
+  const markCustom = () => setPresetSelect("custom");
+
+  // Picker ↔ hex sync + live preview for every token row
+  [...THEME_TOKEN_INPUTS, ...BRAND_COLOR_INPUTS].forEach((n) => {
+    const picker = qs(`[name="${n}Picker"]`);
+    const hex = qs(`[name="${n}"]`);
+    picker?.addEventListener("input", (e) => {
+      if (hex) hex.value = e.target.value;
+      markCustom();
+      livePreview();
+    });
+    hex?.addEventListener("input", (e) => {
+      if (picker && /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(e.target.value)) picker.value = e.target.value;
+      markCustom();
+      livePreview();
+    });
+  });
+
+  // Radius range ↔ number
+  qs('[name="tokenRadiusRange"]')?.addEventListener("input", (e) => {
+    const num = qs('[name="tokenRadius"]');
+    if (num) num.value = e.target.value;
+    markCustom();
+    livePreview();
+  });
+  qs('[name="tokenRadius"]')?.addEventListener("input", (e) => {
+    const range = qs('[name="tokenRadiusRange"]');
+    if (range) range.value = e.target.value;
+    markCustom();
+    livePreview();
+  });
+  qs('[name="tokenShadow"]')?.addEventListener("change", () => {
+    markCustom();
+    livePreview();
+  });
+
+  // Preset selector — fill every input, then re-run the live preview
+  qs('[name="themePreset"]')?.addEventListener("change", (e) => {
+    const slug = e.target.value;
+    if (slug === "custom") { refreshPresetChrome("custom"); return; }
+    const preset = findPresetBySlug(slug);
+    if (!preset) return;
+    const set = (name, val) => {
+      const el = qs(`[name="${name}"]`);
+      if (el) el.value = val;
+      const picker = qs(`[name="${name}Picker"]`);
+      if (picker && typeof val === "string" && /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(val)) picker.value = val;
+    };
+    const t = preset.tokens;
+    set("primaryColor",   t.primaryColor);
+    set("secondaryColor", t.secondaryColor);
+    set("tokenBackground", t.background);
+    set("tokenText",       t.text);
+    set("tokenAccent",     t.accent);
+    set("tokenCard",       t.card);
+    set("tokenMuted",      t.muted);
+    set("tokenBorder",     t.border);
+    set("tokenDestructive", t.destructive);
+    const rN = qs('[name="tokenRadius"]'); if (rN) rN.value = t.radius;
+    const rR = qs('[name="tokenRadiusRange"]'); if (rR) rR.value = t.radius;
+    const sS = qs('[name="tokenShadow"]'); if (sS) sS.value = t.shadow;
+    refreshPresetChrome(slug);
+    livePreview();
+  });
+
   qs("#branding-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -6070,6 +6309,31 @@ function renderSettings() {
       delete payload.accentGradientColorPicker;
       delete payload.accentGradientAngleRange;
       payload.accentGradientEnabled = fd.get("accentGradientEnabled") === "on" ? "true" : "false";
+
+      // Assemble themeTokens from the grouped editor fields, then strip the
+      // per-field entries and helper Picker/Range inputs from the payload.
+      payload.themeTokens = {
+        background:  fd.get("tokenBackground")  || undefined,
+        text:        fd.get("tokenText")        || undefined,
+        accent:      fd.get("tokenAccent")      || undefined,
+        card:        fd.get("tokenCard")        || undefined,
+        muted:       fd.get("tokenMuted")       || undefined,
+        border:      fd.get("tokenBorder")      || undefined,
+        destructive: fd.get("tokenDestructive") || undefined,
+        radius:      Number(fd.get("tokenRadius")) || 12,
+        shadow:      fd.get("tokenShadow")      || "MD"
+      };
+      [
+        "themePreset",
+        "tokenBackground", "tokenBackgroundPicker",
+        "tokenText",       "tokenTextPicker",
+        "tokenAccent",     "tokenAccentPicker",
+        "tokenCard",       "tokenCardPicker",
+        "tokenMuted",      "tokenMutedPicker",
+        "tokenBorder",     "tokenBorderPicker",
+        "tokenDestructive","tokenDestructivePicker",
+        "tokenRadius", "tokenRadiusRange", "tokenShadow"
+      ].forEach((k) => delete payload[k]);
       try {
         await api(`/tenants/${tenantId}/branding`, { method: "PUT", body: payload });
         setStatus("Branding saved.");
@@ -6082,6 +6346,34 @@ function renderSettings() {
         submitBtn.disabled = false;
         submitBtn.textContent = originalBtnText || "Save Branding";
       }
+    }
+  });
+
+  qs("#branding-restore-default")?.addEventListener("click", async (event) => {
+    const btn = event.currentTarget;
+    if (!confirm("Restore branding to defaults? App name, colors, gradient, and theme mode will be reset. Logo and favicon will be kept.")) return;
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = "Restoring…";
+    try {
+      await api(`/tenants/${tenantId}/branding`, {
+        method: "PUT",
+        body: {
+          appName: "",
+          primaryColor: "#7c3aed",
+          secondaryColor: "#0f172a",
+          accentGradientEnabled: "false",
+          accentGradientColor: "#ec4899",
+          accentGradientAngle: 135,
+          themeMode: "LIGHT"
+        }
+      });
+      setStatus("Branding restored to defaults.");
+      await loadSettings();
+    } catch (error) {
+      setStatus(error.message, true);
+      btn.disabled = false;
+      btn.textContent = original;
     }
   });
 

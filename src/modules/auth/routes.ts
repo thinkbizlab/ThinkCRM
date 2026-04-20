@@ -305,6 +305,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         accentGradientEnabled: false,
         accentGradientColor: "#ec4899",
         accentGradientAngle: 135,
+        themeTokens: {},
         themeMode: "LIGHT"
       });
     }
@@ -318,6 +319,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       accentGradientEnabled: b?.accentGradientEnabled ?? false,
       accentGradientColor:   b?.accentGradientColor   ?? "#ec4899",
       accentGradientAngle:   b?.accentGradientAngle   ?? 135,
+      themeTokens:           (b?.themeTokens as Record<string, unknown> | null) ?? {},
       themeMode:             b?.themeMode             ?? "LIGHT"
     });
   });

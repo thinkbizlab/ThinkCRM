@@ -57,6 +57,8 @@ const P = {
   clock:      '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   hash:       '<path d="M4 9h16"/><path d="M4 15h16"/><path d="M10 3 8 21"/><path d="M16 3l-2 18"/>',
   activity:   '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>',
+  chevronDown:'<path d="m6 9 6 6 6-6"/>',
+  chevronUp:  '<path d="m6 15 6-6 6 6"/>',
 };
 
 export function icon(name, size = 16, className = "") {

@@ -254,6 +254,7 @@ model TenantBranding {
   accentGradientEnabled  Boolean   @default(false)
   accentGradientColor    String    @default("#ec4899")
   accentGradientAngle    Int       @default(135)
+  themeTokens            Json      @default("{}")
   themeMode              ThemeMode @default(LIGHT)
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt

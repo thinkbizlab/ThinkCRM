@@ -52,6 +52,12 @@ const r2UrlOrPathSchema = z
     "Must be an absolute URL, r2:// reference, or an /uploads/ path."
   );
 
+const themeHex = z
+  .string()
+  .trim()
+  .regex(/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, "color must be hex (#RGB or #RRGGBB).")
+  .transform(normalizeHexColor);
+
 const brandingSchema = z.object({
   appName: z.string().trim().max(64).optional(),
   logoUrl: r2UrlOrPathSchema,
@@ -80,6 +86,24 @@ const brandingSchema = z.object({
     .transform(normalizeHexColor)
     .optional(),
   accentGradientAngle: z.coerce.number().int().min(0).max(360).optional(),
+  themeTokens: z
+    .preprocess((v) => {
+      if (typeof v === "string") {
+        try { return JSON.parse(v); } catch { return {}; }
+      }
+      return v ?? {};
+    }, z.object({
+      background:  themeHex.optional(),
+      text:        themeHex.optional(),
+      accent:      themeHex.optional(),
+      card:        themeHex.optional(),
+      muted:       themeHex.optional(),
+      border:      themeHex.optional(),
+      destructive: themeHex.optional(),
+      radius:      z.coerce.number().int().min(0).max(32).optional(),
+      shadow:      z.enum(["NONE", "SM", "MD", "LG", "XL"]).optional()
+    }).strict())
+    .optional(),
   themeMode: z.enum(["LIGHT", "DARK"]).default("LIGHT")
 });
 
