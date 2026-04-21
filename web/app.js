@@ -458,8 +458,10 @@ function applyBrandingTheme(branding) {
   setIf("--surface",       tokens.card);
   setIf("--surface-soft",  tokens.muted);
   setIf("--text",          tokens.text);
-  setIf("--text-2",        tokens.text);
-  setIf("--muted-color",   tokens.muted);
+  // Do NOT override --text-2 or --muted-color from tokens.muted — tokens.muted
+  // is a SURFACE color (e.g. #f1f5f9, near-white), not a foreground color.
+  // The :root / [data-theme="dark"] defaults already give proper dim-text
+  // contrast that adapts to the active mode.
   setIf("--border",        tokens.border);
   setIf("--border-strong", tokens.border);
   setIf("--danger",        tokens.destructive);
