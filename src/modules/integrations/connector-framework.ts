@@ -1,4 +1,5 @@
 import {
+  CustomerType,
   EntityType,
   JobStatus,
   Prisma,
@@ -22,11 +23,16 @@ const connectorAppShim = {
 } as Parameters<typeof validateCustomFields>[0];
 
 const customerMappedSchema = z.object({
-  customerCode: z.string().min(1),
-  name: z.string().min(1),
+  customerCode: z.string().min(2).max(40),
+  name: z.string().min(2).max(200),
+  customerType: z.nativeEnum(CustomerType).optional(),
+  taxId: z.string().max(20).optional(),
   defaultTermId: z.string().min(1).optional(),
   defaultTermCode: z.string().min(1).optional(),
   ownerId: z.string().min(1).optional(),
+  siteLat: z.number().min(-90).max(90).optional(),
+  siteLng: z.number().min(-180).max(180).optional(),
+  externalRef: z.string().trim().max(100).optional(),
   customFields: z.record(z.string(), z.unknown()).optional()
 });
 
@@ -255,6 +261,24 @@ async function upsertEntity(
       });
       validatedCf = validateCustomFields(connectorAppShim, cfDefs, payload.customFields as Record<string, unknown>);
     }
+
+    // Same uniqueness rule the create/edit form enforces.
+    if (payload.taxId) {
+      const taxIdDuplicate = await prisma.customer.findFirst({
+        where: {
+          tenantId,
+          taxId: payload.taxId,
+          NOT: { customerCode: payload.customerCode }
+        },
+        select: { customerCode: true, name: true }
+      });
+      if (taxIdDuplicate) {
+        throw new Error(
+          `Tax ID "${payload.taxId}" is already registered to customer "${taxIdDuplicate.name}" (${taxIdDuplicate.customerCode}).`
+        );
+      }
+    }
+
     await prisma.customer.upsert({
       where: {
         tenantId_customerCode: {
@@ -264,7 +288,12 @@ async function upsertEntity(
       },
       update: {
         name: payload.name,
+        customerType: payload.customerType ?? undefined,
+        taxId: payload.taxId ?? undefined,
         ownerId: payload.ownerId ?? undefined,
+        siteLat: payload.siteLat ?? undefined,
+        siteLng: payload.siteLng ?? undefined,
+        externalRef: payload.externalRef ?? undefined,
         defaultTermId,
         customFields: validatedCf ?? undefined
       },
@@ -272,7 +301,12 @@ async function upsertEntity(
         tenantId,
         customerCode: payload.customerCode,
         name: payload.name,
+        customerType: payload.customerType ?? undefined,
+        taxId: payload.taxId ?? undefined,
         ownerId: payload.ownerId ?? undefined,
+        siteLat: payload.siteLat ?? undefined,
+        siteLng: payload.siteLng ?? undefined,
+        externalRef: payload.externalRef ?? undefined,
         defaultTermId,
         customFields: validatedCf ?? undefined
       }

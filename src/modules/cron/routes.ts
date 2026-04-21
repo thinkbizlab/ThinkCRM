@@ -104,6 +104,12 @@ export const cronRoutes: FastifyPluginAsync = async (app) => {
     return runJobForAllTenants("kpiAlert");
   });
 
+  // ── REST Sync Pull ────────────────────────────────────────────────────────
+  app.get("/cron/sync-rest-pull", async (request) => {
+    verifyCronSecret(request);
+    return runJobForAllTenants("syncRestPull");
+  });
+
   // ── Trial Expiry (system-level, not per-tenant job) ───────────────────────
   app.get("/cron/trial-expiry", async (request) => {
     verifyCronSecret(request);

@@ -12,7 +12,9 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { requireRoleAtLeast, requireTenantId, requireUserId, zodMsg } from "../../lib/http.js";
 import { prisma } from "../../lib/prisma.js";
+import { encryptField } from "../../lib/secrets.js";
 import { connectorInputContractSchema, executeConnectorRun } from "./connector-framework.js";
+import { executeRestPull } from "../sync/rest-pull.js";
 
 const sourceSchema = z.object({
   sourceName: z.string().min(2),
@@ -130,7 +132,7 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
         tenantId,
         sourceName: parsed.data.sourceName,
         sourceType: parsed.data.sourceType,
-        configJson: parsed.data.configJson
+        configJson: sanitizeSourceConfig(parsed.data.sourceType, parsed.data.configJson) as Prisma.InputJsonValue
       }
     });
     return reply.code(201).send(created);
@@ -147,13 +149,38 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
     if (!source) {
       throw app.httpErrors.notFound("Source not found.");
     }
+    const nextConfig = body.configJson
+      ? sanitizeSourceConfig(source.sourceType, body.configJson, source.configJson as Record<string, unknown>)
+      : undefined;
     return prisma.integrationSource.update({
       where: { id: params.id },
       data: {
         status: body.status,
-        configJson: body.configJson as Prisma.InputJsonValue
+        configJson: nextConfig as Prisma.InputJsonValue | undefined
       }
     });
+  });
+
+  /**
+   * Manual trigger for a REST source pull. Admin-only.
+   * The scheduled cron runs the same logic for all enabled sources.
+   */
+  app.post("/integrations/master-data/sources/:id/pull", async (request, reply) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+    const userId = requireUserId(request);
+    const { id } = request.params as { id: string };
+    try {
+      const result = await executeRestPull(tenantId, id, `user:${userId}`);
+      return reply.code(result.summary.status === "failed" ? 422 : 200).send({
+        jobId: result.jobId,
+        ...result.summary,
+        errors: result.errors
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Pull failed.";
+      throw app.httpErrors.badRequest(msg);
+    }
   });
 
   app.put("/integrations/master-data/sources/:id/mappings", async (request) => {
@@ -419,3 +446,26 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
     });
   });
 };
+
+/**
+ * Encrypts the REST auth value before it hits the DB, preserving the prior
+ * value on PATCH when the UI sends an empty string (so editing endpoint
+ * URL alone doesn't blank out the stored secret).
+ */
+function sanitizeSourceConfig(
+  sourceType: "EXCEL" | "REST" | "WEBHOOK",
+  incoming: Record<string, unknown>,
+  existing?: Record<string, unknown>
+): Record<string, unknown> {
+  if (sourceType !== "REST") return incoming;
+  const out: Record<string, unknown> = { ...incoming };
+  const rawAuth = typeof out.authValue === "string" ? out.authValue.trim() : "";
+  delete out.authValue;
+  if (rawAuth) {
+    const enc = encryptField(rawAuth);
+    if (enc) out.authValueEnc = enc;
+  } else if (existing && typeof existing.authValueEnc === "string") {
+    out.authValueEnc = existing.authValueEnc;
+  }
+  return out;
+}

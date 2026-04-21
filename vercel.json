@@ -16,6 +16,10 @@
     {
       "path": "/api/v1/cron/data-retention",
       "schedule": "15 0 * * *"
+    },
+    {
+      "path": "/api/v1/cron/sync-rest-pull",
+      "schedule": "0 19 * * *"
     }
   ]
 }

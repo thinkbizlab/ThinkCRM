@@ -4708,6 +4708,7 @@ function renderSettings() {
                 <span class="badge ${src.status === "ENABLED" ? "badge--ok" : "badge--err"}" style="margin-left:var(--sp-1)">${src.status}</span>
               </div>
               <div>
+                ${src.sourceType === "REST" && src.status === "ENABLED" ? `<button class="ghost small sync-pull-now-btn" data-source-id="${src.id}" data-source-name="${escHtml(src.sourceName)}">Pull now</button>` : ""}
                 <button class="ghost small sync-toggle-source-btn" data-source-id="${src.id}" data-current-status="${src.status}">${src.status === "ENABLED" ? "Disable" : "Enable"}</button>
                 <button class="ghost small sync-edit-mappings-btn" data-source-id="${src.id}" data-source-name="${escHtml(src.sourceName)}">Edit Mappings</button>
               </div>
@@ -4737,12 +4738,34 @@ function renderSettings() {
             </div>
             <div class="form-row">
               <label class="form-label">Source Type
-                <select name="sourceType" class="form-control">
+                <select name="sourceType" id="sync-source-type-select" class="form-control">
                   <option value="WEBHOOK">Webhook (ERP pushes data)</option>
                   <option value="REST">REST API (CRM pulls data)</option>
                   <option value="EXCEL">File Upload (CSV/Excel)</option>
                 </select>
               </label>
+            </div>
+            <div id="sync-source-rest-fields" style="display:none">
+              <div class="form-row">
+                <label class="form-label">Entity to pull
+                  <select name="entityType" class="form-control">
+                    <option value="CUSTOMER">Customers</option>
+                    <option value="ITEM">Items</option>
+                    <option value="PAYMENT_TERM">Payment Terms</option>
+                  </select>
+                </label>
+              </div>
+              <div class="form-row">
+                <label class="form-label">Endpoint URL <input type="url" name="endpointUrl" placeholder="https://erp.example.com/api/customers" class="form-control"></label>
+              </div>
+              <div class="form-row">
+                <label class="form-label">Records JSON path (optional, e.g. <code>data.items</code>)<input type="text" name="recordsJsonPath" placeholder="" class="form-control"></label>
+              </div>
+              <div class="form-row" style="display:grid;grid-template-columns:1fr 2fr;gap:var(--sp-2)">
+                <label class="form-label">Auth header name <input type="text" name="authHeaderName" placeholder="Authorization" class="form-control"></label>
+                <label class="form-label">Auth value (stored encrypted) <input type="text" name="authValue" placeholder="Bearer ey…" class="form-control"></label>
+              </div>
+              <p class="muted" style="font-size:0.78rem;margin:0">Pull runs nightly at 02:00 (tenant timezone) for every ENABLED REST source, plus whenever you click <strong>Pull now</strong>.</p>
             </div>
             <div class="form-actions">
               <button type="submit" class="btn-primary small">Create Source</button>
@@ -5603,19 +5626,55 @@ function renderSettings() {
   qs("#sync-source-cancel")?.addEventListener("click", () => {
     qs("#sync-source-form-wrap").style.display = "none";
   });
+  qs("#sync-source-type-select")?.addEventListener("change", (e) => {
+    const rest = qs("#sync-source-rest-fields");
+    if (rest) rest.style.display = e.currentTarget.value === "REST" ? "block" : "none";
+  });
   qs("#sync-source-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
+    const sourceType = fd.get("sourceType");
+    const configJson = {};
+    if (sourceType === "REST") {
+      const url = String(fd.get("endpointUrl") || "").trim();
+      if (!url) { setStatus("Endpoint URL is required for REST sources."); return; }
+      configJson.endpointUrl = url;
+      configJson.entityType = String(fd.get("entityType") || "CUSTOMER");
+      const path = String(fd.get("recordsJsonPath") || "").trim();
+      if (path) configJson.recordsJsonPath = path;
+      const hdr = String(fd.get("authHeaderName") || "").trim();
+      const val = String(fd.get("authValue") || "").trim();
+      if (hdr) configJson.authHeaderName = hdr;
+      if (val) configJson.authValue = val; // backend encrypts → authValueEnc
+    }
     try {
       await api("/integrations/master-data/sources", {
         method: "POST",
-        body: { sourceName: fd.get("sourceName"), sourceType: fd.get("sourceType"), configJson: {} }
+        body: { sourceName: fd.get("sourceName"), sourceType, configJson }
       });
       qs("#sync-source-form-wrap").style.display = "none";
       await loadSyncData();
       renderSettings();
       setStatus("Source created.");
     } catch (err) { setStatus(err.message || "Failed to create source."); }
+  });
+  views.settings.querySelectorAll(".sync-pull-now-btn").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const { sourceId, sourceName } = btn.dataset;
+      btn.disabled = true;
+      const originalLabel = btn.textContent;
+      btn.textContent = "Pulling…";
+      try {
+        const result = await api(`/integrations/master-data/sources/${sourceId}/pull`, { method: "POST" });
+        setStatus(`${sourceName}: ${result.status} — ${result.success_count}/${result.processed_count} records ok, ${result.failure_count} failed.`);
+        await loadSyncData();
+        renderSettings();
+      } catch (err) {
+        setStatus(err.message || "Pull failed.");
+        btn.disabled = false;
+        btn.textContent = originalLabel;
+      }
+    });
   });
   views.settings.querySelectorAll(".sync-toggle-source-btn").forEach(btn => {
     btn.addEventListener("click", async () => {

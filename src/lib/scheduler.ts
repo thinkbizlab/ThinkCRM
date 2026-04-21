@@ -49,6 +49,16 @@ export const JOB_DEFS: JobDef[] = [
       const { runKpiAlertsForTenant } = await import("./kpi-alert-notify.js");
       return runKpiAlertsForTenant(tenantId, { force });
     }
+  },
+  {
+    key: "syncRestPull",
+    label: "REST Sync Pull",
+    description: "Pulls Customers / Items / Payment Terms from every ENABLED REST data source configured on Settings → Data Sync.",
+    defaultCronExpr: "0 2 * * *", // 02:00 nightly (tenant timezone)
+    run: async (tenantId) => {
+      const { pullAllRestSourcesForTenant } = await import("../modules/sync/rest-pull.js");
+      return pullAllRestSourcesForTenant(tenantId);
+    }
   }
 ];
 

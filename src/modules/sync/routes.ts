@@ -298,10 +298,15 @@ export const syncRoutes: FastifyPluginAsync = async (app) => {
 // Default passthrough mappings so the inbound endpoint works out-of-the-box
 // when the ERP sends records using CRM field names.
 const DEFAULT_PASSTHROUGH_MAPPINGS: Array<{ entityType: EntityType; sourceField: string; targetField: string; isRequired: boolean }> = [
-  { entityType: EntityType.CUSTOMER, sourceField: "customerCode", targetField: "customerCode", isRequired: true },
-  { entityType: EntityType.CUSTOMER, sourceField: "name",         targetField: "name",         isRequired: true },
+  { entityType: EntityType.CUSTOMER, sourceField: "customerCode",    targetField: "customerCode",    isRequired: true },
+  { entityType: EntityType.CUSTOMER, sourceField: "name",            targetField: "name",            isRequired: true },
+  { entityType: EntityType.CUSTOMER, sourceField: "customerType",    targetField: "customerType",    isRequired: false },
+  { entityType: EntityType.CUSTOMER, sourceField: "taxId",           targetField: "taxId",           isRequired: false },
   { entityType: EntityType.CUSTOMER, sourceField: "defaultTermCode", targetField: "defaultTermCode", isRequired: false },
-  { entityType: EntityType.CUSTOMER, sourceField: "ownerId",      targetField: "ownerId",      isRequired: false },
+  { entityType: EntityType.CUSTOMER, sourceField: "ownerId",         targetField: "ownerId",         isRequired: false },
+  { entityType: EntityType.CUSTOMER, sourceField: "siteLat",         targetField: "siteLat",         isRequired: false },
+  { entityType: EntityType.CUSTOMER, sourceField: "siteLng",         targetField: "siteLng",         isRequired: false },
+  { entityType: EntityType.CUSTOMER, sourceField: "externalRef",     targetField: "externalRef",     isRequired: false },
   { entityType: EntityType.ITEM,     sourceField: "itemCode",     targetField: "itemCode",     isRequired: true },
   { entityType: EntityType.ITEM,     sourceField: "name",         targetField: "name",         isRequired: true },
   { entityType: EntityType.ITEM,     sourceField: "unitPrice",    targetField: "unitPrice",    isRequired: true },
