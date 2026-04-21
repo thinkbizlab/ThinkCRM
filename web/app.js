@@ -9255,44 +9255,11 @@ qs("#notif-btn")?.addEventListener("click", () => {
   isOpen ? closeAllPanels() : openPanel(notifPanel);
 });
 
-// ── Gear dropdown (Settings + Logs) ───────────────────────────────────────────
-const gearDropdown     = qs("#gear-dropdown");
-const gearGearBtn      = qs("#settings-gear-btn");
-const gearDropdownMenu = qs("#gear-dropdown-menu");
-
-function closeGearDropdown() {
-  if (!gearDropdownMenu) return;
-  gearDropdownMenu.hidden = true;
-  gearGearBtn?.setAttribute("aria-expanded", "false");
-}
-
-gearGearBtn?.addEventListener("click", (e) => {
+// ── Gear button → opens fly-in settings panel directly ───────────────────────
+qs("#settings-gear-btn")?.addEventListener("click", (e) => {
   e.stopPropagation();
-  if (!gearDropdownMenu) return;
-  const isOpen = !gearDropdownMenu.hidden;
-  if (isOpen) {
-    closeGearDropdown();
-  } else {
-    closeUserDropdown();
-    const rect = gearGearBtn.getBoundingClientRect();
-    gearDropdownMenu.style.top  = `${rect.bottom + 6}px`;
-    gearDropdownMenu.style.right = `${document.documentElement.clientWidth - rect.right}px`;
-    gearDropdownMenu.style.left = "auto";
-    gearDropdownMenu.hidden = false;
-    gearGearBtn.setAttribute("aria-expanded", "true");
-  }
-});
-
-qs("#gear-settings-item")?.addEventListener("click", () => {
-  closeGearDropdown();
   const isOpen = settingsPanel && !settingsPanel.hidden;
   isOpen ? closeAllPanels() : openPanel(settingsPanel);
-});
-
-document.addEventListener("click", (e) => {
-  if (gearDropdown && !gearDropdown.contains(e.target)) {
-    closeGearDropdown();
-  }
 });
 
 qs("#notif-close")?.addEventListener("click", closeAllPanels);
