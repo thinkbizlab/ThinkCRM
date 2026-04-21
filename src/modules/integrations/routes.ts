@@ -142,7 +142,7 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
     requireRoleAtLeast(request, UserRole.MANAGER);
     const tenantId = requireTenantId(request);
     const params = request.params as { id: string };
-    const body = request.body as { status?: "ENABLED" | "DISABLED"; configJson?: Record<string, unknown> };
+    const body = request.body as { status?: "ENABLED" | "DISABLED"; sourceName?: string; configJson?: Record<string, unknown> };
     const source = await prisma.integrationSource.findFirst({
       where: { id: params.id, tenantId }
     });
@@ -152,10 +152,15 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
     const nextConfig = body.configJson
       ? sanitizeSourceConfig(source.sourceType, body.configJson, source.configJson as Record<string, unknown>)
       : undefined;
+    const trimmedName = typeof body.sourceName === "string" ? body.sourceName.trim() : undefined;
+    if (trimmedName !== undefined && trimmedName.length < 2) {
+      throw app.httpErrors.badRequest("sourceName must be at least 2 characters.");
+    }
     return prisma.integrationSource.update({
       where: { id: params.id },
       data: {
         status: body.status,
+        sourceName: trimmedName,
         configJson: nextConfig as Prisma.InputJsonValue | undefined
       }
     });

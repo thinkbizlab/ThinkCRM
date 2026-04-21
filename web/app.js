@@ -4715,6 +4715,7 @@ function renderSettings() {
                 <button class="ghost small sync-test-source-btn" data-source-id="${src.id}" data-source-name="${escHtml(src.sourceName)}">Test Connection</button>
                 ${src.sourceType === "REST" && src.status === "ENABLED" ? `<button class="ghost small sync-pull-now-btn" data-source-id="${src.id}" data-source-name="${escHtml(src.sourceName)}">Pull now</button>` : ""}
                 <button class="ghost small sync-toggle-source-btn" data-source-id="${src.id}" data-current-status="${src.status}">${src.status === "ENABLED" ? "Disable" : "Enable"}</button>
+                <button class="ghost small sync-edit-source-btn" data-source-id="${src.id}">Edit</button>
                 <button class="ghost small sync-edit-mappings-btn" data-source-id="${src.id}" data-source-name="${escHtml(src.sourceName)}">Edit Mappings</button>
               </div>
             </div>
@@ -4742,6 +4743,47 @@ function renderSettings() {
                 ${cfg.authHeaderName ? ` · <strong>Auth header:</strong> <code>${escHtml(cfg.authHeaderName)}</code>` : ""}
               </p>`;
             })() : ""}
+            <div class="sync-source-edit-wrap" id="sync-source-edit-${src.id}" hidden style="margin-top:var(--sp-3);padding:var(--sp-3);border:1px solid var(--clr-border);border-radius:var(--radius)">
+              <form class="sync-source-edit-form" data-source-id="${src.id}" data-source-type="${escHtml(src.sourceType)}">
+                <div class="form-row">
+                  <label class="form-label">Source Name <input type="text" name="sourceName" value="${escHtml(src.sourceName)}" required class="form-control"></label>
+                </div>
+                ${src.sourceType === "REST" ? (() => {
+                  const cfg = src.configJson || {};
+                  const qpJson = cfg.queryParams ? JSON.stringify(cfg.queryParams, null, 2) : "";
+                  return `
+                    <div class="form-row">
+                      <label class="form-label">Entity to pull
+                        <select name="entityType" class="form-control">
+                          <option value="CUSTOMER"${cfg.entityType === "CUSTOMER" ? " selected" : ""}>Customers</option>
+                          <option value="ITEM"${cfg.entityType === "ITEM" ? " selected" : ""}>Items</option>
+                          <option value="PAYMENT_TERM"${cfg.entityType === "PAYMENT_TERM" ? " selected" : ""}>Payment Terms</option>
+                        </select>
+                      </label>
+                    </div>
+                    <div class="form-row">
+                      <label class="form-label">Endpoint URL <input type="url" name="endpointUrl" value="${escHtml(cfg.endpointUrl || "")}" required class="form-control"></label>
+                    </div>
+                    <div class="form-row">
+                      <label class="form-label">Records JSON path (optional) <input type="text" name="recordsJsonPath" value="${escHtml(cfg.recordsJsonPath || "")}" class="form-control"></label>
+                    </div>
+                    <div class="form-row" style="display:grid;grid-template-columns:1fr 2fr;gap:var(--sp-2)">
+                      <label class="form-label">Auth header name <input type="text" name="authHeaderName" value="${escHtml(cfg.authHeaderName || "")}" class="form-control"></label>
+                      <label class="form-label">Auth value (leave blank to keep existing) <input type="text" name="authValue" placeholder="${cfg.authValueEnc ? "•••• (stored)" : "Bearer ey…"}" class="form-control"></label>
+                    </div>
+                    <div class="form-row">
+                      <label class="form-label">Query parameters (JSON object)
+                        <textarea name="queryParams" class="form-control" rows="2" placeholder='{"limit": 100}'>${escHtml(qpJson)}</textarea>
+                      </label>
+                    </div>
+                  `;
+                })() : ""}
+                <div class="form-actions">
+                  <button type="submit" class="btn-primary small">Save Changes</button>
+                  <button type="button" class="ghost small sync-source-edit-cancel" data-source-id="${src.id}">Cancel</button>
+                </div>
+              </form>
+            </div>
             ${src.lastSyncAt ? `<p class="muted" style="font-size:0.78rem;margin-top:var(--sp-2)">Last sync: ${new Date(src.lastSyncAt).toLocaleString()}</p>` : ""}
           </div>
         `).join("")}
@@ -5718,6 +5760,60 @@ function renderSettings() {
         await loadSyncData();
         renderSettings();
       } catch (err) { setStatus(err.message); }
+    });
+  });
+  views.settings.querySelectorAll(".sync-edit-source-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const wrap = qs(`#sync-source-edit-${btn.dataset.sourceId}`);
+      if (wrap) wrap.hidden = !wrap.hidden;
+    });
+  });
+  views.settings.querySelectorAll(".sync-source-edit-cancel").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const wrap = qs(`#sync-source-edit-${btn.dataset.sourceId}`);
+      if (wrap) wrap.hidden = true;
+    });
+  });
+  views.settings.querySelectorAll(".sync-source-edit-form").forEach(form => {
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const sourceType = form.dataset.sourceType;
+      const body = { sourceName: String(fd.get("sourceName") || "").trim() };
+      if (sourceType === "REST") {
+        const configJson = {
+          entityType:      String(fd.get("entityType") || "CUSTOMER"),
+          endpointUrl:     String(fd.get("endpointUrl") || "").trim(),
+          recordsJsonPath: String(fd.get("recordsJsonPath") || "").trim() || undefined,
+          authHeaderName:  String(fd.get("authHeaderName") || "").trim() || undefined
+        };
+        const authValue = String(fd.get("authValue") || "").trim();
+        if (authValue) configJson.authValue = authValue; // backend encrypts, otherwise preserves existing
+        const qpRaw = String(fd.get("queryParams") || "").trim();
+        if (qpRaw) {
+          try {
+            const parsed = JSON.parse(qpRaw);
+            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+              setStatus("Query parameters must be a JSON object."); return;
+            }
+            configJson.queryParams = parsed;
+          } catch {
+            setStatus("Query parameters is not valid JSON."); return;
+          }
+        } else {
+          configJson.queryParams = {};
+        }
+        body.configJson = configJson;
+      }
+      try {
+        await api(`/integrations/master-data/sources/${form.dataset.sourceId}`, {
+          method: "PATCH",
+          body
+        });
+        setStatus("Source updated.");
+        await loadSyncData();
+        renderSettings();
+      } catch (err) { setStatus(err.message || "Failed to update source."); }
     });
   });
   views.settings.querySelectorAll(".sync-test-source-btn").forEach(btn => {
