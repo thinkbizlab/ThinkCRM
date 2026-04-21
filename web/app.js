@@ -43,8 +43,10 @@ import {
   getCustomFieldDefinitions,
   collectCustomFieldPayload,
   renderCustomFieldInputs,
-  renderCustomFieldDefinitionRows,
-  renderCustomFieldsSummary
+  renderCustomFieldsSummary,
+  renderCustomFieldFilters,
+  collectCustomFieldFilters,
+  matchesCustomFieldFilters
 } from "./modules/custom-fields.js";
 
 const loginForm = qs("#login-form");
@@ -733,7 +735,8 @@ const settingsPageRouteMap = {
   "kpi-targets":    "/settings/kpi-targets",
   "integrations":   "/settings/integrations",
   "cron-jobs":      "/settings/scheduled-jobs",
-  "custom-domain":  "/settings/custom-domain"
+  "custom-domain":  "/settings/custom-domain",
+  "custom-fields":  "/settings/custom-fields"
 };
 
 // notifPrefs — loaded from API, cached in memory for the session
@@ -962,13 +965,24 @@ const MASTER_DATA_IMPORT_SPECS = {
   }
 };
 
+function getActiveCustomFieldColumns(entity) {
+  const defs = state.cache.customFieldDefinitions?.[entity] || [];
+  return defs.filter((d) => d.isActive).map((d) => d.fieldKey);
+}
+
 function downloadMasterDataTemplate(entity) {
   const spec = MASTER_DATA_IMPORT_SPECS[entity];
   if (!spec) return;
+  const cfCols = getActiveCustomFieldColumns(entity);
+  const allColumns = [...spec.columns, ...cfCols];
   const historyRows = spec.sourceRows();
-  const rows = historyRows.length ? historyRows : spec.sample;
-  const ws = XLSX.utils.json_to_sheet(rows, { header: spec.columns });
-  ws["!cols"] = spec.columns.map(() => ({ wch: 20 }));
+  const rows = (historyRows.length ? historyRows : spec.sample).map((r) => {
+    const out = { ...r };
+    for (const k of cfCols) if (!(k in out)) out[k] = "";
+    return out;
+  });
+  const ws = XLSX.utils.json_to_sheet(rows, { header: allColumns });
+  ws["!cols"] = allColumns.map(() => ({ wch: 20 }));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, spec.label.slice(0, 31));
   XLSX.writeFile(wb, `${spec.fileBase}-template.xlsx`);
@@ -986,7 +1000,10 @@ function openMasterDataImportModal(entity) {
         <button class="popup-close-btn" aria-label="Close">${icon('x', 14)}</button>
       </div>
       <div style="padding:var(--sp-3) 0;display:flex;flex-direction:column;gap:var(--sp-3)">
-        <p class="muted small">Upload an Excel (.xlsx) file. Required columns: ${spec.columns.map(c => `<code>${c}</code>`).join(", ")}. Existing rows (matched by natural key) are overwritten.</p>
+        <p class="muted small">Upload an Excel (.xlsx) file. Required columns: ${spec.columns.map(c => `<code>${c}</code>`).join(", ")}. Existing rows (matched by natural key) are overwritten.${(() => {
+          const cfCols = getActiveCustomFieldColumns(entity);
+          return cfCols.length ? ` Optional custom field columns: ${cfCols.map(c => `<code>${c}</code>`).join(", ")}.` : "";
+        })()}</p>
         <input type="file" class="md-import-file" accept=".xlsx,.xls" style="font-size:0.85rem" />
         <p class="md-import-msg muted small" style="min-height:1.2em"></p>
         <div class="md-import-results" hidden></div>
@@ -1114,23 +1131,9 @@ function renderMasterData(paymentTerms) {
         <button type="submit">Create Payment Term</button>
       </form>
       ${isAdmin ? `
-      <h4>Custom Fields</h4>
-      <form class="mini-form custom-field-def-form" data-entity="payment-term">
-        <input name="fieldKey" placeholder="fieldKey (e.g. collectionMethod)" required />
-        <input name="label" placeholder="Label" required />
-        <select name="dataType" required>
-          <option value="TEXT">Text</option>
-          <option value="NUMBER">Number</option>
-          <option value="BOOLEAN">Boolean</option>
-          <option value="DATE">Date</option>
-          <option value="SELECT">Select</option>
-        </select>
-        <input name="options" placeholder="Select options (comma separated)" />
-        <input name="displayOrder" type="number" min="0" placeholder="Display order" />
-        <label><input name="isRequired" type="checkbox" /> Required</label>
-        <button type="submit">Add Field</button>
-      </form>
-      <div class="list">${renderCustomFieldDefinitionRows("payment-terms")}</div>
+      <p class="muted small" style="margin-top:var(--sp-3)">
+        ${paymentTermFieldDefinitions.filter((d) => d.isActive).length} active custom field(s) · <a href="/settings/custom-fields" data-settings-link="custom-fields">Manage custom fields</a>
+      </p>
       ` : ""}
       <div class="list">
         ${paymentTerms
@@ -1174,23 +1177,25 @@ function renderMasterData(paymentTerms) {
         ${renderCustomFieldInputs(itemFieldDefinitions)}
         <button type="submit">Create Item</button>
       </form>
-      <h4>Custom Fields</h4>
-      <form class="mini-form custom-field-def-form" data-entity="item">
-        <input name="fieldKey" placeholder="fieldKey (e.g. warrantyMonths)" required />
-        <input name="label" placeholder="Label" required />
-        <select name="dataType" required>
-          <option value="TEXT">Text</option>
-          <option value="NUMBER">Number</option>
-          <option value="BOOLEAN">Boolean</option>
-          <option value="DATE">Date</option>
-          <option value="SELECT">Select</option>
-        </select>
-        <input name="options" placeholder="Select options (comma separated)" />
-        <input name="displayOrder" type="number" min="0" placeholder="Display order" />
-        <label><input name="isRequired" type="checkbox" /> Required</label>
-        <button type="submit">Add Field</button>
-      </form>
-      <div class="list">${renderCustomFieldDefinitionRows("items")}</div>
+      ${isAdmin ? `
+      <p class="muted small" style="margin-top:var(--sp-3)">
+        ${itemFieldDefinitions.filter((d) => d.isActive).length} active custom field(s) · <a href="/settings/custom-fields" data-settings-link="custom-fields">Manage custom fields</a>
+      </p>
+      ` : ""}
+      ${itemFieldDefinitions.filter((d) => d.isActive).length > 0 ? `
+        <div style="margin:var(--sp-3) 0">
+          <button type="button" class="ghost small" id="item-filter-toggle">${state.masterFiltersOpen ? "Hide" : "Show"} filters${Object.values(state.itemCustomFieldFilters || {}).filter((v) => v !== "" && v != null).length ? ` (${Object.values(state.itemCustomFieldFilters || {}).filter((v) => v !== "" && v != null).length})` : ""}</button>
+          ${state.masterFiltersOpen ? `
+            <form id="item-cf-filter-form" class="cf-filter-panel" style="padding:var(--sp-3);background:var(--surface-soft);border:1px solid var(--border);border-radius:var(--r-md);margin-top:var(--sp-2)">
+              ${renderCustomFieldFilters(itemFieldDefinitions, state.itemCustomFieldFilters)}
+              <div class="inline-actions wrap" style="margin-top:var(--sp-2)">
+                <button type="submit">Apply filters</button>
+                <button type="button" class="ghost" id="item-cf-filter-clear">Clear</button>
+              </div>
+            </form>
+          ` : ""}
+        </div>
+      ` : ""}
       <div class="list" id="item-list"></div>
     </section>
     </div>
@@ -1200,7 +1205,9 @@ function renderMasterData(paymentTerms) {
   if (custMount) renderCustomerListSection(custMount, termOptions);
 
   const itemList = qs("#item-list");
-  itemList.innerHTML = state.cache.items
+  const itemDefsActive = itemFieldDefinitions.filter((d) => d.isActive);
+  const filteredItems = state.cache.items.filter((it) => matchesCustomFieldFilters(it, itemDefsActive, state.itemCustomFieldFilters));
+  itemList.innerHTML = filteredItems
     .map(
       (item) => `
     <div class="row">
@@ -1220,6 +1227,21 @@ function renderMasterData(paymentTerms) {
       navigateToMasterPage(btn.dataset.page);
       renderMasterData(state.cache.paymentTerms);
     });
+  });
+
+  qs("#item-filter-toggle")?.addEventListener("click", () => {
+    state.masterFiltersOpen = !state.masterFiltersOpen;
+    renderMasterData(state.cache.paymentTerms);
+  });
+  qs("#item-cf-filter-form")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    state.itemCustomFieldFilters = collectCustomFieldFilters(fd, getCustomFieldDefinitions("items"));
+    renderMasterData(state.cache.paymentTerms);
+  });
+  qs("#item-cf-filter-clear")?.addEventListener("click", () => {
+    state.itemCustomFieldFilters = {};
+    renderMasterData(state.cache.paymentTerms);
   });
 
   const doExport = (type, fmt) => {
@@ -1397,50 +1419,10 @@ function renderMasterData(paymentTerms) {
     });
   });
 
-  views.master.querySelectorAll(".custom-field-def-form").forEach((form) => {
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const entity = form.dataset.entity;
-      if (!entity) return;
-      const formData = new FormData(event.currentTarget);
-      const options = String(formData.get("options") || "")
-        .split(",")
-        .map((option) => option.trim())
-        .filter(Boolean);
-      const payload = {
-        fieldKey: String(formData.get("fieldKey") || ""),
-        label: String(formData.get("label") || ""),
-        dataType: String(formData.get("dataType") || "TEXT"),
-        isRequired: formData.get("isRequired") === "on",
-        displayOrder: Number(formData.get("displayOrder") || 0),
-        options
-      };
-      if (!options.length) delete payload.options;
-      try {
-        await api(`/custom-fields/${entity}`, {
-          method: "POST",
-          body: payload
-        });
-        setStatus("Custom field created.");
-        await loadMaster();
-      } catch (error) {
-        setStatus(error.message, true);
-      }
-    });
-  });
-
-  views.master.querySelectorAll(".custom-field-toggle").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      try {
-        await api(`/custom-fields/${btn.dataset.entity}/${btn.dataset.id}`, {
-          method: "PATCH",
-          body: { isActive: btn.dataset.active !== "true" }
-        });
-        setStatus("Custom field updated.");
-        await loadMaster();
-      } catch (error) {
-        setStatus(error.message, true);
-      }
+  views.master.querySelectorAll('[data-settings-link]').forEach((link) => {
+    link.addEventListener("click", (e) => {
+      e.preventDefault();
+      navigateToSettingsPage(link.dataset.settingsLink);
     });
   });
 }
@@ -3193,6 +3175,21 @@ function renderSettings() {
     state.cache.cronJobs = null; // loading
     api("/cron-jobs").then(data => { state.cache.cronJobs = data; renderSettings(); }).catch(() => { state.cache.cronJobs = []; renderSettings(); });
   }
+  // Lazy-load custom field definitions for all entity types on first visit
+  if (page === "custom-fields" && state.cache.customFieldSettings === undefined) {
+    state.cache.customFieldSettings = null;
+    Promise.all([
+      api("/custom-fields/payment-term"),
+      api("/custom-fields/customer"),
+      api("/custom-fields/item")
+    ]).then(([pt, cu, it]) => {
+      state.cache.customFieldSettings = { "payment-term": pt, customer: cu, item: it };
+      renderSettings();
+    }).catch(() => {
+      state.cache.customFieldSettings = { "payment-term": [], customer: [], item: [] };
+      renderSettings();
+    });
+  }
   const isAdmin = state.user?.role === "ADMIN";
   const isManager = state.user?.role === "MANAGER";
   const branding = state.cache.branding || {};
@@ -3231,6 +3228,7 @@ function renderSettings() {
     { page: "integrations",   label: "Integrations",          ic: "plug", roles: ["ADMIN"] },
     { page: "custom-domain",  label: "Custom Domain",          ic: "globe", roles: ["ADMIN"] },
     { page: "data-sync",      label: "Data Sync",              ic: "refresh", roles: ["ADMIN"] },
+    { page: "custom-fields",  label: "Custom Fields",         ic: "clipboard", roles: ["ADMIN"] },
     { page: "cron-jobs",      label: "Scheduled Jobs",         ic: "clock", roles: ["ADMIN"] },
     { page: "logs",           label: "Logs",                   ic: "activity", roles: ["ADMIN"], view: "integrations" }
   ];
@@ -4797,6 +4795,118 @@ function renderSettings() {
         `}
       </section>
     `;
+  } else if (page === "custom-fields") {
+    const cfData = state.cache.customFieldSettings;
+    if (cfData === null || cfData === undefined) {
+      pageHtml = `<section class="card"><div class="muted">Loading custom fields…</div></section>`;
+    } else {
+      const entityTab = state.customFieldsEntityTab || "customer";
+      const entityLabels = { "payment-term": "Payment Terms", customer: "Customers", item: "Items" };
+      const defs = cfData[entityTab] || [];
+      const typeLabels = {
+        TEXT: "Text",
+        TEXTAREA: "Long text",
+        NUMBER: "Number",
+        CURRENCY: "Currency",
+        BOOLEAN: "Boolean",
+        DATE: "Date",
+        SELECT: "Select (single)",
+        MULTISELECT: "Select (multiple)",
+        EMAIL: "Email",
+        URL: "URL",
+        PHONE: "Phone"
+      };
+      const dataTypeOptions = Object.entries(typeLabels)
+        .map(([v, l]) => `<option value="${v}">${l}</option>`)
+        .join("");
+      pageHtml = `
+        <section class="card" style="margin-bottom:var(--sp-4)">
+          <h3 class="section-title">${icon('clipboard')} Custom Fields</h3>
+          <p class="muted" style="font-size:0.85rem">Define tenant-specific fields to attach to Customers, Items, and Payment Terms. Supports text, number, currency, date, boolean, single/multi-select, email, URL, and phone.</p>
+        </section>
+
+        <section class="card">
+          <div class="cf-tabs" style="display:flex;gap:var(--sp-2);margin-bottom:var(--sp-4);border-bottom:1px solid var(--border)">
+            ${["customer", "item", "payment-term"].map((et) => `
+              <button class="cf-tab ghost ${et === entityTab ? "cf-tab--active" : ""}" data-cf-tab="${et}" style="border-bottom:2px solid ${et === entityTab ? "var(--primary)" : "transparent"};border-radius:0;margin-bottom:-1px">
+                ${escHtml(entityLabels[et])}
+                <span class="muted small">(${(cfData[et] || []).length})</span>
+              </button>
+            `).join("")}
+          </div>
+
+          <form class="mini-form" id="cf-create-form" data-entity="${entityTab}">
+            <h4 style="margin-top:0">Add field</h4>
+            <div class="cf-form-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-2)">
+              <label>Key (snake_case)
+                <input name="fieldKey" placeholder="e.g. collection_method" pattern="^[a-zA-Z][a-zA-Z0-9_]*$" required />
+              </label>
+              <label>Label
+                <input name="label" placeholder="Display label" required />
+              </label>
+              <label>Data type
+                <select name="dataType" id="cf-create-type" required>${dataTypeOptions}</select>
+              </label>
+              <label>Display order
+                <input name="displayOrder" type="number" min="0" value="0" />
+              </label>
+              <label class="cf-options-wrap" style="grid-column:1 / -1;display:none">Options (comma separated — required for SELECT / MULTISELECT)
+                <input name="options" placeholder="Option A, Option B, Option C" />
+              </label>
+              <label style="grid-column:1 / -1">Placeholder / help text
+                <input name="placeholder" maxlength="120" />
+              </label>
+              <label class="checkbox-inline" style="grid-column:1 / -1">
+                <input name="isRequired" type="checkbox" />
+                Required field
+              </label>
+            </div>
+            <button type="submit">Add custom field</button>
+          </form>
+        </section>
+
+        <section class="card" style="margin-top:var(--sp-4)">
+          <h4 style="margin-top:0">${escHtml(entityLabels[entityTab])} fields</h4>
+          ${defs.length === 0 ? `
+            <div class="empty-state compact"><div><strong>No custom fields yet</strong><p>Use the form above to add your first field.</p></div></div>
+          ` : `
+            <table class="data-table">
+              <thead><tr>
+                <th>Label</th>
+                <th>Key</th>
+                <th>Type</th>
+                <th>Required</th>
+                <th>Order</th>
+                <th>Options</th>
+                <th>Status</th>
+                <th></th>
+              </tr></thead>
+              <tbody>
+                ${defs.map((d) => {
+                  const options = Array.isArray(d.optionsJson) ? d.optionsJson.join(", ") : "—";
+                  return `
+                    <tr data-cf-row="${d.id}">
+                      <td><strong>${escHtml(d.label)}</strong>${d.placeholder ? `<div class="muted small">${escHtml(d.placeholder)}</div>` : ""}</td>
+                      <td><code>${escHtml(d.fieldKey)}</code></td>
+                      <td>${escHtml(typeLabels[d.dataType] || d.dataType)}</td>
+                      <td>${d.isRequired ? "Yes" : "No"}</td>
+                      <td>${d.displayOrder}</td>
+                      <td class="muted small">${escHtml(options)}</td>
+                      <td><span class="chip ${d.isActive ? "chip-success" : "chip-danger"}">${d.isActive ? "Active" : "Inactive"}</span></td>
+                      <td class="inline-actions wrap" style="gap:var(--sp-1)">
+                        <button class="ghost small cf-edit-btn" data-id="${d.id}" data-entity="${entityTab}">Edit</button>
+                        <button class="ghost small cf-toggle-btn" data-id="${d.id}" data-entity="${entityTab}" data-active="${d.isActive}">${d.isActive ? "Deactivate" : "Activate"}</button>
+                        <button class="ghost small danger cf-delete-btn" data-id="${d.id}" data-entity="${entityTab}" data-label="${escHtml(d.label)}">Delete</button>
+                      </td>
+                    </tr>
+                  `;
+                }).join("")}
+              </tbody>
+            </table>
+          `}
+        </section>
+      `;
+    }
   } else if (page === "cron-jobs") {
     const cronData = state.cache.cronJobs;
     if (cronData === null) {
@@ -5216,6 +5326,143 @@ function renderSettings() {
           }
           renderSettings();
         } catch { btn.disabled = false; btn.textContent = "Load more…"; }
+      });
+    });
+  }
+
+  // ── Custom Fields listeners ──────────────────────────────────
+  if (state.settingsPage === "custom-fields") {
+    const cfRefresh = async () => {
+      try {
+        const [pt, cu, it] = await Promise.all([
+          api("/custom-fields/payment-term"),
+          api("/custom-fields/customer"),
+          api("/custom-fields/item")
+        ]);
+        state.cache.customFieldSettings = { "payment-term": pt, customer: cu, item: it };
+        // Also invalidate master-data cache so list pages pick up changes
+        state.cache.customFieldDefinitions = {
+          "payment-terms": pt,
+          customers: cu,
+          items: it
+        };
+      } catch (err) {
+        setStatus(err.message, true);
+      }
+      renderSettings();
+    };
+
+    views.settings.querySelectorAll(".cf-tab").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        state.customFieldsEntityTab = btn.dataset.cfTab;
+        renderSettings();
+      });
+    });
+
+    const typeSelect = qs("#cf-create-type");
+    const optionsWrap = views.settings.querySelector(".cf-options-wrap");
+    const syncOptionsVisibility = () => {
+      if (!typeSelect || !optionsWrap) return;
+      const v = typeSelect.value;
+      optionsWrap.style.display = v === "SELECT" || v === "MULTISELECT" ? "" : "none";
+    };
+    typeSelect?.addEventListener("change", syncOptionsVisibility);
+    syncOptionsVisibility();
+
+    qs("#cf-create-form")?.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const form = e.currentTarget;
+      const fd = new FormData(form);
+      const dataType = String(fd.get("dataType") || "TEXT");
+      const options = String(fd.get("options") || "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const payload = {
+        fieldKey: String(fd.get("fieldKey") || "").trim(),
+        label: String(fd.get("label") || "").trim(),
+        dataType,
+        isRequired: fd.get("isRequired") === "on",
+        displayOrder: Number(fd.get("displayOrder") || 0),
+        placeholder: String(fd.get("placeholder") || "").trim() || undefined
+      };
+      if (dataType === "SELECT" || dataType === "MULTISELECT") {
+        payload.options = options;
+      }
+      const entity = form.dataset.entity;
+      try {
+        await api(`/custom-fields/${entity}`, { method: "POST", body: payload });
+        setStatus("Custom field added.");
+        await cfRefresh();
+      } catch (err) {
+        setStatus(err.message, true);
+      }
+    });
+
+    views.settings.querySelectorAll(".cf-toggle-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        try {
+          await api(`/custom-fields/${btn.dataset.entity}/${btn.dataset.id}`, {
+            method: "PATCH",
+            body: { isActive: btn.dataset.active !== "true" }
+          });
+          await cfRefresh();
+        } catch (err) {
+          setStatus(err.message, true);
+        }
+      });
+    });
+
+    views.settings.querySelectorAll(".cf-delete-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        if (!confirm(`Delete custom field "${btn.dataset.label}"? Existing records keep their values but the field is removed from forms.`)) return;
+        try {
+          await api(`/custom-fields/${btn.dataset.entity}/${btn.dataset.id}`, { method: "DELETE" });
+          setStatus("Custom field deleted.");
+          await cfRefresh();
+        } catch (err) {
+          setStatus(err.message, true);
+        }
+      });
+    });
+
+    views.settings.querySelectorAll(".cf-edit-btn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = btn.dataset.id;
+        const entity = btn.dataset.entity;
+        const tabKey = entity;
+        const def = (state.cache.customFieldSettings?.[tabKey] || []).find((d) => d.id === id);
+        if (!def) return;
+        const label = prompt("Label:", def.label);
+        if (label === null) return;
+        const order = prompt("Display order:", String(def.displayOrder ?? 0));
+        if (order === null) return;
+        const required = confirm("Required field? (OK = Yes, Cancel = No)");
+        const placeholder = prompt("Placeholder / help text:", def.placeholder || "");
+        if (placeholder === null) return;
+        const body = {
+          label: label.trim(),
+          displayOrder: Number(order) || 0,
+          isRequired: required,
+          placeholder: placeholder.trim() || null
+        };
+        if (def.dataType === "SELECT" || def.dataType === "MULTISELECT") {
+          const current = Array.isArray(def.optionsJson) ? def.optionsJson.join(", ") : "";
+          const optInput = prompt("Options (comma separated):", current);
+          if (optInput === null) return;
+          body.options = optInput.split(",").map((s) => s.trim()).filter(Boolean);
+          if (!body.options.length) {
+            setStatus("SELECT/MULTISELECT fields require at least one option.", true);
+            return;
+          }
+        }
+        try {
+          await api(`/custom-fields/${entity}/${id}`, { method: "PATCH", body });
+          setStatus("Custom field updated.");
+          await cfRefresh();
+        } catch (err) {
+          setStatus(err.message, true);
+        }
       });
     });
   }
@@ -6889,13 +7136,18 @@ const CUST_PAGE_SIZE = 20;
 
 function filteredCustomers() {
   const q = (state.customerListQuery || "").toLowerCase().trim();
-  if (!q) return state.cache.customers;
-  return state.cache.customers.filter(
-    (c) =>
-      c.customerCode?.toLowerCase().includes(q) ||
-      c.name?.toLowerCase().includes(q) ||
-      c.taxId?.toLowerCase().includes(q)
-  );
+  const defs = getCustomFieldDefinitions("customers");
+  const cfFilters = state.customerCustomFieldFilters || {};
+  return state.cache.customers.filter((c) => {
+    if (q) {
+      const matches =
+        c.customerCode?.toLowerCase().includes(q) ||
+        c.name?.toLowerCase().includes(q) ||
+        c.taxId?.toLowerCase().includes(q);
+      if (!matches) return false;
+    }
+    return matchesCustomFieldFilters(c, defs, cfFilters);
+  });
 }
 
 function dealsForCustomer(customerId) {
@@ -7147,6 +7399,9 @@ function renderCustomerListSection(container, termOptions) {
   const canSeeTeam = ["MANAGER", "SUPERVISOR"].includes(role);
   const canSeeAll  = ["ADMIN", "DIRECTOR"].includes(role);
 
+  const customerDefs = getCustomFieldDefinitions("customers").filter((d) => d.isActive);
+  const activeCfFilterCount = Object.values(state.customerCustomFieldFilters || {}).filter((v) => v !== "" && v != null).length;
+  const showCfFilters = customerDefs.length > 0;
   container.innerHTML = `
     <div class="cust-list-wrap">
       <div class="cust-list-toolbar">
@@ -7160,11 +7415,23 @@ function renderCustomerListSection(container, termOptions) {
             ${canSeeTeam || canSeeAll ? `<button class="cust-scope-pill ${state.customerScope === "team" ? "active" : ""}" data-scope="team">My Team</button>` : ""}
             ${canSeeAll ? `<button class="cust-scope-pill ${state.customerScope === "all" ? "active" : ""}" data-scope="all">All</button>` : ""}
           </div>` : ""}
+        ${showCfFilters ? `
+          <button class="ghost small" id="cust-filter-toggle">${state.masterFiltersOpen ? "Hide" : "Show"} filters${activeCfFilterCount ? ` (${activeCfFilterCount})` : ""}</button>
+        ` : ""}
         <button class="cust-create-btn" id="cust-open-modal">
           <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           New Customer
         </button>
       </div>
+      ${showCfFilters && state.masterFiltersOpen ? `
+        <form id="cust-cf-filter-form" class="cf-filter-panel" style="padding:var(--sp-3);background:var(--surface-soft);border:1px solid var(--border);border-radius:var(--r-md);margin-bottom:var(--sp-3)">
+          ${renderCustomFieldFilters(customerDefs, state.customerCustomFieldFilters)}
+          <div class="inline-actions wrap" style="margin-top:var(--sp-2)">
+            <button type="submit">Apply filters</button>
+            <button type="button" class="ghost" id="cust-cf-filter-clear">Clear</button>
+          </div>
+        </form>
+      ` : ""}
       <div id="cust-body">${buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin)}</div>
     </div>
   `;
@@ -7191,6 +7458,24 @@ function renderCustomerListSection(container, termOptions) {
   // New Customer modal
   container.querySelector("#cust-open-modal")?.addEventListener("click", () => {
     openNewCustomerModal(termOptions);
+  });
+
+  // Custom field filter toggle + form
+  container.querySelector("#cust-filter-toggle")?.addEventListener("click", () => {
+    state.masterFiltersOpen = !state.masterFiltersOpen;
+    renderCustomerListSection(container, termOptions);
+  });
+  container.querySelector("#cust-cf-filter-form")?.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    state.customerCustomFieldFilters = collectCustomFieldFilters(fd, getCustomFieldDefinitions("customers"));
+    state.customerListPage = 1;
+    renderCustomerListSection(container, termOptions);
+  });
+  container.querySelector("#cust-cf-filter-clear")?.addEventListener("click", () => {
+    state.customerCustomFieldFilters = {};
+    state.customerListPage = 1;
+    renderCustomerListSection(container, termOptions);
   });
 
   attachCustBodyListeners(container, totalPages, termOptions);

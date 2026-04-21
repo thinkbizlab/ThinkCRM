@@ -952,10 +952,16 @@ enum AiVisitRecommendationStatus {
 
 enum CustomFieldDataType {
   TEXT
+  TEXTAREA
   NUMBER
+  CURRENCY
   BOOLEAN
   DATE
   SELECT
+  MULTISELECT
+  EMAIL
+  URL
+  PHONE
 }
 
 enum CustomerType {

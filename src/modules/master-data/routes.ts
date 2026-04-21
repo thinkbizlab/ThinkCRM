@@ -4,7 +4,7 @@ import { z } from "zod";
 import { listVisibleUserIds, requireRoleAtLeast, requireTenantId, requireUserId, zodMsg } from "../../lib/http.js";
 import { writeEntityChangelog } from "../../lib/changelog.js";
 import { prisma } from "../../lib/prisma.js";
-import { validateCustomFields, asRecord } from "../../lib/custom-fields.js";
+import { validateCustomFields, asRecord, extractCustomFieldsFromRow } from "../../lib/custom-fields.js";
 import { logAuditEvent } from "../../lib/audit.js";
 
 const customFieldValuesSchema = z.record(z.string(), z.unknown());
@@ -25,18 +25,20 @@ const customFieldDefinitionCreateSchema = z
     placeholder: z.string().max(120).optional()
   })
   .superRefine((value, ctx) => {
-    if (value.dataType === CustomFieldDataType.SELECT && !value.options?.length) {
+    const isOptionBased =
+      value.dataType === CustomFieldDataType.SELECT || value.dataType === CustomFieldDataType.MULTISELECT;
+    if (isOptionBased && !value.options?.length) {
       ctx.addIssue({
         path: ["options"],
         code: "custom",
-        message: "SELECT fields require at least one option."
+        message: "SELECT/MULTISELECT fields require at least one option."
       });
     }
-    if (value.dataType !== CustomFieldDataType.SELECT && value.options?.length) {
+    if (!isOptionBased && value.options?.length) {
       ctx.addIssue({
         path: ["options"],
         code: "custom",
-        message: "Options are only supported for SELECT fields."
+        message: "Options are only supported for SELECT or MULTISELECT fields."
       });
     }
   });
@@ -180,7 +182,8 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
         isActive: parsed.data.isActive ?? true,
         displayOrder: parsed.data.displayOrder ?? 0,
         optionsJson:
-          parsed.data.dataType === CustomFieldDataType.SELECT
+          parsed.data.dataType === CustomFieldDataType.SELECT ||
+          parsed.data.dataType === CustomFieldDataType.MULTISELECT
             ? parsed.data.options ?? []
             : Prisma.DbNull,
         placeholder: parsed.data.placeholder
@@ -206,7 +209,8 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     }
     const nextOptions =
       parsed.data.options !== undefined
-        ? existing.dataType === CustomFieldDataType.SELECT
+        ? existing.dataType === CustomFieldDataType.SELECT ||
+          existing.dataType === CustomFieldDataType.MULTISELECT
           ? parsed.data.options
           : Prisma.DbNull
         : undefined;
@@ -221,6 +225,21 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
         placeholder: parsed.data.placeholder === null ? null : parsed.data.placeholder
       }
     });
+  });
+
+  app.delete("/custom-fields/:entityType/:id", async (request, reply) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+    const params = request.params as { entityType: string; id: string };
+    const entityType = resolveCustomFieldEntityType(params.entityType, app);
+    const existing = await prisma.customFieldDefinition.findFirst({
+      where: { id: params.id, tenantId, entityType }
+    });
+    if (!existing) {
+      throw app.httpErrors.notFound("Custom field definition not found.");
+    }
+    await prisma.customFieldDefinition.delete({ where: { id: params.id } });
+    return reply.code(204).send();
   });
 
   app.get("/payment-terms", async (request) => {
@@ -868,20 +887,37 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     if (!rawRows.length) throw app.httpErrors.badRequest("Expected { rows: [...] } with at least one row.");
     if (rawRows.length > 1000) throw app.httpErrors.badRequest("Maximum 1000 rows per import.");
 
+    const paymentTermDefinitions = await prisma.customFieldDefinition.findMany({
+      where: { tenantId, entityType: EntityType.PAYMENT_TERM }
+    });
+
     const errors: { row: number; code?: string; error: string }[] = [];
     let imported = 0;
     for (let i = 0; i < rawRows.length; i++) {
-      const parsed = paymentTermImportRow.safeParse(rawRows[i]);
+      const rawRow = rawRows[i] as Record<string, unknown>;
+      const parsed = paymentTermImportRow.safeParse(rawRow);
       if (!parsed.success) {
         errors.push({ row: i + 1, error: zodMsg(parsed.error) });
         continue;
       }
       const row = parsed.data;
+      let customFields: Prisma.InputJsonValue | undefined;
+      try {
+        const cfRaw = extractCustomFieldsFromRow(rawRow, paymentTermDefinitions);
+        customFields = validateCustomFields(app, paymentTermDefinitions, cfRaw);
+      } catch (error) {
+        errors.push({ row: i + 1, code: row.code, error: (error as Error).message });
+        continue;
+      }
       try {
         await prisma.paymentTerm.upsert({
           where: { tenantId_code: { tenantId, code: row.code } },
-          update: { name: row.name, dueDays: row.dueDays },
-          create: { tenantId, code: row.code, name: row.name, dueDays: row.dueDays }
+          update: {
+            name: row.name,
+            dueDays: row.dueDays,
+            ...(customFields !== undefined ? { customFields } : {})
+          },
+          create: { tenantId, code: row.code, name: row.name, dueDays: row.dueDays, customFields }
         });
         imported += 1;
       } catch (error) {
@@ -910,20 +946,45 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     if (!rawRows.length) throw app.httpErrors.badRequest("Expected { rows: [...] } with at least one row.");
     if (rawRows.length > 1000) throw app.httpErrors.badRequest("Maximum 1000 rows per import.");
 
+    const itemDefinitions = await prisma.customFieldDefinition.findMany({
+      where: { tenantId, entityType: EntityType.ITEM }
+    });
+
     const errors: { row: number; itemCode?: string; error: string }[] = [];
     let imported = 0;
     for (let i = 0; i < rawRows.length; i++) {
-      const parsed = itemImportRow.safeParse(rawRows[i]);
+      const rawRow = rawRows[i] as Record<string, unknown>;
+      const parsed = itemImportRow.safeParse(rawRow);
       if (!parsed.success) {
         errors.push({ row: i + 1, error: zodMsg(parsed.error) });
         continue;
       }
       const row = parsed.data;
+      let customFields: Prisma.InputJsonValue | undefined;
+      try {
+        const cfRaw = extractCustomFieldsFromRow(rawRow, itemDefinitions);
+        customFields = validateCustomFields(app, itemDefinitions, cfRaw);
+      } catch (error) {
+        errors.push({ row: i + 1, itemCode: row.itemCode, error: (error as Error).message });
+        continue;
+      }
       try {
         await prisma.item.upsert({
           where: { tenantId_itemCode: { tenantId, itemCode: row.itemCode } },
-          update: { name: row.name, unitPrice: row.unitPrice, externalRef: row.externalRef || null },
-          create: { tenantId, itemCode: row.itemCode, name: row.name, unitPrice: row.unitPrice, externalRef: row.externalRef || null }
+          update: {
+            name: row.name,
+            unitPrice: row.unitPrice,
+            externalRef: row.externalRef || null,
+            ...(customFields !== undefined ? { customFields } : {})
+          },
+          create: {
+            tenantId,
+            itemCode: row.itemCode,
+            name: row.name,
+            unitPrice: row.unitPrice,
+            externalRef: row.externalRef || null,
+            customFields
+          }
         });
         imported += 1;
       } catch (error) {
@@ -963,10 +1024,15 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     });
     const termIdByCode = new Map(terms.map((t) => [t.code.toLowerCase(), t.id]));
 
+    const customerDefinitions = await prisma.customFieldDefinition.findMany({
+      where: { tenantId, entityType: EntityType.CUSTOMER }
+    });
+
     const errors: { row: number; customerCode?: string; error: string }[] = [];
     let imported = 0;
     for (let i = 0; i < rawRows.length; i++) {
-      const parsed = customerImportRow.safeParse(rawRows[i]);
+      const rawRow = rawRows[i] as Record<string, unknown>;
+      const parsed = customerImportRow.safeParse(rawRow);
       if (!parsed.success) {
         errors.push({ row: i + 1, error: zodMsg(parsed.error) });
         continue;
@@ -975,6 +1041,25 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       const defaultTermId = termIdByCode.get(row.paymentTermCode.toLowerCase());
       if (!defaultTermId) {
         errors.push({ row: i + 1, customerCode: row.customerCode, error: `paymentTermCode "${row.paymentTermCode}" not found.` });
+        continue;
+      }
+      // Enforce taxId uniqueness (same rule as the create/edit form)
+      if (row.taxId) {
+        const taxConflict = await prisma.customer.findFirst({
+          where: { tenantId, taxId: row.taxId, NOT: { customerCode: row.customerCode } },
+          select: { id: true }
+        });
+        if (taxConflict) {
+          errors.push({ row: i + 1, customerCode: row.customerCode, error: `taxId "${row.taxId}" already belongs to another customer.` });
+          continue;
+        }
+      }
+      let customFields: Prisma.InputJsonValue | undefined;
+      try {
+        const cfRaw = extractCustomFieldsFromRow(rawRow, customerDefinitions);
+        customFields = validateCustomFields(app, customerDefinitions, cfRaw);
+      } catch (error) {
+        errors.push({ row: i + 1, customerCode: row.customerCode, error: (error as Error).message });
         continue;
       }
       try {
@@ -987,7 +1072,8 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
             taxId: row.taxId || null,
             externalRef: row.externalRef || null,
             siteLat: row.siteLat,
-            siteLng: row.siteLng
+            siteLng: row.siteLng,
+            ...(customFields !== undefined ? { customFields } : {})
           },
           create: {
             tenantId,
@@ -999,7 +1085,8 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
             taxId: row.taxId || null,
             externalRef: row.externalRef || null,
             siteLat: row.siteLat,
-            siteLng: row.siteLng
+            siteLng: row.siteLng,
+            customFields
           }
         });
         imported += 1;

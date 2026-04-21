@@ -21,30 +21,113 @@ export function asRecord(input: unknown): Record<string, unknown> {
   return input as Record<string, unknown>;
 }
 
+export type CustomFieldDefinitionWithLabel = CustomFieldDefinition & { label: string };
+
+/**
+ * Pluck custom-field values out of an xlsx import row by matching column headers
+ * (case-insensitive) against each definition's fieldKey or label. Empty cells
+ * are dropped so they don't trip the "required" check.
+ */
+export function extractCustomFieldsFromRow(
+  row: Record<string, unknown>,
+  definitions: CustomFieldDefinitionWithLabel[]
+): Record<string, unknown> {
+  const lowerKeys = new Map<string, unknown>();
+  for (const [k, v] of Object.entries(row)) {
+    lowerKeys.set(k.trim().toLowerCase(), v);
+  }
+  const out: Record<string, unknown> = {};
+  for (const def of definitions) {
+    if (!def.isActive) continue;
+    const candidates = [def.fieldKey, def.label]
+      .filter((x): x is string => typeof x === "string" && x.length > 0)
+      .map((s) => s.trim().toLowerCase());
+    for (const c of candidates) {
+      if (lowerKeys.has(c)) {
+        const raw = lowerKeys.get(c);
+        if (raw !== null && raw !== undefined && !(typeof raw === "string" && raw.trim() === "")) {
+          out[def.fieldKey] = raw;
+        }
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PHONE_RE = /^[0-9+()\-\s.]{6,20}$/;
+
+function toTrimmedString(
+  app: Parameters<FastifyPluginAsync>[0],
+  fieldKey: string,
+  typeLabel: string,
+  value: unknown
+): string | null {
+  if (typeof value !== "string") {
+    throw app.httpErrors.badRequest(`Custom field "${fieldKey}" must be ${typeLabel}.`);
+  }
+  const trimmed = value.trim();
+  return trimmed.length ? trimmed : null;
+}
+
+function toNumeric(
+  app: Parameters<FastifyPluginAsync>[0],
+  fieldKey: string,
+  value: unknown
+): number {
+  const numeric =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && value.trim().length > 0
+        ? Number(value)
+        : Number.NaN;
+  if (!Number.isFinite(numeric)) {
+    throw app.httpErrors.badRequest(`Custom field "${fieldKey}" must be numeric.`);
+  }
+  return numeric;
+}
+
 function normalizeCustomFieldValue(
   app: Parameters<FastifyPluginAsync>[0],
   definition: Pick<CustomFieldDefinition, "fieldKey" | "dataType" | "optionsJson">,
   value: unknown
 ): unknown {
   switch (definition.dataType) {
-    case CustomFieldDataType.TEXT: {
-      if (typeof value !== "string") {
-        throw app.httpErrors.badRequest(`Custom field "${definition.fieldKey}" must be text.`);
+    case CustomFieldDataType.TEXT:
+    case CustomFieldDataType.TEXTAREA:
+      return toTrimmedString(app, definition.fieldKey, "text", value);
+    case CustomFieldDataType.EMAIL: {
+      const trimmed = toTrimmedString(app, definition.fieldKey, "email", value);
+      if (!trimmed) return null;
+      if (!EMAIL_RE.test(trimmed)) {
+        throw app.httpErrors.badRequest(`Custom field "${definition.fieldKey}" is not a valid email.`);
       }
-      const trimmed = value.trim();
-      return trimmed.length ? trimmed : null;
+      return trimmed;
     }
-    case CustomFieldDataType.NUMBER: {
-      const numeric =
-        typeof value === "number"
-          ? value
-          : typeof value === "string" && value.trim().length > 0
-            ? Number(value)
-            : Number.NaN;
-      if (!Number.isFinite(numeric)) {
-        throw app.httpErrors.badRequest(`Custom field "${definition.fieldKey}" must be numeric.`);
+    case CustomFieldDataType.URL: {
+      const trimmed = toTrimmedString(app, definition.fieldKey, "a URL", value);
+      if (!trimmed) return null;
+      try {
+        new URL(trimmed);
+      } catch {
+        throw app.httpErrors.badRequest(`Custom field "${definition.fieldKey}" is not a valid URL.`);
       }
-      return numeric;
+      return trimmed;
+    }
+    case CustomFieldDataType.PHONE: {
+      const trimmed = toTrimmedString(app, definition.fieldKey, "a phone number", value);
+      if (!trimmed) return null;
+      if (!PHONE_RE.test(trimmed)) {
+        throw app.httpErrors.badRequest(`Custom field "${definition.fieldKey}" is not a valid phone number.`);
+      }
+      return trimmed;
+    }
+    case CustomFieldDataType.NUMBER:
+      return toNumeric(app, definition.fieldKey, value);
+    case CustomFieldDataType.CURRENCY: {
+      const numeric = toNumeric(app, definition.fieldKey, value);
+      return Math.round(numeric * 100) / 100;
     }
     case CustomFieldDataType.BOOLEAN: {
       if (typeof value === "boolean") return value;
@@ -77,6 +160,26 @@ function normalizeCustomFieldValue(
         );
       }
       return value;
+    }
+    case CustomFieldDataType.MULTISELECT: {
+      const options = Array.isArray(definition.optionsJson)
+        ? definition.optionsJson.filter((o): o is string => typeof o === "string")
+        : [];
+      const rawArray = Array.isArray(value)
+        ? value
+        : typeof value === "string" && value.trim().length
+          ? value.split(/[,;\n]/).map((s) => s.trim())
+          : [];
+      const filtered = rawArray.filter((v): v is string => typeof v === "string" && v.length > 0);
+      if (!filtered.length) return null;
+      for (const v of filtered) {
+        if (!options.includes(v)) {
+          throw app.httpErrors.badRequest(
+            `Custom field "${definition.fieldKey}" value "${v}" is not a configured option.`
+          );
+        }
+      }
+      return Array.from(new Set(filtered));
     }
     default:
       return value;

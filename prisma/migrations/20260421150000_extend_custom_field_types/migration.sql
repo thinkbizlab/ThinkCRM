@@ -1,0 +1,7 @@
+-- Extend CustomFieldDataType enum with new variants
+ALTER TYPE "CustomFieldDataType" ADD VALUE IF NOT EXISTS 'TEXTAREA';
+ALTER TYPE "CustomFieldDataType" ADD VALUE IF NOT EXISTS 'CURRENCY';
+ALTER TYPE "CustomFieldDataType" ADD VALUE IF NOT EXISTS 'MULTISELECT';
+ALTER TYPE "CustomFieldDataType" ADD VALUE IF NOT EXISTS 'EMAIL';
+ALTER TYPE "CustomFieldDataType" ADD VALUE IF NOT EXISTS 'URL';
+ALTER TYPE "CustomFieldDataType" ADD VALUE IF NOT EXISTS 'PHONE';
