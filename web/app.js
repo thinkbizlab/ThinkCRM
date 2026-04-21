@@ -4712,6 +4712,7 @@ function renderSettings() {
                 <span class="badge ${src.status === "ENABLED" ? "badge--ok" : "badge--err"}" style="margin-left:var(--sp-1)">${src.status}</span>
               </div>
               <div>
+                <button class="ghost small sync-test-source-btn" data-source-id="${src.id}" data-source-name="${escHtml(src.sourceName)}">Test Connection</button>
                 ${src.sourceType === "REST" && src.status === "ENABLED" ? `<button class="ghost small sync-pull-now-btn" data-source-id="${src.id}" data-source-name="${escHtml(src.sourceName)}">Pull now</button>` : ""}
                 <button class="ghost small sync-toggle-source-btn" data-source-id="${src.id}" data-current-status="${src.status}">${src.status === "ENABLED" ? "Disable" : "Enable"}</button>
                 <button class="ghost small sync-edit-mappings-btn" data-source-id="${src.id}" data-source-name="${escHtml(src.sourceName)}">Edit Mappings</button>
@@ -4732,6 +4733,15 @@ function renderSettings() {
                 </tbody>
               </table>
             ` : '<p class="muted" style="font-size:0.82rem">No field mappings configured yet.</p>'}
+            ${src.sourceType === "REST" && src.configJson ? (() => {
+              const cfg = src.configJson || {};
+              const qp = cfg.queryParams && typeof cfg.queryParams === "object" ? Object.entries(cfg.queryParams) : [];
+              return `<p class="muted" style="font-size:0.78rem;margin-top:var(--sp-2)">
+                <strong>Request:</strong> GET <code>${escHtml(cfg.endpointUrl || "")}</code>
+                ${qp.length ? ` · <strong>Params:</strong> ${qp.map(([k, v]) => `<code>${escHtml(k)}=${escHtml(String(v))}</code>`).join(", ")}` : ""}
+                ${cfg.authHeaderName ? ` · <strong>Auth header:</strong> <code>${escHtml(cfg.authHeaderName)}</code>` : ""}
+              </p>`;
+            })() : ""}
             ${src.lastSyncAt ? `<p class="muted" style="font-size:0.78rem;margin-top:var(--sp-2)">Last sync: ${new Date(src.lastSyncAt).toLocaleString()}</p>` : ""}
           </div>
         `).join("")}
@@ -4769,7 +4779,12 @@ function renderSettings() {
                 <label class="form-label">Auth header name <input type="text" name="authHeaderName" placeholder="Authorization" class="form-control"></label>
                 <label class="form-label">Auth value (stored encrypted) <input type="text" name="authValue" placeholder="Bearer ey…" class="form-control"></label>
               </div>
-              <p class="muted" style="font-size:0.78rem;margin:0">Pull runs nightly at 02:00 (tenant timezone) for every ENABLED REST source, plus whenever you click <strong>Pull now</strong>.</p>
+              <div class="form-row">
+                <label class="form-label">Query parameters (optional, JSON)
+                  <textarea name="queryParams" placeholder='{"limit": 100, "status": "active"}' class="form-control" rows="2"></textarea>
+                </label>
+              </div>
+              <p class="muted" style="font-size:0.78rem;margin:0">Request sent: <code>GET &lt;endpoint&gt;?&lt;params&gt;</code> with <code>Accept: application/json</code> + auth header. Pull runs nightly at 02:00 (tenant timezone) for every ENABLED REST source, plus whenever you click <strong>Pull now</strong>.</p>
             </div>
             <div class="form-actions">
               <button type="submit" class="btn-primary small">Create Source</button>
@@ -5650,6 +5665,18 @@ function renderSettings() {
       const val = String(fd.get("authValue") || "").trim();
       if (hdr) configJson.authHeaderName = hdr;
       if (val) configJson.authValue = val; // backend encrypts → authValueEnc
+      const qpRaw = String(fd.get("queryParams") || "").trim();
+      if (qpRaw) {
+        try {
+          const parsed = JSON.parse(qpRaw);
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            setStatus("Query parameters must be a JSON object."); return;
+          }
+          configJson.queryParams = parsed;
+        } catch {
+          setStatus("Query parameters is not valid JSON."); return;
+        }
+      }
     }
     try {
       await api("/integrations/master-data/sources", {
@@ -5691,6 +5718,27 @@ function renderSettings() {
         await loadSyncData();
         renderSettings();
       } catch (err) { setStatus(err.message); }
+    });
+  });
+  views.settings.querySelectorAll(".sync-test-source-btn").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const { sourceId, sourceName } = btn.dataset;
+      btn.disabled = true;
+      const original = btn.textContent;
+      btn.textContent = "Testing…";
+      try {
+        const res = await api(`/integrations/master-data/sources/${sourceId}/test`, { method: "POST" });
+        const parts = [`${sourceName}: ${res.message}`];
+        if (res.detail?.url)              parts.push(`URL: ${res.detail.url}`);
+        if (res.detail?.sentHeaderNames?.length) parts.push(`Headers: ${res.detail.sentHeaderNames.join(", ")}`);
+        if (res.detail?.firstRecordKeys?.length) parts.push(`Fields: ${res.detail.firstRecordKeys.slice(0, 8).join(", ")}`);
+        setStatus(parts.join(" · "));
+      } catch (err) {
+        setStatus(err.message || "Connection test failed.");
+      } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+      }
     });
   });
 

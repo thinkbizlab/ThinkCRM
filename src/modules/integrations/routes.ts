@@ -14,7 +14,7 @@ import { requireRoleAtLeast, requireTenantId, requireUserId, zodMsg } from "../.
 import { prisma } from "../../lib/prisma.js";
 import { encryptField } from "../../lib/secrets.js";
 import { connectorInputContractSchema, executeConnectorRun } from "./connector-framework.js";
-import { executeRestPull } from "../sync/rest-pull.js";
+import { executeRestPull, testRestConnection } from "../sync/rest-pull.js";
 
 const sourceSchema = z.object({
   sourceName: z.string().min(2),
@@ -215,6 +215,41 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.notFound("Source not found.");
     }
 
+    // REST: actually hit the endpoint and report back.
+    // WEBHOOK/EXCEL: config-only check (no outbound call to test).
+    let result: {
+      ok: boolean;
+      message: string;
+      detail?: Record<string, unknown>;
+    };
+    if (source.sourceType === "REST") {
+      try {
+        const test = await testRestConnection(tenantId, source.id);
+        result = {
+          ok: test.ok,
+          message: test.ok
+            ? `Reached endpoint: ${test.status} ${test.statusText} — ${test.sampleRecordCount} record(s) found.`
+            : `Failed: ${test.error ?? `${test.status} ${test.statusText}`}`,
+          detail: {
+            url: test.url,
+            method: test.method,
+            sentHeaderNames: test.sentHeaderNames,
+            sampleRecordCount: test.sampleRecordCount,
+            firstRecordKeys: test.firstRecordKeys
+          }
+        };
+      } catch (err) {
+        result = { ok: false, message: err instanceof Error ? err.message : "Test failed." };
+      }
+    } else {
+      const cfg = (source.configJson ?? {}) as Record<string, unknown>;
+      result = {
+        ok: true,
+        message: `${source.sourceType} source configured. No live endpoint to test.`,
+        detail: { sourceType: source.sourceType, configuredKeys: Object.keys(cfg) }
+      };
+    }
+
     await prisma.integrationExecutionLog.create({
       data: {
         tenantId,
@@ -223,15 +258,15 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
         operationType: "TEST_CONNECTION",
         direction: Direction.OUTBOUND,
         triggerType: "MANUAL",
-        status: ExecutionStatus.SUCCESS,
+        status: result.ok ? ExecutionStatus.SUCCESS : ExecutionStatus.FAILURE,
         requestRef: source.id,
-        responseSummary: "Connection test simulated as success.",
-        payloadMasked: { sourceName: source.sourceName, sourceType: source.sourceType },
+        responseSummary: result.message,
+        payloadMasked: { sourceName: source.sourceName, sourceType: source.sourceType, ...(result.detail ?? {}) },
         completedAt: new Date()
       }
     });
 
-    return { ok: true, message: "Connection test passed." };
+    return result;
   });
 
   app.post("/integrations/master-data/imports/excel", async (request, reply) => {
