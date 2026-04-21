@@ -9,7 +9,7 @@ import { ChannelType, IntegrationPlatform, SourceStatus } from "@prisma/client";
 import type { FastifyPluginAsync } from "fastify";
 import { config } from "../../config.js";
 import { z } from "zod";
-import { listVisibleUserIds, requireTenantId, requireUserId, zodMsg } from "../../lib/http.js";
+import { canActOnBehalfOf, listVisibleUserIds, requireTenantId, requireUserId, zodMsg } from "../../lib/http.js";
 import { writeEntityChangelog } from "../../lib/changelog.js";
 import { prisma } from "../../lib/prisma.js";
 import { decryptCredential } from "../../lib/secrets.js";
@@ -50,7 +50,8 @@ const plannedVisitCreateSchema = z.object({
   plannedAt: z.string().datetime(),
   objective: z.string().trim().min(1),
   siteLat: z.number().min(-90).max(90).optional(),
-  siteLng: z.number().min(-180).max(180).optional()
+  siteLng: z.number().min(-180).max(180).optional(),
+  onBehalfOfUserId: z.string().min(1).optional()
 }).strict();
 
 const unplannedVisitCreateSchema = z.object({
@@ -59,7 +60,8 @@ const unplannedVisitCreateSchema = z.object({
   plannedAt: z.string().datetime().optional(),
   objective: z.string().trim().min(1).optional(),
   siteLat: z.number().min(-90).max(90).optional(),
-  siteLng: z.number().min(-180).max(180).optional()
+  siteLng: z.number().min(-180).max(180).optional(),
+  onBehalfOfUserId: z.string().min(1).optional()
 }).strict();
 
 const checkInSchema = z.object({
@@ -249,6 +251,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
     plannedAt: Date;
     visitType: VisitType;
     changedById: string;
+    createdByUserId?: string;
     siteLat?: number;
     siteLng?: number;
   }) {
@@ -288,7 +291,8 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
           objective: input.objective,
           visitType: input.visitType,
           siteLat: input.siteLat,
-          siteLng: input.siteLng
+          siteLng: input.siteLng,
+          createdByUserId: input.createdByUserId
         }
       });
       await writeEntityChangelog({
@@ -306,10 +310,14 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/visits/planned", async (request, reply) => {
     const tenantId = requireTenantId(request);
-    const repId = requireUserId(request);
+    const callerId = requireUserId(request);
     const parsed = plannedVisitCreateSchema.safeParse(request.body);
     if (!parsed.success) {
       throw app.httpErrors.badRequest(zodMsg(parsed.error));
+    }
+    const repId = parsed.data.onBehalfOfUserId ?? callerId;
+    if (repId !== callerId && !(await canActOnBehalfOf(request, repId))) {
+      throw app.httpErrors.forbidden("You are not delegated to act on behalf of that user.");
     }
     const created = await createVisitRecord({
       tenantId,
@@ -319,7 +327,8 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
       plannedAt: new Date(parsed.data.plannedAt),
       objective: parsed.data.objective,
       visitType: VisitType.PLANNED,
-      changedById: repId,
+      changedById: callerId,
+      createdByUserId: callerId,
       siteLat: parsed.data.siteLat,
       siteLng: parsed.data.siteLng
     });
@@ -328,10 +337,14 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/visits/unplanned", async (request, reply) => {
     const tenantId = requireTenantId(request);
-    const repId = requireUserId(request);
+    const callerId = requireUserId(request);
     const parsed = unplannedVisitCreateSchema.safeParse(request.body);
     if (!parsed.success) {
       throw app.httpErrors.badRequest(zodMsg(parsed.error));
+    }
+    const repId = parsed.data.onBehalfOfUserId ?? callerId;
+    if (repId !== callerId && !(await canActOnBehalfOf(request, repId))) {
+      throw app.httpErrors.forbidden("You are not delegated to act on behalf of that user.");
     }
     const created = await createVisitRecord({
       tenantId,
@@ -341,7 +354,8 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
       plannedAt: parsed.data.plannedAt ? new Date(parsed.data.plannedAt) : new Date(),
       objective: parsed.data.objective,
       visitType: VisitType.UNPLANNED,
-      changedById: repId,
+      changedById: callerId,
+      createdByUserId: callerId,
       siteLat: parsed.data.siteLat,
       siteLng: parsed.data.siteLng
     });

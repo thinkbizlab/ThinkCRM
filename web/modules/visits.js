@@ -14,7 +14,8 @@ let deps = {
   buildVisitListHtml: () => "",
   attachVisitListListeners: () => {},
   stageAccentVar: () => "--stage-0",
-  openVisitDetail: () => {}
+  openVisitDetail: () => {},
+  attachOnBehalfOfField: async () => null
 };
 
 export function setVisitsDeps(d) {
@@ -214,6 +215,11 @@ export function openVisitCreateModal(dateTime) {
   syncVisitPlannedAtRequired(modal);
   modal.querySelector("#visit-form")?.reset && false;
   modal.hidden = false;
+  const form = modal.querySelector("#visit-form");
+  const fields = form?.querySelector(".visit-modal-fields");
+  if (fields && deps.attachOnBehalfOfField) {
+    deps.attachOnBehalfOfField(fields).catch(() => {});
+  }
 }
 
 export function closeVisitCreateModal() {

@@ -382,6 +382,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
           taxId: parsed.data.taxId,
           defaultTermId: parsed.data.defaultTermId,
           ownerId,
+          createdByUserId: changedById,
           customFields
         }
       });

@@ -18,13 +18,28 @@ const superAdminEmails: Set<string> = new Set(
   (config.SUPER_ADMIN_EMAILS ?? "").split(",").map(e => e.trim().toLowerCase()).filter(Boolean)
 );
 
+// Rank is used by requireRoleAtLeast to gate admin-ish endpoints. SALES_ADMIN
+// and ASSISTANT_MANAGER share rank with the "closest" traditional role for
+// CRUD purposes — their real power comes from UserDelegation rows, not rank.
+// Approval authority is a SEPARATE axis (see requireApprovalAuthority) that
+// excludes these two roles regardless of rank.
 const roleRank: Record<UserRole, number> = {
   REP: 1,
+  SALES_ADMIN: 2,       // CRUD rank = SUPERVISOR; approval blocked
   SUPERVISOR: 2,
   MANAGER: 3,
-  DIRECTOR: 4,  // M6: was 3 (same as MANAGER) — requireRoleAtLeast(DIRECTOR) now correctly excludes MANAGERs
+  ASSISTANT_MANAGER: 3, // CRUD rank = MANAGER; approval blocked
+  DIRECTOR: 4,
   ADMIN: 5
 };
+
+// Roles that may NOT approve (deal discount above threshold, future quotation
+// approvals, etc.) — they can prepare and submit on the owner's behalf but the
+// approval action itself must be performed by someone with actual authority.
+const NON_APPROVING_ROLES: ReadonlySet<UserRole> = new Set([
+  UserRole.SALES_ADMIN,
+  UserRole.ASSISTANT_MANAGER
+]);
 
 export function requireAuth(request: FastifyRequest): void {
   if (!request.requestContext.authenticated) {
@@ -62,6 +77,23 @@ export function requireRoleAtLeast(request: FastifyRequest, minimumRole: UserRol
   if (!role || roleRank[role] < roleRank[minimumRole]) {
     throw request.server.httpErrors.forbidden(
       `Insufficient role. Requires ${minimumRole} or higher.`
+    );
+  }
+}
+
+// Gate approval actions (deal discount override, future quotation approvals)
+// so SALES_ADMIN and ASSISTANT_MANAGER — who can otherwise act on their
+// principals' behalf — cannot rubber-stamp their own submissions. Must also
+// pass a minimum role, since even a REP shouldn't approve a MANAGER's deal.
+export function requireApprovalAuthority(
+  request: FastifyRequest,
+  minimumRole: UserRole = UserRole.MANAGER
+): void {
+  requireRoleAtLeast(request, minimumRole);
+  const role = request.requestContext.role;
+  if (role && NON_APPROVING_ROLES.has(role)) {
+    throw request.server.httpErrors.forbidden(
+      "Approval actions cannot be performed by delegate roles."
     );
   }
 }
@@ -108,18 +140,40 @@ export async function requireSelfOrManagerAccess(
 export type UserHierarchyNode = {
   id: string;
   managerUserId: string | null;
+  role?: UserRole | null;
 };
+
+// Roles whose base visibility is "self only" — they see no one else through
+// the manager tree. Delegation adds their principals' visibility on top.
+const SELF_ONLY_ROLES: ReadonlySet<UserRole> = new Set([
+  UserRole.REP,
+  UserRole.SALES_ADMIN,
+  UserRole.ASSISTANT_MANAGER
+]);
+
+function walkSubtree(rootId: string, reportsByManager: Map<string, string[]>): Set<string> {
+  const visible = new Set<string>([rootId]);
+  const queue = [rootId];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) continue;
+    for (const reportId of reportsByManager.get(current) ?? []) {
+      if (visible.has(reportId)) continue;
+      visible.add(reportId);
+      queue.push(reportId);
+    }
+  }
+  return visible;
+}
 
 export function resolveVisibleUserIds(
   users: UserHierarchyNode[],
   requesterId: string,
-  requesterRole: UserRole | null | undefined
+  requesterRole: UserRole | null | undefined,
+  activePrincipalIds: ReadonlyArray<string> = []
 ): Set<string> {
   if (requesterRole === UserRole.ADMIN) {
     return new Set(users.map((user) => user.id));
-  }
-  if (requesterRole === UserRole.REP) {
-    return new Set([requesterId]);
   }
 
   const reportsByManager = users.reduce<Map<string, string[]>>((acc, user) => {
@@ -130,21 +184,32 @@ export function resolveVisibleUserIds(
     return acc;
   }, new Map());
 
-  const visible = new Set<string>([requesterId]);
-  const queue = [requesterId];
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (!current) continue;
-    const reports = reportsByManager.get(current) ?? [];
-    for (const reportId of reports) {
-      if (visible.has(reportId)) {
-        continue;
-      }
-      visible.add(reportId);
-      queue.push(reportId);
+  // Base visibility from requester's own role. Self-only roles (REP,
+  // SALES_ADMIN, ASSISTANT_MANAGER) see nobody; others walk their subtree.
+  const base = requesterRole && SELF_ONLY_ROLES.has(requesterRole)
+    ? new Set<string>([requesterId])
+    : walkSubtree(requesterId, reportsByManager);
+
+  // Each active principal contributes THEIR visibility — i.e. the subtree
+  // they'd see if they were logged in. Union'd into the delegate's view.
+  const userById = new Map(users.map((u) => [u.id, u]));
+  for (const principalId of activePrincipalIds) {
+    const principal = userById.get(principalId);
+    if (!principal) continue;
+    if (principal.role === UserRole.ADMIN) {
+      return new Set(users.map((u) => u.id));
+    }
+    if (principal.role && SELF_ONLY_ROLES.has(principal.role)) {
+      base.add(principalId);
+      continue;
+    }
+    for (const id of walkSubtree(principalId, reportsByManager)) {
+      base.add(id);
     }
   }
-  return visible;
+
+  base.add(requesterId);
+  return base;
 }
 
 // S1: Per-request cache for tenant isActive check — avoids a DB hit on every call.
@@ -176,6 +241,32 @@ export async function requireActiveTenant(request: FastifyRequest): Promise<void
 // H4: Per-request memo so hierarchy is computed only once per request even when
 // multiple permission checks call listVisibleUserIds() on the same request object.
 const visibleIdsCache = new WeakMap<object, Set<string>>();
+const activePrincipalsCache = new WeakMap<object, Set<string>>();
+
+// Active principals = users this request's caller is currently delegated to
+// act on behalf of. "Active" means now() is within [startsAt, endsAt).
+export async function listActivePrincipalIds(request: FastifyRequest): Promise<Set<string>> {
+  const cached = activePrincipalsCache.get(request);
+  if (cached) return cached;
+
+  const tenantId = requireTenantId(request);
+  const delegateUserId = requireUserId(request);
+  const now = new Date();
+
+  const rows = await prisma.userDelegation.findMany({
+    where: {
+      tenantId,
+      delegateUserId,
+      startsAt: { lte: now },
+      endsAt:   { gt:  now }
+    },
+    select: { principalUserId: true }
+  });
+
+  const ids = new Set(rows.map((r) => r.principalUserId));
+  activePrincipalsCache.set(request, ids);
+  return ids;
+}
 
 export async function listVisibleUserIds(request: FastifyRequest): Promise<Set<string>> {
   const cached = visibleIdsCache.get(request);
@@ -188,17 +279,30 @@ export async function listVisibleUserIds(request: FastifyRequest): Promise<Set<s
     throw request.server.httpErrors.unauthorized("Missing role context in authenticated token.");
   }
 
-  const users = await prisma.user.findMany({
-    where: { tenantId, isActive: true },
-    select: { id: true, managerUserId: true }
-  });
+  const [users, principalIds] = await Promise.all([
+    prisma.user.findMany({
+      where: { tenantId, isActive: true },
+      select: { id: true, managerUserId: true, role: true }
+    }),
+    listActivePrincipalIds(request)
+  ]);
 
-  const visible = resolveVisibleUserIds(users, requesterId, requesterRole);
-  if (!visible.has(requesterId)) {
-    visible.add(requesterId);
-  }
+  const visible = resolveVisibleUserIds(users, requesterId, requesterRole, Array.from(principalIds));
   visibleIdsCache.set(request, visible);
   return visible;
+}
+
+// Check a delegate may act on behalf of the given principal. Returns true
+// when callerId === principalUserId (acting as self) OR when there is an
+// active delegation. Used by write paths that accept onBehalfOfUserId.
+export async function canActOnBehalfOf(
+  request: FastifyRequest,
+  principalUserId: string
+): Promise<boolean> {
+  const callerId = requireUserId(request);
+  if (callerId === principalUserId) return true;
+  const active = await listActivePrincipalIds(request);
+  return active.has(principalUserId);
 }
 
 export async function assertUserInHierarchyScope(

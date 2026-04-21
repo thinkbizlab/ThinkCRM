@@ -19,6 +19,7 @@ import {
 import { openVoiceNoteModal, bindVoiceNoteModal, setVoiceNoteOnClose } from "./modules/voice-note.js";
 import { passkeyLogin, openAdminPasskeyModal, initPasskeySection } from "./modules/passkey.js";
 import { loadOAuthProviderButtons, wireOAuthProviderButtons, consumeOAuthCallback } from "./modules/oauth.js";
+import { loadDelegations, renderDelegationsSection, wireDelegationsListeners, setDelegationsDeps, loadMyPrincipals, attachOnBehalfOfField, readOnBehalfOfValue, canActOnBehalf } from "./modules/delegations.js";
 import { loadOnboardingWizard, initOnboardingWizard } from "./modules/onboarding-wizard.js";
 import { loadDemoDataStatus, renderDemoDataBanner, initDemoDataModals } from "./modules/demo-data.js";
 import { initQuickSearch } from "./modules/quick-search.js";
@@ -1635,6 +1636,8 @@ function openDealCreateModal(kanban) {
   if (hid) hid.value = "";
   if (lst) lst.hidden = true;
   modal.hidden = false;
+  // Inject "Acting on behalf of" picker for delegate roles.
+  attachOnBehalfOfField(form).catch(() => {});
 }
 
 function closeDealCreateModal() {
@@ -4021,9 +4024,9 @@ function renderSettings() {
     `;
   } else if (page === "roles") {
     const me = state.user;
-    const roleLabel = { ADMIN: "Admin", DIRECTOR: "Sales Director", MANAGER: "Sales Manager", SUPERVISOR: "Supervisor", REP: "Sales Rep" };
-    const roleCls   = { ADMIN: "rp-badge--admin", DIRECTOR: "rp-badge--director", MANAGER: "rp-badge--manager", SUPERVISOR: "rp-badge--supervisor", REP: "rp-badge--rep" };
-    const roleCounts = { ADMIN: 0, DIRECTOR: 0, MANAGER: 0, SUPERVISOR: 0, REP: 0 };
+    const roleLabel = { ADMIN: "Admin", DIRECTOR: "Sales Director", MANAGER: "Sales Manager", ASSISTANT_MANAGER: "Assistant Manager", SUPERVISOR: "Supervisor", SALES_ADMIN: "Sales Admin", REP: "Sales Rep" };
+    const roleCls   = { ADMIN: "rp-badge--admin", DIRECTOR: "rp-badge--director", MANAGER: "rp-badge--manager", ASSISTANT_MANAGER: "rp-badge--manager", SUPERVISOR: "rp-badge--supervisor", SALES_ADMIN: "rp-badge--supervisor", REP: "rp-badge--rep" };
+    const roleCounts = { ADMIN: 0, DIRECTOR: 0, MANAGER: 0, ASSISTANT_MANAGER: 0, SUPERVISOR: 0, SALES_ADMIN: 0, REP: 0 };
     for (const u of allUsers) if (u.role in roleCounts) roleCounts[u.role]++;
 
     // Build manager options for each role (Reports To).
@@ -4035,9 +4038,11 @@ function renderSettings() {
     const supervisors = allUsers.filter(u => u.role === "SUPERVISOR");
 
     function reportsToPool(u) {
-      if (u.role === "REP")        return [...supervisors, ...managers];
-      if (u.role === "SUPERVISOR") return [...managers, ...directors];
-      if (u.role === "MANAGER")    return directors;
+      if (u.role === "REP")               return [...supervisors, ...managers];
+      if (u.role === "SALES_ADMIN")       return [...supervisors, ...managers];
+      if (u.role === "SUPERVISOR")        return [...managers, ...directors];
+      if (u.role === "ASSISTANT_MANAGER") return [...managers, ...directors];
+      if (u.role === "MANAGER")           return directors;
       return [];
     }
 
@@ -4194,12 +4199,15 @@ function renderSettings() {
         <h4 class="rp-role-guide-title">How roles work</h4>
         <ul class="rp-role-guide-list">
           <li><span class="rp-badge rp-badge--rep">Sales Rep</span> Default role. Can only view and manage their own visits, check-ins, and calendar. Reports to a Supervisor (or directly to a Sales Manager when no Supervisor is assigned).</li>
+          <li><span class="rp-badge rp-badge--supervisor">Sales Admin</span> Junior support staff. Prepares paperwork and answers phone calls on behalf of Sales Rep / Supervisor / Manager / Director. Acts through delegation (see below); cannot approve.</li>
           <li><span class="rp-badge rp-badge--supervisor">Supervisor</span> Can view all their team's (assigned Sales Reps') data, filter calendar, and access reports. Reports to a Sales Manager (or directly to a Sales Director when no Manager is assigned).</li>
+          <li><span class="rp-badge rp-badge--manager">Assistant Manager</span> A Sales Manager's secretary. Acts on behalf of one or more Managers and Directors through delegation; cannot approve.</li>
           <li><span class="rp-badge rp-badge--manager">Sales Manager</span> Can view data for all Supervisors assigned to them and all Sales Reps under those Supervisors. Reports to a Sales Director.</li>
           <li><span class="rp-badge rp-badge--director">Sales Director</span> Oversees multiple Sales Managers and all their downstream teams. Full visibility across their organisation branch.</li>
           <li><span class="rp-badge rp-badge--admin">Admin</span> Full access including this User Access Management page. Cannot remove their own Admin role.</li>
         </ul>
       </div>
+      ${isAdmin ? renderDelegationsSection() : ""}
     `;
   } else if (page === "kpi-targets") {
     const canEditKpi = hasRole("ADMIN", "DIRECTOR", "MANAGER");
@@ -5462,6 +5470,8 @@ function renderSettings() {
     renderSettings();
   });
 
+  wireDelegationsListeners(views.settings);
+
   qs("#rp-search")?.addEventListener("input", (e) => {
     state.rolePageQuery = e.target.value;
     renderSettings();
@@ -5498,7 +5508,9 @@ function renderSettings() {
           <label class="form-label">Role
             <select class="form-input" name="role">
               <option value="REP">Sales Rep</option>
+              <option value="SALES_ADMIN">Sales Admin</option>
               <option value="SUPERVISOR">Supervisor</option>
+              <option value="ASSISTANT_MANAGER">Assistant Manager</option>
               <option value="MANAGER">Sales Manager</option>
               <option value="DIRECTOR">Sales Director</option>
               <option value="ADMIN">Admin</option>
@@ -5572,7 +5584,7 @@ function renderSettings() {
           <button class="popup-close-btn" aria-label="Close">${icon('x', 14)}</button>
         </div>
         <div style="padding:var(--sp-3) 0;display:flex;flex-direction:column;gap:var(--sp-3)">
-          <p class="muted small">Upload an Excel (.xlsx) file. Required columns: <code>email</code>, <code>fullName</code>, <code>role</code> (REP, SUPERVISOR, MANAGER, DIRECTOR, ADMIN). Optional: <code>teamName</code>.</p>
+          <p class="muted small">Upload an Excel (.xlsx) file. Required columns: <code>email</code>, <code>fullName</code>, <code>role</code> (REP, SALES_ADMIN, SUPERVISOR, ASSISTANT_MANAGER, MANAGER, DIRECTOR, ADMIN). Optional: <code>teamName</code>.</p>
           <div class="inline-actions">
             <button class="ghost small import-template-btn" type="button">⬇ Download Template</button>
           </div>
@@ -7922,6 +7934,7 @@ async function loadSettings() {
   state.cache.teams = teams;
   state.cache.allUsers = tenantSummary?.users || [];
   state.cache.tenantInfo = tenantSummary ? { id: tenantSummary.id, name: tenantSummary.name, slug: tenantSummary.slug, timezone: tenantSummary.timezone ?? "Asia/Bangkok" } : null;
+  if (isAdmin) await loadDelegations();
   if (branding) applyBrandingTheme(branding);
   // Load sync data only for admins on the data-sync page
   if (isAdmin && state.settingsPage === "data-sync") {
@@ -7938,7 +7951,8 @@ async function loadAllViews() {
     loadVisits(),
     loadCalendar(),
     loadIntegrations(),
-    loadSettings()
+    loadSettings(),
+    canActOnBehalf() ? loadMyPrincipals() : Promise.resolve()
   ]);
 }
 
@@ -8386,7 +8400,14 @@ setVisitsDeps({
   buildVisitListHtml,
   attachVisitListListeners,
   stageAccentVar,
-  openVisitDetail
+  openVisitDetail,
+  attachOnBehalfOfField
+});
+
+setDelegationsDeps({
+  setStatus,
+  escHtml,
+  renderSettings
 });
 
 // ── Onboarding wizard (S11) ───────────────────────────────────────────────────
@@ -8517,19 +8538,26 @@ qs("#deal-create-modal")?.addEventListener("click", (e) => {
 
 qs("#deal-form")?.addEventListener("submit", async (e) => {
   e.preventDefault();
-  const payload = Object.fromEntries(new FormData(e.currentTarget).entries());
+  const form = e.currentTarget;
+  const payload = Object.fromEntries(new FormData(form).entries());
   if (!payload.customerId) {
     setStatus("Please select a customer from the list.", true);
     qs("#deal-customer-input")?.focus();
     return;
   }
   const followUpAt = new Date(payload.followUpAt).toISOString();
-  const btn = e.currentTarget.querySelector('[type="submit"]');
+  const btn = form.querySelector('[type="submit"]');
   if (btn) btn.disabled = true;
+  const onBehalfOfUserId = readOnBehalfOfValue(form);
+  const body = { ...payload, estimatedValue: Number(payload.estimatedValue), followUpAt };
+  // onBehalfOfUserId may appear in payload already since the select name is
+  // "onBehalfOfUserId" — strip the sentinel so we never send "__self__".
+  if (body.onBehalfOfUserId === "__self__" || !onBehalfOfUserId) delete body.onBehalfOfUserId;
+  else body.onBehalfOfUserId = onBehalfOfUserId;
   try {
     await api("/deals", {
       method: "POST",
-      body: { ...payload, estimatedValue: Number(payload.estimatedValue), followUpAt }
+      body
     });
     setStatus("Deal created.");
     closeDealCreateModal();
@@ -8588,7 +8616,8 @@ qs("#visit-location-clear")?.addEventListener("click", () => {
 qs("#visit-form")?.addEventListener("submit", async (e) => {
   e.preventDefault();
   const modal = qs("#visit-create-modal");
-  const data = Object.fromEntries(new FormData(e.currentTarget).entries());
+  const form = e.currentTarget;
+  const data = Object.fromEntries(new FormData(form).entries());
   if (!data.customerId) {
     setStatus("Please select a customer from the list.", true);
     qs("#visit-customer-input")?.focus();
@@ -8597,6 +8626,8 @@ qs("#visit-form")?.addEventListener("submit", async (e) => {
   const visitType = data.visitType;
   const endpoint = visitType === "PLANNED" ? "/visits/planned" : "/visits/unplanned";
   const body = { customerId: data.customerId };
+  const onBehalfOfUserId = readOnBehalfOfValue(form);
+  if (onBehalfOfUserId) body.onBehalfOfUserId = onBehalfOfUserId;
   if (data.dealId)         body.dealId    = data.dealId;
   if (data.objective?.trim()) body.objective = data.objective.trim();
   if (data.siteLat && data.siteLng) {

@@ -4,6 +4,7 @@ import { config } from "../../config.js";
 import { z } from "zod";
 import {
   assertTenantPathAccess,
+  canActOnBehalfOf,
   listVisibleUserIds,
   requireRoleAtLeast,
   requireTenantId,
@@ -179,7 +180,8 @@ const createDealSchema = z.object({
   estimatedValue: z.number().nonnegative(),
   followUpAt: z.string().datetime(),
   closedAt: z.string().datetime().optional(),
-  customFields: z.record(z.string(), z.any()).optional()
+  customFields: z.record(z.string(), z.any()).optional(),
+  onBehalfOfUserId: z.string().min(1).optional()
 });
 const updateDealSchema = createDealSchema.partial();
 
@@ -763,13 +765,18 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/deals", async (request, reply) => {
     const tenantId = requireTenantId(request);
-    const ownerId = requireUserId(request);
+    const callerId = requireUserId(request);
     const parsed = createDealSchema.safeParse(request.body);
     if (!parsed.success) {
       throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
     const data = parsed.data;
+    const ownerId = data.onBehalfOfUserId ?? callerId;
+    if (ownerId !== callerId && !(await canActOnBehalfOf(request, ownerId))) {
+      throw app.httpErrors.forbidden("You are not delegated to act on behalf of that user.");
+    }
+
     const stage = await prisma.dealStage.findFirst({
       where: { id: data.stageId, tenantId },
       select: { id: true }
@@ -801,6 +808,7 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
           estimatedValue: data.estimatedValue,
           followUpAt: new Date(data.followUpAt),
           closedAt: data.closedAt ? new Date(data.closedAt) : null,
+          createdByUserId: callerId,
           customFields
         }
       });
@@ -810,7 +818,7 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
         entityType: EntityType.DEAL,
         entityId: row.id,
         action: "CREATE",
-        changedById: ownerId,
+        changedById: callerId,
         after: row
       });
       return row;

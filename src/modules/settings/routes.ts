@@ -17,6 +17,7 @@ import { writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import {
   assertTenantPathAccess,
+  listActivePrincipalIds,
   listVisibleUserIds,
   requireAuth,
   requireRoleAtLeast,
@@ -3081,5 +3082,143 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     ]);
 
     return { data: rows, total, page, limit, pages: Math.ceil(total / limit) };
+  });
+
+  // ── User Delegations ─────────────────────────────────────────────────────
+  // SALES_ADMIN / ASSISTANT_MANAGER act on behalf of their principals. Only
+  // tenant admins can manage the mapping. endsAt defaults to the far future;
+  // temporary coverage sets an earlier endsAt, which auto-expires at runtime.
+  const delegationCreateSchema = z.object({
+    delegateUserId:  z.string().min(1),
+    principalUserId: z.string().min(1),
+    startsAt: z.string().datetime().optional(),
+    endsAt:   z.string().datetime().optional()
+  }).strict();
+
+  const delegationPatchSchema = z.object({
+    startsAt: z.string().datetime().optional(),
+    endsAt:   z.string().datetime().optional()
+  }).strict();
+
+  app.get("/settings/delegations", async (request) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+    const rows = await prisma.userDelegation.findMany({
+      where: { tenantId },
+      orderBy: [{ createdAt: "desc" }],
+      select: {
+        id: true,
+        delegateUserId: true,
+        principalUserId: true,
+        startsAt: true,
+        endsAt: true,
+        createdAt: true,
+        updatedAt: true,
+        delegate:  { select: { id: true, fullName: true, email: true, role: true } },
+        principal: { select: { id: true, fullName: true, email: true, role: true } }
+      }
+    });
+    return { data: rows };
+  });
+
+  app.post("/settings/delegations", async (request, reply) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+    const parsed = delegationCreateSchema.safeParse(request.body);
+    if (!parsed.success) throw app.httpErrors.badRequest(zodMsg(parsed.error));
+    const { delegateUserId, principalUserId } = parsed.data;
+    if (delegateUserId === principalUserId) {
+      throw app.httpErrors.badRequest("Delegate and principal must be different users.");
+    }
+
+    const [delegate, principal] = await Promise.all([
+      prisma.user.findFirst({ where: { id: delegateUserId,  tenantId }, select: { id: true, role: true } }),
+      prisma.user.findFirst({ where: { id: principalUserId, tenantId }, select: { id: true } })
+    ]);
+    if (!delegate)  throw app.httpErrors.badRequest("Delegate user not found in tenant.");
+    if (!principal) throw app.httpErrors.badRequest("Principal user not found in tenant.");
+    if (delegate.role !== UserRole.SALES_ADMIN && delegate.role !== UserRole.ASSISTANT_MANAGER) {
+      throw app.httpErrors.badRequest("Only SALES_ADMIN or ASSISTANT_MANAGER users can be delegates.");
+    }
+
+    try {
+      const created = await prisma.userDelegation.create({
+        data: {
+          tenantId,
+          delegateUserId,
+          principalUserId,
+          ...(parsed.data.startsAt ? { startsAt: new Date(parsed.data.startsAt) } : {}),
+          ...(parsed.data.endsAt   ? { endsAt:   new Date(parsed.data.endsAt)   } : {})
+        }
+      });
+      return reply.code(201).send(created);
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+        throw app.httpErrors.conflict("This delegate already has a delegation to that principal.");
+      }
+      throw e;
+    }
+  });
+
+  app.patch("/settings/delegations/:id", async (request) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+    const { id } = request.params as { id: string };
+    const parsed = delegationPatchSchema.safeParse(request.body);
+    if (!parsed.success) throw app.httpErrors.badRequest(zodMsg(parsed.error));
+
+    const existing = await prisma.userDelegation.findFirst({ where: { id, tenantId }, select: { id: true } });
+    if (!existing) throw app.httpErrors.notFound("Delegation not found.");
+
+    return prisma.userDelegation.update({
+      where: { id },
+      data: {
+        ...(parsed.data.startsAt ? { startsAt: new Date(parsed.data.startsAt) } : {}),
+        ...(parsed.data.endsAt   ? { endsAt:   new Date(parsed.data.endsAt)   } : {})
+      }
+    });
+  });
+
+  app.delete("/settings/delegations/:id", async (request) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+    const { id } = request.params as { id: string };
+    const existing = await prisma.userDelegation.findFirst({ where: { id, tenantId }, select: { id: true } });
+    if (!existing) throw app.httpErrors.notFound("Delegation not found.");
+    await prisma.userDelegation.delete({ where: { id } });
+    return { ok: true };
+  });
+
+  // Who is this user served by? Used by the human-icon tooltip on record
+  // detail + profile pages. Returns only currently-active delegations.
+  app.get("/users/:id/delegates", async (request) => {
+    requireAuth(request);
+    const tenantId = requireTenantId(request);
+    const { id } = request.params as { id: string };
+    const now = new Date();
+    const rows = await prisma.userDelegation.findMany({
+      where: { tenantId, principalUserId: id, startsAt: { lte: now }, endsAt: { gt: now } },
+      select: {
+        id: true,
+        endsAt: true,
+        delegate: { select: { id: true, fullName: true, email: true, role: true } }
+      }
+    });
+    return { data: rows };
+  });
+
+  // Who can I act on behalf of? Used by the "On behalf of" picker on record
+  // create forms. Returns only the caller's currently-active principals.
+  app.get("/users/me/principals", async (request) => {
+    requireAuth(request);
+    const tenantId = requireTenantId(request);
+    const activeIds = await listActivePrincipalIds(request);
+    if (activeIds.size === 0) return { data: [] };
+    const rows = await prisma.user.findMany({
+      where: { id: { in: [...activeIds] }, tenantId, isActive: true },
+      select: { id: true, fullName: true, email: true, role: true },
+      orderBy: { fullName: "asc" }
+    });
+    return { data: rows };
   });
 };

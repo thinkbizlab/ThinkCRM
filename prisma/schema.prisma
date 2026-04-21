@@ -45,6 +45,7 @@ model Tenant {
   customFieldDefinitions CustomFieldDefinition[]
   quotationFormConfig    QuotationFormConfig?
   entityChangelogs       EntityChangelog[]
+  userDelegations        UserDelegation[]
   roleChainEntries       TenantRoleChain[]
   customDomain           TenantCustomDomain?
   cronJobConfigs         CronJobConfig[]
@@ -85,6 +86,11 @@ model User {
   integrationLogs     IntegrationExecutionLog[]
   ownedDeals          Deal[]                @relation("DealOwner")
   ownedVisits         Visit[]               @relation("VisitRep")
+  createdCustomers    Customer[]            @relation("CustomerCreatedBy")
+  createdDeals        Deal[]                @relation("DealCreatedBy")
+  createdVisits       Visit[]               @relation("VisitCreatedBy")
+  delegatedAs         UserDelegation[]      @relation("UserDelegationDelegate")
+  principalFor        UserDelegation[]      @relation("UserDelegationPrincipal")
   voiceNoteRequested  VoiceNoteJob[]        @relation("VoiceRequestedBy")
   voiceNoteConfirmed  VoiceNoteTranscript[] @relation("VoiceConfirmedBy")
   aiVisitRecommendationRuns AiVisitRecommendationRun[] @relation("AiVisitRecommendationRunRep")
@@ -94,6 +100,24 @@ model User {
 
   @@unique([tenantId, email])
   @@index([tenantId, isActive, role])
+}
+
+model UserDelegation {
+  id              String   @id @default(cuid())
+  tenantId        String
+  delegateUserId  String
+  principalUserId String
+  startsAt        DateTime @default(now())
+  endsAt          DateTime @default(dbgenerated("'9999-12-31 23:59:59'::timestamp"))
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  delegate        User     @relation("UserDelegationDelegate",  fields: [delegateUserId],  references: [id], onDelete: Cascade)
+  principal       User     @relation("UserDelegationPrincipal", fields: [principalUserId], references: [id], onDelete: Cascade)
+
+  @@unique([delegateUserId, principalUserId])
+  @@index([tenantId, delegateUserId])
+  @@index([tenantId, principalUserId])
 }
 
 model EntityChangelog {
@@ -324,10 +348,12 @@ model Customer {
   siteLng           Float?
   customFields      Json?
   isDemo            Boolean            @default(false)
+  createdByUserId   String?
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
   tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   paymentTerm       PaymentTerm        @relation(fields: [defaultTermId], references: [id], onDelete: Restrict)
+  createdBy         User?              @relation("CustomerCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   addresses         CustomerAddress[]
   contacts          CustomerContact[]
   deals             Deal[]
@@ -444,10 +470,12 @@ model Deal {
   lostNote       String?
   customFields   Json?
   isDemo         Boolean              @default(false)
+  createdByUserId String?
   createdAt      DateTime             @default(now())
   updatedAt      DateTime             @updatedAt
   tenant         Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   owner          User                 @relation("DealOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  createdBy      User?                @relation("DealCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   customer       Customer             @relation(fields: [customerId], references: [id], onDelete: Restrict)
   stage          DealStage            @relation(fields: [stageId], references: [id], onDelete: Restrict)
   progress       DealProgressUpdate[]
@@ -572,10 +600,12 @@ model Visit {
   checkOutLng   Float?
   result        String?
   isDemo        Boolean     @default(false)
+  createdByUserId String?
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
   tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   rep           User        @relation("VisitRep", fields: [repId], references: [id], onDelete: Restrict)
+  createdBy     User?       @relation("VisitCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   customer      Customer    @relation(fields: [customerId], references: [id], onDelete: Restrict)
   deal          Deal?       @relation(fields: [dealId], references: [id], onDelete: SetNull)
 
@@ -768,7 +798,9 @@ enum UserRole {
   ADMIN
   DIRECTOR
   MANAGER
+  ASSISTANT_MANAGER
   SUPERVISOR
+  SALES_ADMIN
   REP
 }
 
