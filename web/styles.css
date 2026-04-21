@@ -7880,19 +7880,22 @@ button.cust-badge-contact:hover { opacity: 0.7; }
 .toast-close:hover { opacity: 1; }
 
 /* ── Integrations Settings page ─────────────────────────────────────────── */
-.intg-section { margin-bottom: var(--sp-3); overflow: hidden; }
+.intg-section { margin-bottom: var(--sp-3); overflow: hidden; padding: 0; }
 
 .intg-section-toggle {
   width: 100%; display: flex; align-items: center;
   justify-content: space-between; gap: var(--sp-2);
-  background: none; border: none; padding: 0;
-  cursor: pointer; text-align: left; color: var(--text);
+  background: #0f172a; border: none;
+  padding: var(--sp-3) var(--sp-4);
+  cursor: pointer; text-align: left; color: #ffffff;
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
 }
-.intg-section-toggle:hover .intg-section-title { color: var(--brand); }
+.intg-section--collapsed .intg-section-toggle { border-radius: var(--r-lg); }
+.intg-section-toggle:hover .intg-section-title { color: var(--accent-bright); }
 
-.intg-section-title { font-size: 1rem; font-weight: 600; color: var(--text); transition: color 0.12s; }
+.intg-section-title { font-size: 1rem; font-weight: 600; color: #ffffff; transition: color 0.12s; }
 
-.intg-chevron { flex-shrink: 0; color: var(--muted); transition: transform 0.22s ease; }
+.intg-chevron { flex-shrink: 0; color: #ffffff; transition: transform 0.22s ease; }
 .intg-section--collapsed .intg-chevron { transform: rotate(-90deg); }
 
 .intg-section-body {
@@ -7903,7 +7906,7 @@ button.cust-badge-contact:hover { opacity: 0.7; }
 }
 .intg-section--collapsed .intg-section-body { grid-template-rows: 0fr; }
 .intg-section-body > * { min-height: 0; }
-.intg-section-inner { padding-top: var(--sp-3); }
+.intg-section-inner { padding: var(--sp-4) var(--sp-5) var(--sp-5); }
 
 .intg-section-desc { margin: 0 0 var(--sp-3); font-size: 0.85rem; }
 
