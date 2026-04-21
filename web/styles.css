@@ -163,6 +163,14 @@ body {
   pointer-events: none;
 }
 
+.login-brand.has-hero-image {
+  background: var(--login-hero-image) center/cover no-repeat, var(--secondary);
+}
+
+.login-brand.has-hero-image::before {
+  background: linear-gradient(135deg, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0.35));
+}
+
 .login-brand-inner {
   position: relative;
   z-index: 1;
@@ -362,6 +370,46 @@ body {
   font-size: 0.88rem;
   color: var(--muted-color);
   line-height: 1.5;
+}
+
+.login-welcome {
+  margin: 0 0 var(--sp-4);
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--text);
+  text-align: center;
+  line-height: 1.45;
+}
+
+.login-footer {
+  margin-top: var(--sp-6);
+  padding-top: var(--sp-4);
+  border-top: 1px solid var(--border);
+  font-size: 0.78rem;
+  color: var(--muted-color);
+  text-align: center;
+  line-height: 1.5;
+}
+
+.login-footer-text {
+  margin: 0 0 var(--sp-2);
+}
+
+.login-footer-links {
+  display: flex;
+  gap: var(--sp-3);
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.login-footer-links a {
+  color: var(--muted-color);
+  text-decoration: none;
+  transition: color 0.15s;
+}
+
+.login-footer-links a:hover {
+  color: var(--accent);
 }
 
 .login-success {

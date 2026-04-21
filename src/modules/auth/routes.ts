@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from "fastify";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 import { z } from "zod";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { generateRegistrationOptions, verifyRegistrationResponse, generateAuthenticationOptions, verifyAuthenticationResponse } from "@simplewebauthn/server";
@@ -306,7 +306,19 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         accentGradientColor: "#ec4899",
         accentGradientAngle: 135,
         themeTokens: {},
-        themeMode: "LIGHT"
+        themeMode: "LIGHT",
+        loginTaglineHeadline: null,
+        loginTaglineSubtext: null,
+        loginHeroImageUrl: null,
+        loginWelcomeMessage: null,
+        loginFooterText: null,
+        loginTermsUrl: null,
+        loginPrivacyUrl: null,
+        loginSupportEmail: null,
+        loginShowSignup: true,
+        loginShowGoogle: true,
+        loginShowMicrosoft: true,
+        loginShowPasskey: true
       });
     }
     const b = tenant.branding;
@@ -320,7 +332,19 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       accentGradientColor:   b?.accentGradientColor   ?? "#ec4899",
       accentGradientAngle:   b?.accentGradientAngle   ?? 135,
       themeTokens:           (b?.themeTokens as Record<string, unknown> | null) ?? {},
-      themeMode:             b?.themeMode             ?? "LIGHT"
+      themeMode:             b?.themeMode             ?? "LIGHT",
+      loginTaglineHeadline:  b?.loginTaglineHeadline  ?? null,
+      loginTaglineSubtext:   b?.loginTaglineSubtext   ?? null,
+      loginHeroImageUrl:     await resolveBrandingUrl(b?.loginHeroImageUrl, tenant.slug),
+      loginWelcomeMessage:   b?.loginWelcomeMessage   ?? null,
+      loginFooterText:       b?.loginFooterText       ?? null,
+      loginTermsUrl:         b?.loginTermsUrl         ?? null,
+      loginPrivacyUrl:       b?.loginPrivacyUrl       ?? null,
+      loginSupportEmail:     b?.loginSupportEmail     ?? null,
+      loginShowSignup:       b?.loginShowSignup       ?? true,
+      loginShowGoogle:       b?.loginShowGoogle       ?? true,
+      loginShowMicrosoft:    b?.loginShowMicrosoft    ?? true,
+      loginShowPasskey:      b?.loginShowPasskey      ?? true
     });
   });
 
@@ -383,48 +407,33 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     return requestOrigin;
   }
 
-  // Resolve MS365 / Google OAuth credentials, preferring per-tenant configuration
-  // (TenantIntegrationCredential, ENABLED) and falling back to server-level env.
+  // Resolve MS365 / Google OAuth credentials from the tenant's Integration record
+  // only. Each tenant must bring their own OAuth app — there is no platform-wide
+  // env fallback, so a tenant without credentials cannot use social login.
   async function resolveMs365OAuthCreds(tenantSlug: string):
     Promise<{ clientId: string; clientSecret: string; msTenantId: string } | null> {
     const tenant = await prisma.tenant.findUnique({ where: { slug: tenantSlug }, select: { id: true } });
-    if (tenant) {
-      const cred = decryptCredential(await prisma.tenantIntegrationCredential.findFirst({
-        where: { tenantId: tenant.id, platform: IntegrationPlatform.MS365, status: SourceStatus.ENABLED }
-      }));
-      if (cred?.clientIdRef && cred?.clientSecretRef) {
-        return {
-          clientId: cred.clientIdRef,
-          clientSecret: cred.clientSecretRef,
-          msTenantId: cred.webhookTokenRef ?? config.MS365_TENANT_ID ?? "common"
-        };
-      }
-    }
-    if (config.MS365_CLIENT_ID && config.MS365_CLIENT_SECRET) {
-      return {
-        clientId: config.MS365_CLIENT_ID,
-        clientSecret: config.MS365_CLIENT_SECRET,
-        msTenantId: config.MS365_TENANT_ID ?? "common"
-      };
-    }
-    return null;
+    if (!tenant) return null;
+    const cred = decryptCredential(await prisma.tenantIntegrationCredential.findFirst({
+      where: { tenantId: tenant.id, platform: IntegrationPlatform.MS365, status: SourceStatus.ENABLED }
+    }));
+    if (!cred?.clientIdRef || !cred?.clientSecretRef) return null;
+    return {
+      clientId: cred.clientIdRef,
+      clientSecret: cred.clientSecretRef,
+      msTenantId: cred.webhookTokenRef ?? config.MS365_TENANT_ID ?? "common"
+    };
   }
 
   async function resolveGoogleOAuthCreds(tenantSlug: string):
     Promise<{ clientId: string; clientSecret: string } | null> {
     const tenant = await prisma.tenant.findUnique({ where: { slug: tenantSlug }, select: { id: true } });
-    if (tenant) {
-      const cred = decryptCredential(await prisma.tenantIntegrationCredential.findFirst({
-        where: { tenantId: tenant.id, platform: IntegrationPlatform.GOOGLE, status: SourceStatus.ENABLED }
-      }));
-      if (cred?.clientIdRef && cred?.clientSecretRef) {
-        return { clientId: cred.clientIdRef, clientSecret: cred.clientSecretRef };
-      }
-    }
-    if (config.GOOGLE_CLIENT_ID && config.GOOGLE_CLIENT_SECRET) {
-      return { clientId: config.GOOGLE_CLIENT_ID, clientSecret: config.GOOGLE_CLIENT_SECRET };
-    }
-    return null;
+    if (!tenant) return null;
+    const cred = decryptCredential(await prisma.tenantIntegrationCredential.findFirst({
+      where: { tenantId: tenant.id, platform: IntegrationPlatform.GOOGLE, status: SourceStatus.ENABLED }
+    }));
+    if (!cred?.clientIdRef || !cred?.clientSecretRef) return null;
+    return { clientId: cred.clientIdRef, clientSecret: cred.clientSecretRef };
   }
 
   // ── MS365 OAuth ──────────────────────────────────────────────────────────────
@@ -492,7 +501,16 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
             const slug = tenantSlug.replace(/[^a-z0-9-]/g, "-");
             const key  = `${slug}/avatars/${user.id}.jpg`;
             await uploadBufferToR2({ tenantSlug: slug, objectKeyOrRef: key, contentType: ct, data: buf });
-            avatarUrl = buildR2PublicUrl(key) ?? buildR2ObjectRef(key);
+            const publicUrl = buildR2PublicUrl(key);
+            if (publicUrl) {
+              // Cache-bust so the stored URL changes only when the photo bytes change —
+              // otherwise the R2/CDN public URL stays identical on every login and the
+              // browser keeps serving the stale cached image.
+              const hash = createHash("sha256").update(buf).digest("hex").slice(0, 12);
+              avatarUrl = `${publicUrl}?v=${hash}`;
+            } else {
+              avatarUrl = buildR2ObjectRef(key);
+            }
           }
         }
       } catch (e) {
@@ -938,22 +956,19 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     }
   });
 
-  // Returns which OAuth providers are configured — tenant-level credentials take
-  // precedence over server-level env fallbacks. Used by the login page.
+  // Returns which OAuth providers are configured for this tenant. Each tenant
+  // must bring their own OAuth app (so redirect URIs line up with their custom
+  // domain) — there is no platform-wide env fallback. Without a slug we can't
+  // resolve credentials, so both return false. Used by the login page.
   app.get("/auth/oauth/providers", async (request) => {
     const { tenantSlug } = request.query as { tenantSlug?: string };
     const slug = tenantSlug?.trim();
-    if (slug) {
-      const [ms365, google] = await Promise.all([
-        resolveMs365OAuthCreds(slug),
-        resolveGoogleOAuthCreds(slug)
-      ]);
-      return { ms365: Boolean(ms365), google: Boolean(google) };
-    }
-    return {
-      ms365:  Boolean(config.MS365_CLIENT_ID && config.MS365_CLIENT_SECRET),
-      google: Boolean(config.GOOGLE_CLIENT_ID && config.GOOGLE_CLIENT_SECRET)
-    };
+    if (!slug) return { ms365: false, google: false };
+    const [ms365, google] = await Promise.all([
+      resolveMs365OAuthCreds(slug),
+      resolveGoogleOAuthCreds(slug)
+    ]);
+    return { ms365: Boolean(ms365), google: Boolean(google) };
   });
 
   // Resolve a request hostname to a tenant slug, if it belongs to a subdomain
@@ -1088,7 +1103,14 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     const key  = `${slug}/avatars/${userId}.${ext}`;
     await uploadBufferToR2({ tenantSlug: slug, objectKeyOrRef: key, contentType: mimeType, data: fileBuffer });
 
-    const rawUrl = buildR2PublicUrl(key) ?? buildR2ObjectRef(key);
+    const publicUrl = buildR2PublicUrl(key);
+    let rawUrl: string;
+    if (publicUrl) {
+      const hash = createHash("sha256").update(fileBuffer).digest("hex").slice(0, 12);
+      rawUrl = `${publicUrl}?v=${hash}`;
+    } else {
+      rawUrl = buildR2ObjectRef(key);
+    }
     await prisma.user.update({ where: { id: userId }, data: { avatarUrl: rawUrl } });
 
     return reply.send({ avatarUrl: resolveAvatarUrl(userId, rawUrl, tenantId) ?? rawUrl });

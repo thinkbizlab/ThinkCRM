@@ -72,6 +72,66 @@ function applyLoginBranding(b) {
   document.documentElement.style.setProperty("--secondary", secondary);
 
   if (b.faviconUrl) applyFavicon(b.faviconUrl);
+
+  applyLoginCustomization(b);
+}
+
+// Apply login-screen-specific customizations (tagline, welcome, footer, hero image, button visibility).
+function applyLoginCustomization(b) {
+  const headlineEl = qs("#login-tagline-headline");
+  if (headlineEl) headlineEl.textContent = b.loginTaglineHeadline || "Sales intelligence.";
+  const subtextEl = qs("#login-tagline-subtext");
+  if (subtextEl) subtextEl.textContent = b.loginTaglineSubtext || "Field-first.";
+
+  const welcomeEl = qs("#login-welcome");
+  if (welcomeEl) {
+    const msg = (b.loginWelcomeMessage || "").trim();
+    welcomeEl.textContent = msg;
+    welcomeEl.hidden = msg.length === 0;
+  }
+
+  const brandEl = qs(".login-brand");
+  if (brandEl) {
+    if (b.loginHeroImageUrl) {
+      document.documentElement.style.setProperty("--login-hero-image", `url(${JSON.stringify(b.loginHeroImageUrl)})`);
+      brandEl.classList.add("has-hero-image");
+    } else {
+      document.documentElement.style.removeProperty("--login-hero-image");
+      brandEl.classList.remove("has-hero-image");
+    }
+  }
+
+  const footerEl = qs("#login-footer");
+  if (footerEl) {
+    const text = (b.loginFooterText || "").trim();
+    const links = [];
+    const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    if (b.loginTermsUrl)     links.push(`<a href="${esc(b.loginTermsUrl)}" target="_blank" rel="noopener">Terms</a>`);
+    if (b.loginPrivacyUrl)   links.push(`<a href="${esc(b.loginPrivacyUrl)}" target="_blank" rel="noopener">Privacy</a>`);
+    if (b.loginSupportEmail) links.push(`<a href="mailto:${esc(b.loginSupportEmail)}">Support</a>`);
+    if (text || links.length) {
+      footerEl.innerHTML =
+        (text ? `<p class="login-footer-text">${esc(text)}</p>` : "") +
+        (links.length ? `<div class="login-footer-links">${links.join(" · ")}</div>` : "");
+      footerEl.hidden = false;
+    } else {
+      footerEl.innerHTML = "";
+      footerEl.hidden = true;
+    }
+  }
+
+  const flags = {
+    signup:    b.loginShowSignup    !== false,
+    google:    b.loginShowGoogle    !== false,
+    microsoft: b.loginShowMicrosoft !== false,
+    passkey:   b.loginShowPasskey   !== false
+  };
+  Object.entries(flags).forEach(([key, visible]) => {
+    document.querySelectorAll(`[data-login-button="${key}"]`).forEach((el) => {
+      el.dataset.loginHiddenByAdmin = visible ? "" : "true";
+      if (!visible) el.setAttribute("hidden", "");
+    });
+  });
 }
 
 async function fetchLoginBranding(slug) {
@@ -441,6 +501,7 @@ function applyBrandingTheme(branding) {
     document.title = b.appName;
     if (brandTitle) brandTitle.textContent = b.appName;
   }
+  brandTitle?.classList.remove("branding-pending");
   if (brandMark) {
     const logoSrc = b.logoUrl || "/default-brand.svg";
     brandMark.innerHTML = `<img src="${escHtml(logoSrc)}" alt="logo" />`;
@@ -3752,6 +3813,55 @@ function renderSettings() {
               <span class="muted" style="font-size:0.78rem">Tenant-wide default. Users can override with the theme toggle.</span>
             </label>
           </div>
+          <details class="theme-group" style="margin-top:var(--sp-4)">
+            <summary class="theme-editor-label" style="cursor:pointer">Login Screen</summary>
+            <p class="muted" style="font-size:0.82rem;margin:var(--sp-2) 0 var(--sp-3)">Customize what users see at your sign-in page.</p>
+            <div class="brand-asset-col" style="max-width:280px;margin-bottom:var(--sp-4)">
+              <p class="form-label" style="margin-bottom:var(--sp-2)">Login Hero Image</p>
+              <div class="logo-upload-area" id="login-hero-upload-area">
+                <img src="${branding.loginHeroImageUrl || "/default-brand.svg"}" class="logo-upload-preview" id="login-hero-preview" alt="Login hero preview" />
+                <span class="logo-upload-change-hint">${branding.loginHeroImageUrl ? "Click to change" : "Optional · click to upload"}</span>
+                <input type="file" name="loginHeroFile" id="login-hero-file-input" accept="image/*" class="logo-file-input" />
+              </div>
+              <span class="muted" style="font-size:0.78rem">Used as the background on the left hero panel. A dark overlay is applied for readability.</span>
+            </div>
+            <div class="settings-field-row">
+              <label class="form-label" style="flex:1">Tagline Headline
+                <input class="form-input" name="loginTaglineHeadline" maxlength="120" placeholder="Sales intelligence." value="${escHtml(branding.loginTaglineHeadline || "")}" style="margin-top:var(--sp-1)" />
+              </label>
+              <label class="form-label" style="flex:1">Tagline Subtext
+                <input class="form-input" name="loginTaglineSubtext" maxlength="160" placeholder="Field-first." value="${escHtml(branding.loginTaglineSubtext || "")}" style="margin-top:var(--sp-1)" />
+              </label>
+            </div>
+            <div class="settings-field-row">
+              <label class="form-label" style="flex:1">Welcome Message (above the form)
+                <input class="form-input" name="loginWelcomeMessage" maxlength="200" placeholder="Welcome to your portal" value="${escHtml(branding.loginWelcomeMessage || "")}" style="margin-top:var(--sp-1)" />
+              </label>
+            </div>
+            <div class="settings-field-row">
+              <label class="form-label" style="flex:1">Footer Text
+                <input class="form-input" name="loginFooterText" maxlength="200" placeholder="© 2026 Acme Co. All rights reserved." value="${escHtml(branding.loginFooterText || "")}" style="margin-top:var(--sp-1)" />
+              </label>
+            </div>
+            <div class="settings-field-row">
+              <label class="form-label" style="flex:1">Terms URL
+                <input class="form-input" name="loginTermsUrl" type="url" maxlength="300" placeholder="https://acme.com/terms" value="${escHtml(branding.loginTermsUrl || "")}" style="margin-top:var(--sp-1)" />
+              </label>
+              <label class="form-label" style="flex:1">Privacy URL
+                <input class="form-input" name="loginPrivacyUrl" type="url" maxlength="300" placeholder="https://acme.com/privacy" value="${escHtml(branding.loginPrivacyUrl || "")}" style="margin-top:var(--sp-1)" />
+              </label>
+              <label class="form-label" style="flex:1">Support Email
+                <input class="form-input" name="loginSupportEmail" type="email" maxlength="200" placeholder="support@acme.com" value="${escHtml(branding.loginSupportEmail || "")}" style="margin-top:var(--sp-1)" />
+              </label>
+            </div>
+            <div class="settings-field-row" style="flex-direction:column;gap:var(--sp-2);align-items:flex-start">
+              <span class="form-label">Visible Sign-in Options</span>
+              <label class="form-label" style="flex-direction:row;align-items:center;gap:var(--sp-2)"><input type="checkbox" name="loginShowSignup" ${branding.loginShowSignup !== false ? "checked" : ""} /> Show "Create a new workspace" link</label>
+              <label class="form-label" style="flex-direction:row;align-items:center;gap:var(--sp-2)"><input type="checkbox" name="loginShowGoogle" ${branding.loginShowGoogle !== false ? "checked" : ""} /> Show Google sign-in</label>
+              <label class="form-label" style="flex-direction:row;align-items:center;gap:var(--sp-2)"><input type="checkbox" name="loginShowMicrosoft" ${branding.loginShowMicrosoft !== false ? "checked" : ""} /> Show Microsoft 365 sign-in</label>
+              <label class="form-label" style="flex-direction:row;align-items:center;gap:var(--sp-2)"><input type="checkbox" name="loginShowPasskey" ${branding.loginShowPasskey !== false ? "checked" : ""} /> Show Passkey sign-in</label>
+            </div>
+          </details>
           <div style="display:flex;gap:var(--sp-2);align-items:center;flex-wrap:wrap">
             <button type="submit">Save Branding</button>
             <button type="button" id="branding-restore-default" class="ghost">Restore to Default</button>
@@ -6090,6 +6200,38 @@ function renderSettings() {
     });
   }
 
+  // ── Login hero upload area interactions ──────────────────────
+  const heroArea = qs("#login-hero-upload-area");
+  const heroFileInput = qs("#login-hero-file-input");
+  if (heroArea && heroFileInput) {
+    heroArea.addEventListener("click", () => heroFileInput.click());
+    heroArea.addEventListener("dragover", (e) => { e.preventDefault(); heroArea.classList.add("drag-over"); });
+    heroArea.addEventListener("dragleave", () => heroArea.classList.remove("drag-over"));
+    heroArea.addEventListener("drop", (e) => {
+      e.preventDefault();
+      heroArea.classList.remove("drag-over");
+      const file = e.dataTransfer?.files?.[0];
+      if (file) {
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        heroFileInput.files = dt.files;
+        heroFileInput.dispatchEvent(new Event("change"));
+      }
+    });
+    heroFileInput.addEventListener("change", () => {
+      const file = heroFileInput.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const preview = qs("#login-hero-preview");
+        if (preview) preview.src = e.target.result;
+        const hint = heroArea.querySelector(".logo-upload-change-hint");
+        if (hint) hint.textContent = "Click to change";
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
   qs('[name="primaryColorPicker"]')?.addEventListener("input", (e) => {
     const hex = qs('[name="primaryColor"]');
     if (hex) hex.value = e.target.value;
@@ -6310,16 +6452,36 @@ function renderSettings() {
           return;
         }
       }
+      const loginHeroFile = fd.get("loginHeroFile");
+      if (loginHeroFile instanceof File && loginHeroFile.size > 0) {
+        const uploadFd = new FormData();
+        uploadFd.append("file", loginHeroFile, loginHeroFile.name);
+        try {
+          const uploadResult = await api(`/tenants/${tenantId}/branding/login-hero`, { method: "POST", body: uploadFd });
+          if (uploadResult?.loginHeroImageUrl) fd.set("loginHeroImageUrl", uploadResult.loginHeroImageUrl);
+          const previewSrc = uploadResult?.loginHeroDownloadUrl || uploadResult?.loginHeroImageUrl;
+          if (previewSrc) { const p = qs("#login-hero-preview"); if (p) p.src = previewSrc; }
+        } catch (error) {
+          setStatus(`Login hero upload failed: ${error.message}`, true);
+          return;
+        }
+      }
       const payload = Object.fromEntries(fd.entries());
       if (!payload.logoUrl) delete payload.logoUrl;
       if (!payload.faviconUrl) delete payload.faviconUrl;
+      if (!payload.loginHeroImageUrl) delete payload.loginHeroImageUrl;
       delete payload.logoFile;
       delete payload.faviconFile;
+      delete payload.loginHeroFile;
       delete payload.primaryColorPicker;
       delete payload.secondaryColorPicker;
       delete payload.accentGradientColorPicker;
       delete payload.accentGradientAngleRange;
       payload.accentGradientEnabled = fd.get("accentGradientEnabled") === "true" ? "true" : "false";
+      payload.loginShowSignup    = fd.get("loginShowSignup")    === "on" ? "true" : "false";
+      payload.loginShowGoogle    = fd.get("loginShowGoogle")    === "on" ? "true" : "false";
+      payload.loginShowMicrosoft = fd.get("loginShowMicrosoft") === "on" ? "true" : "false";
+      payload.loginShowPasskey   = fd.get("loginShowPasskey")   === "on" ? "true" : "false";
 
       // Assemble themeTokens from the grouped editor fields, then strip the
       // per-field entries and helper Picker/Range inputs from the payload.
@@ -6362,7 +6524,7 @@ function renderSettings() {
 
   qs("#branding-restore-default")?.addEventListener("click", async (event) => {
     const btn = event.currentTarget;
-    if (!confirm("Restore branding to defaults? App name, colors, gradient, and theme mode will be reset. Logo and favicon will be kept.")) return;
+    if (!confirm("Restore branding to defaults? App name, colors, gradient, theme mode, and login-screen customizations will be reset. Logo, favicon, and hero image will be kept.")) return;
     btn.disabled = true;
     const original = btn.textContent;
     btn.textContent = "Restoring…";
@@ -6376,7 +6538,18 @@ function renderSettings() {
           accentGradientEnabled: "false",
           accentGradientColor: "#ec4899",
           accentGradientAngle: 135,
-          themeMode: "LIGHT"
+          themeMode: "LIGHT",
+          loginTaglineHeadline: "",
+          loginTaglineSubtext: "",
+          loginWelcomeMessage: "",
+          loginFooterText: "",
+          loginTermsUrl: "",
+          loginPrivacyUrl: "",
+          loginSupportEmail: "",
+          loginShowSignup: "true",
+          loginShowGoogle: "true",
+          loginShowMicrosoft: "true",
+          loginShowPasskey: "true"
         }
       });
       setStatus("Branding restored to defaults.");

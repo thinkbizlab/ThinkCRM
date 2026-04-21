@@ -256,6 +256,18 @@ model TenantBranding {
   accentGradientAngle    Int       @default(135)
   themeTokens            Json      @default("{}")
   themeMode              ThemeMode @default(LIGHT)
+  loginTaglineHeadline   String?
+  loginTaglineSubtext    String?
+  loginHeroImageUrl      String?
+  loginWelcomeMessage    String?
+  loginFooterText        String?
+  loginTermsUrl          String?
+  loginPrivacyUrl        String?
+  loginSupportEmail      String?
+  loginShowSignup        Boolean   @default(true)
+  loginShowGoogle        Boolean   @default(true)
+  loginShowMicrosoft     Boolean   @default(true)
+  loginShowPasskey       Boolean   @default(true)
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt
   tenant                 Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)

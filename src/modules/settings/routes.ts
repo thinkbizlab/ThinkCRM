@@ -58,6 +58,16 @@ const themeHex = z
   .regex(/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, "color must be hex (#RGB or #RRGGBB).")
   .transform(normalizeHexColor);
 
+const emptyToUndef = (v: unknown) => (typeof v === "string" && v.trim() === "" ? undefined : v);
+
+const boolFromForm = z
+  .preprocess((v) => {
+    if (typeof v === "boolean") return v;
+    if (typeof v === "string") return v === "true" || v === "on" || v === "1";
+    return undefined;
+  }, z.boolean())
+  .optional();
+
 const brandingSchema = z.object({
   appName: z.string().trim().max(64).optional(),
   logoUrl: r2UrlOrPathSchema,
@@ -104,7 +114,19 @@ const brandingSchema = z.object({
       shadow:      z.enum(["NONE", "SM", "MD", "LG", "XL"]).optional()
     }).strict())
     .optional(),
-  themeMode: z.enum(["LIGHT", "DARK"]).default("LIGHT")
+  themeMode: z.enum(["LIGHT", "DARK"]).default("LIGHT"),
+  loginTaglineHeadline: z.preprocess(emptyToUndef, z.string().trim().max(120).optional()),
+  loginTaglineSubtext:  z.preprocess(emptyToUndef, z.string().trim().max(160).optional()),
+  loginHeroImageUrl:    r2UrlOrPathSchema,
+  loginWelcomeMessage:  z.preprocess(emptyToUndef, z.string().trim().max(200).optional()),
+  loginFooterText:      z.preprocess(emptyToUndef, z.string().trim().max(200).optional()),
+  loginTermsUrl:        z.preprocess(emptyToUndef, z.url("loginTermsUrl must be a URL.").max(300).optional()),
+  loginPrivacyUrl:      z.preprocess(emptyToUndef, z.url("loginPrivacyUrl must be a URL.").max(300).optional()),
+  loginSupportEmail:    z.preprocess(emptyToUndef, z.email("loginSupportEmail must be an email.").max(200).optional()),
+  loginShowSignup:    boolFromForm,
+  loginShowGoogle:    boolFromForm,
+  loginShowMicrosoft: boolFromForm,
+  loginShowPasskey:   boolFromForm
 });
 
 const kpiMonthPattern = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -810,7 +832,7 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     if (!branding) return branding;
     const tenant = await prisma.tenant.findUnique({ where: { id: params.id }, select: { slug: true } });
     if (!tenant) return branding;
-    const resolved = { ...branding } as typeof branding & { logoUrl?: string | null; faviconUrl?: string | null };
+    const resolved = { ...branding } as typeof branding & { logoUrl?: string | null; faviconUrl?: string | null; loginHeroImageUrl?: string | null };
     // M10: Prefer fast R2 public CDN URL; fall back to presigned download URL.
     if (resolved.logoUrl?.startsWith("r2://")) {
       resolved.logoUrl = buildR2PublicUrl(resolved.logoUrl) ?? await (async () => {
@@ -824,6 +846,14 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       resolved.faviconUrl = buildR2PublicUrl(resolved.faviconUrl) ?? await (async () => {
         try {
           const dl = await createR2PresignedDownload({ tenantSlug: tenant.slug, objectKeyOrRef: resolved.faviconUrl! });
+          return dl.downloadUrl;
+        } catch { return null; }
+      })();
+    }
+    if (resolved.loginHeroImageUrl?.startsWith("r2://")) {
+      resolved.loginHeroImageUrl = buildR2PublicUrl(resolved.loginHeroImageUrl) ?? await (async () => {
+        try {
+          const dl = await createR2PresignedDownload({ tenantSlug: tenant.slug, objectKeyOrRef: resolved.loginHeroImageUrl! });
           return dl.downloadUrl;
         } catch { return null; }
       })();
@@ -979,6 +1009,74 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       message: "Favicon uploaded",
       faviconUrl,
       faviconDownloadUrl,
+      branding
+    });
+  });
+
+  app.post("/tenants/:id/branding/login-hero", async (request, reply) => {
+    const params = request.params as { id: string };
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    assertTenantPathAccess(request, params.id);
+
+    const file = await request.file();
+    if (!file) {
+      throw app.httpErrors.badRequest("Hero image file is required.");
+    }
+    const ext = logoMimeToExt.get(file.mimetype);
+    if (!ext) {
+      throw app.httpErrors.badRequest("Unsupported image file type. Use png, jpg, webp, or svg.");
+    }
+
+    const heroBuffer = await file.toBuffer();
+    if (heroBuffer.length > MAX_LOGO_BYTES) {
+      throw app.httpErrors.badRequest("Hero image exceeds 5MB limit.");
+    }
+
+    const tenantForHero = await prisma.tenant.findUnique({ where: { id: params.id }, select: { slug: true } });
+    if (!tenantForHero) throw app.httpErrors.notFound("Tenant not found.");
+
+    let loginHeroImageUrl: string;
+    let loginHeroDownloadUrl: string;
+    if (isR2Configured) {
+      const objectKey = `branding/login-hero/${Date.now()}-${randomUUID()}${ext}`;
+      let uploaded: { objectKey: string; objectRef: string };
+      try {
+        uploaded = await uploadBufferToR2({
+          tenantSlug: tenantForHero.slug,
+          objectKeyOrRef: objectKey,
+          contentType: file.mimetype,
+          data: heroBuffer
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown upload failure.";
+        throw app.httpErrors.badGateway(message);
+      }
+      loginHeroImageUrl = uploaded.objectRef;
+      const dl = await createR2PresignedDownload({ tenantSlug: tenantForHero.slug, objectKeyOrRef: uploaded.objectKey });
+      loginHeroDownloadUrl = dl.downloadUrl;
+    } else {
+      const filename = `${Date.now()}-${randomUUID()}${ext}`;
+      const uploadsDir = join(process.cwd(), "uploads");
+      await mkdir(uploadsDir, { recursive: true });
+      await writeFile(join(uploadsDir, filename), heroBuffer);
+      loginHeroImageUrl = `/uploads/${filename}`;
+      loginHeroDownloadUrl = loginHeroImageUrl;
+    }
+    const branding = await prisma.tenantBranding.upsert({
+      where: { tenantId: params.id },
+      update: { loginHeroImageUrl },
+      create: {
+        tenantId: params.id,
+        loginHeroImageUrl,
+        primaryColor: "#2563eb",
+        secondaryColor: "#0f172a",
+        themeMode: "LIGHT"
+      }
+    });
+    return reply.code(201).send({
+      message: "Login hero image uploaded",
+      loginHeroImageUrl,
+      loginHeroDownloadUrl,
       branding
     });
   });

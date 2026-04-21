@@ -12,8 +12,10 @@ export async function loadOAuthProviderButtons({ getTenantSlug } = {}) {
   const googleBtn = qs("#oauth-google-btn");
   const passkeyBtn = qs("#oauth-passkey-btn");
   if (!panel || !ms365Btn || !googleBtn) return;
+  const hiddenByAdmin = (el) => el?.dataset?.loginHiddenByAdmin === "true";
   const webauthnSupported = !!(window.PublicKeyCredential);
-  if (passkeyBtn) passkeyBtn.hidden = !webauthnSupported;
+  const passkeyAllowed = webauthnSupported && !hiddenByAdmin(passkeyBtn);
+  if (passkeyBtn) passkeyBtn.hidden = !passkeyAllowed;
   try {
     const slug = getTenantSlug?.();
     const url = slug
@@ -22,9 +24,11 @@ export async function loadOAuthProviderButtons({ getTenantSlug } = {}) {
     const res = await fetch(url);
     if (!res.ok) return;
     const { ms365, google } = await res.json();
-    ms365Btn.hidden  = !ms365;
-    googleBtn.hidden = !google;
-    panel.hidden     = !ms365 && !google && !webauthnSupported;
+    const ms365Allowed  = ms365  && !hiddenByAdmin(ms365Btn);
+    const googleAllowed = google && !hiddenByAdmin(googleBtn);
+    ms365Btn.hidden  = !ms365Allowed;
+    googleBtn.hidden = !googleAllowed;
+    panel.hidden     = !ms365Allowed && !googleAllowed && !passkeyAllowed;
   } catch { /* ignore — OAuth buttons are optional */ }
 }
 
