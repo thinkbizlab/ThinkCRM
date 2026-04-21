@@ -56,12 +56,9 @@ const authMessage = qs("#auth-message");
 function applyLoginBranding(b) {
   const appName = b.appName || "ThinkCRM";
   document.title = appName;
-  const nameEl = qs("#login-app-name");
-  if (nameEl) {
-    nameEl.textContent = appName;
-    nameEl.classList.remove("branding-pending");
-  }
 
+  // Set colors BEFORE revealing the wordmark so the browser never paints an
+  // intermediate frame of the element visible with the platform-default accent.
   const primary   = b.primaryColor   || "#2563eb";
   const secondary = b.secondaryColor || "#0f172a";
   const loginShell = qs(".login-shell");
@@ -69,10 +66,15 @@ function applyLoginBranding(b) {
     loginShell.style.setProperty("--login-accent", primary);
     loginShell.style.setProperty("--accent", primary);
   }
-  // Also prime the global CSS vars so the form button/inputs pick up the color.
   document.documentElement.style.setProperty("--accent", primary);
   document.documentElement.style.setProperty("--accent-dim", primary);
   document.documentElement.style.setProperty("--secondary", secondary);
+
+  const nameEl = qs("#login-app-name");
+  if (nameEl) {
+    nameEl.textContent = appName;
+    nameEl.classList.remove("branding-pending");
+  }
 
   if (b.faviconUrl) applyFavicon(b.faviconUrl);
 
