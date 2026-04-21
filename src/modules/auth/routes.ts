@@ -699,7 +699,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       const profileRes = await fetch("https://api.line.me/v2/profile", {
         headers: { Authorization: `Bearer ${tok.access_token}` }
       });
-      const profile = await profileRes.json() as { userId?: string; displayName?: string };
+      const profile = await profileRes.json() as { userId?: string; displayName?: string; pictureUrl?: string };
       if (!profile.userId) throw new Error("Could not retrieve LINE User ID from profile.");
 
       await prisma.userExternalAccount.upsert({
@@ -711,6 +711,31 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
           externalUserId: profile.userId
         }
       });
+
+      if (profile.pictureUrl && isR2Configured) {
+        try {
+          const existing = await prisma.user.findUnique({
+            where: { id: stateData.userId },
+            select: { avatarUrl: true }
+          });
+          if (!existing?.avatarUrl) {
+            const photoRes = await fetch(profile.pictureUrl);
+            if (photoRes.ok) {
+              const buf = Buffer.from(await photoRes.arrayBuffer());
+              const ct  = photoRes.headers.get("content-type") ?? "image/jpeg";
+              const slug = stateData.tenantSlug.replace(/[^a-z0-9-]/g, "-");
+              const key  = `${slug}/avatars/${stateData.userId}.jpg`;
+              await uploadBufferToR2({ tenantSlug: slug, objectKeyOrRef: key, contentType: ct, data: buf });
+              const publicUrl = buildR2PublicUrl(key);
+              const hash = createHash("sha256").update(buf).digest("hex").slice(0, 12);
+              const avatarUrl = publicUrl ? `${publicUrl}?v=${hash}` : buildR2ObjectRef(key);
+              await prisma.user.update({ where: { id: stateData.userId }, data: { avatarUrl } });
+            }
+          }
+        } catch (e) {
+          app.log.warn({ err: e }, "[LINE Connect] avatar upload failed — skipping");
+        }
+      }
 
       return reply.redirect(`${base}/settings/notifications?line_connected=1`);
     } catch (err) {
