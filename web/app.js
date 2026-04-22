@@ -9352,9 +9352,9 @@ async function openDuplicatesModal() {
   qs("#dupe-modal")?.remove();
   const overlay = document.createElement("div");
   overlay.id = "dupe-modal";
-  overlay.className = "modal-overlay";
+  overlay.className = "ncm-overlay";
   overlay.innerHTML = `
-    <div class="ncm-card" style="max-width:720px;max-height:90vh;display:flex;flex-direction:column">
+    <div class="ncm-panel" style="max-width:720px;max-height:90vh;display:flex;flex-direction:column">
       <div class="ncm-header">
         <span class="ncm-title">Duplicate Customers</span>
         <button type="button" class="ncm-close" id="dupe-close">${icon('x', 14)}</button>
@@ -9368,6 +9368,7 @@ async function openDuplicatesModal() {
       </div>
     </div>`;
   document.body.appendChild(overlay);
+  requestAnimationFrame(() => overlay.classList.add("ncm-open"));
   const closeModal = () => overlay.remove();
   overlay.querySelector("#dupe-close").addEventListener("click", closeModal);
   overlay.addEventListener("click", (e) => { if (e.target === overlay) closeModal(); });
@@ -9430,9 +9431,9 @@ async function openMergeModal({ keeper, loser, onMerged }) {
   qs("#merge-modal")?.remove();
   const overlay = document.createElement("div");
   overlay.id = "merge-modal";
-  overlay.className = "modal-overlay";
+  overlay.className = "ncm-overlay";
   overlay.innerHTML = `
-    <div class="ncm-card" style="max-width:560px">
+    <div class="ncm-panel" style="max-width:560px">
       <div class="ncm-header">
         <span class="ncm-title">Merge Customers</span>
         <button type="button" class="ncm-close" id="mrg-close">${icon('x', 14)}</button>
@@ -9448,6 +9449,7 @@ async function openMergeModal({ keeper, loser, onMerged }) {
       </div>
     </div>`;
   document.body.appendChild(overlay);
+  requestAnimationFrame(() => overlay.classList.add("ncm-open"));
   const close = () => overlay.remove();
   overlay.querySelector("#mrg-close").addEventListener("click", close);
   overlay.querySelector("#mrg-cancel").addEventListener("click", close);
@@ -9988,14 +9990,14 @@ function openEditCustomerModal(cust, termOptions) {
   qs("#edit-cust-modal")?.remove();
   const overlay = document.createElement("div");
   overlay.id = "edit-cust-modal";
-  overlay.className = "modal-overlay";
+  overlay.className = "ncm-overlay";
 
   const termOpts = (termOptions || []).map(
     (t) => `<option value="${t.id}" ${t.id === cust.defaultTermId ? "selected" : ""}>${escHtml(t.code)} — ${escHtml(t.name)}</option>`
   ).join("");
 
   overlay.innerHTML = `
-    <div class="ncm-card" style="max-width:480px">
+    <div class="ncm-panel" style="max-width:480px">
       <div class="ncm-header">
         <span class="ncm-title">Edit Customer</span>
         <button type="button" class="ncm-close" id="ecm-close">${icon('x', 14)}</button>
@@ -10050,6 +10052,7 @@ function openEditCustomerModal(cust, termOptions) {
     </div>`;
 
   document.body.appendChild(overlay);
+  requestAnimationFrame(() => overlay.classList.add("ncm-open"));
 
   const closeModal = () => overlay.remove();
   overlay.querySelector("#ecm-close").addEventListener("click", closeModal);
