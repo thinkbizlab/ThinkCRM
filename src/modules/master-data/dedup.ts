@@ -1,4 +1,4 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { Anthropic } from "@anthropic-ai/sdk";
 import { CustomerDuplicateSignal, Prisma } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
 import { config } from "../../config.js";
