@@ -542,6 +542,24 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       customerId: params.id,
       visibleUserIds: visibleUserIdList
     });
+    // Block deletion when the customer still has history that would
+    // otherwise raise a FK Restrict error at the database layer. Return
+    // a friendly, actionable message instead of a generic 500.
+    const [dealCount, visitCount, quotationCount] = await Promise.all([
+      prisma.deal.count({ where: { customerId: params.id, tenantId } }),
+      prisma.visit.count({ where: { customerId: params.id, tenantId } }),
+      prisma.quotation.count({ where: { customerId: params.id, tenantId } })
+    ]);
+    if (dealCount + visitCount + quotationCount > 0) {
+      const parts: string[] = [];
+      if (dealCount) parts.push(`${dealCount} deal${dealCount !== 1 ? "s" : ""}`);
+      if (visitCount) parts.push(`${visitCount} visit${visitCount !== 1 ? "s" : ""}`);
+      if (quotationCount) parts.push(`${quotationCount} quotation${quotationCount !== 1 ? "s" : ""}`);
+      throw app.httpErrors.conflict(
+        `Cannot delete this customer because it has ${parts.join(", ")}. ` +
+          `Reassign or delete those first, or disable the customer instead.`
+      );
+    }
     await prisma.$transaction(async (tx) => {
       await tx.customer.delete({ where: { id: params.id } });
       await writeEntityChangelog({
