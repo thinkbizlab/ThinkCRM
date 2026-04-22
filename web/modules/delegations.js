@@ -22,7 +22,8 @@ export function setDelegationsDeps(d) {
 
 export async function loadDelegations() {
   try {
-    state.cache.delegations = await api("/settings/delegations");
+    const res = await api("/settings/delegations");
+    state.cache.delegations = Array.isArray(res) ? res : (res?.data ?? []);
   } catch {
     state.cache.delegations = [];
   }
