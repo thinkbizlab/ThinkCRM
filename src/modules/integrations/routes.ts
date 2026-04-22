@@ -183,7 +183,7 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
     const { id } = request.params as { id: string };
     try {
       const result = await executeRestPull(tenantId, id, `user:${userId}`);
-      return reply.code(result.summary.status === "failed" ? 422 : 200).send({
+      return reply.code(200).send({
         jobId: result.jobId,
         ...result.summary,
         errors: result.errors
