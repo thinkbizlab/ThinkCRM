@@ -1384,6 +1384,7 @@ function openMasterDataImportModal(entity) {
 }
 
 function renderMasterData(paymentTerms) {
+  installMasterPageSizeDelegation();
   const termOptions = paymentTerms
     .map((term) => `<option value="${term.id}">${escHtml(term.code)} - ${escHtml(term.name)}</option>`)
     .join("");
@@ -1538,12 +1539,7 @@ function renderMasterData(paymentTerms) {
       state.paymentTermListPage = Math.min(totalPages, (state.paymentTermListPage || 1) + 1);
       renderPaymentTermsList();
     });
-    pagEl.querySelector('[data-page-size-key="paymentTerm"]')?.addEventListener("change", (e) => {
-      const v = e.target.value;
-      setMasterPageSize("paymentTerm", v === "all" ? "all" : Number(v));
-      state.paymentTermListPage = 1;
-      renderPaymentTermsList();
-    });
+    // Page-size selector handled by global delegation.
   };
   renderPaymentTermsList();
 
@@ -1582,12 +1578,7 @@ function renderMasterData(paymentTerms) {
       state.itemListPage = Math.min(totalPages, (state.itemListPage || 1) + 1);
       renderItemsList();
     });
-    pagEl.querySelector('[data-page-size-key="item"]')?.addEventListener("change", (e) => {
-      const v = e.target.value;
-      setMasterPageSize("item", v === "all" ? "all" : Number(v));
-      state.itemListPage = 1;
-      renderItemsList();
-    });
+    // Page-size selector handled by global delegation.
   };
   renderItemsList();
 
@@ -8417,6 +8408,31 @@ function masterPaginationHtml({ total, page, totalPages, key, pageSize, noun }) 
 function getCustPageSize() { return getMasterPageSize("customer"); }
 function setCustPageSize(v) { setMasterPageSize("customer", v); }
 
+// Delegated change handler for every <select data-page-size-key="…"> on the
+// page. Attach once (idempotent) so re-renders keep working.
+function installMasterPageSizeDelegation() {
+  if (document.body.dataset.pageSizeDelegated === "1") return;
+  document.body.dataset.pageSizeDelegated = "1";
+  document.body.addEventListener("change", (e) => {
+    const sel = e.target.closest?.('select[data-page-size-key]');
+    if (!sel) return;
+    const key = sel.dataset.pageSizeKey;
+    const v = sel.value;
+    setMasterPageSize(key, v === "all" ? "all" : Number(v));
+    if (key === "customer") {
+      state.customerListPage = 1;
+      const bodyEl = document.querySelector("#cust-body");
+      if (bodyEl) refreshCustBody(bodyEl, state.cache.paymentTerms || []);
+    } else if (key === "item") {
+      state.itemListPage = 1;
+      renderMasterData(state.cache.paymentTerms);
+    } else if (key === "paymentTerm") {
+      state.paymentTermListPage = 1;
+      renderMasterData(state.cache.paymentTerms);
+    }
+  });
+}
+
 function isCustomerApiLocked() {
   return !!(state.user?.masterApiLock?.manageCustomersByApi || state.cache.masterApiLock?.manageCustomersByApi);
 }
@@ -8822,12 +8838,7 @@ function attachCustBodyListeners(container, totalPages, termOptions) {
     state.customerListPage = Math.min(totalPages, state.customerListPage + 1);
     refreshCustBody(bodyEl, termOptions);
   });
-  container.querySelector('[data-page-size-key="customer"]')?.addEventListener("change", (e) => {
-    const v = e.target.value;
-    setMasterPageSize("customer", v === "all" ? "all" : Number(v));
-    state.customerListPage = 1;
-    refreshCustBody(bodyEl, termOptions);
-  });
+  // Page-size selector is wired via global delegation (installMasterPageSizeDelegation).
 }
 
 function updateCustBulkToolbar() {
