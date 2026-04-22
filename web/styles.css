@@ -3653,6 +3653,27 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   font-size: 0.9rem;
 }
 
+/* Bulk toolbar */
+.cust-bulk-toolbar {
+  position: sticky;
+  bottom: var(--sp-3);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--surface, #fff);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md, 8px);
+  box-shadow: 0 6px 20px rgba(0,0,0,0.08);
+  z-index: 10;
+  margin-top: var(--sp-3);
+}
+.cust-bulk-count { font-size: 0.85rem; font-weight: 500; }
+.cust-bulk-actions { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+.cust-check-col { width: 36px; text-align: center; }
+.cust-row-selected { background: var(--surface-soft, rgba(0,0,0,0.03)); }
+
 /* Pagination */
 .cust-pagination {
   display: flex;

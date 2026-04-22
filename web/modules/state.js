@@ -35,6 +35,7 @@ export const state = {
   customerListQuery: "",
   customerListPage: 1,
   customerScope: "mine",
+  customerSelectedIds: new Set(),
   customerCustomFieldFilters: {},
   itemCustomFieldFilters: {},
   masterFiltersOpen: false,

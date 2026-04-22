@@ -520,6 +520,96 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     return reply.code(204).send();
   });
 
+  const bulkIdsSchema = z.object({
+    ids: z.array(z.string().min(1)).min(1).max(500)
+  });
+  const bulkReassignOwnerSchema = bulkIdsSchema.extend({
+    ownerId: z.string().min(1)
+  });
+
+  app.post("/customers/bulk-reassign-owner", async (request) => {
+    requireRoleAtLeast(request, UserRole.SUPERVISOR);
+    const tenantId = requireTenantId(request);
+    const changedById = requireUserId(request);
+    const visibleUserIds = await listVisibleUserIds(request);
+    const visibleUserIdList = [...visibleUserIds];
+    const parsed = bulkReassignOwnerSchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
+    }
+    if (!visibleUserIds.has(parsed.data.ownerId)) {
+      throw app.httpErrors.forbidden("New owner must be within your hierarchy scope.");
+    }
+    const uniqueIds = Array.from(new Set(parsed.data.ids));
+    const existingRows = await prisma.customer.findMany({
+      where: { id: { in: uniqueIds }, tenantId, ownerId: { in: visibleUserIdList } }
+    });
+    const found = new Map(existingRows.map((c) => [c.id, c]));
+    const missing = uniqueIds.filter((id) => !found.has(id));
+    if (missing.length > 0) {
+      throw app.httpErrors.forbidden(
+        `${missing.length} customer(s) are outside your scope or not found.`
+      );
+    }
+    let updated = 0;
+    await prisma.$transaction(async (tx) => {
+      for (const before of existingRows) {
+        if (before.ownerId === parsed.data.ownerId) continue;
+        const after = await tx.customer.update({
+          where: { id: before.id },
+          data: { ownerId: parsed.data.ownerId }
+        });
+        await writeEntityChangelog({
+          db: tx,
+          tenantId,
+          entityType: EntityType.CUSTOMER,
+          entityId: before.id,
+          action: "UPDATE",
+          changedById,
+          before,
+          after
+        });
+        updated += 1;
+      }
+    });
+    return { requested: uniqueIds.length, updated, unchanged: uniqueIds.length - updated };
+  });
+
+  app.post("/customers/bulk-delete", async (request) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+    const changedById = requireUserId(request);
+    const visibleUserIdList = [...(await listVisibleUserIds(request))];
+    const parsed = bulkIdsSchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
+    }
+    const uniqueIds = Array.from(new Set(parsed.data.ids));
+    const existingRows = await prisma.customer.findMany({
+      where: { id: { in: uniqueIds }, tenantId, ownerId: { in: visibleUserIdList } }
+    });
+    if (existingRows.length !== uniqueIds.length) {
+      throw app.httpErrors.forbidden(
+        `${uniqueIds.length - existingRows.length} customer(s) are outside your scope or not found.`
+      );
+    }
+    await prisma.$transaction(async (tx) => {
+      for (const before of existingRows) {
+        await tx.customer.delete({ where: { id: before.id } });
+        await writeEntityChangelog({
+          db: tx,
+          tenantId,
+          entityType: EntityType.CUSTOMER,
+          entityId: before.id,
+          action: "DELETE",
+          changedById,
+          before
+        });
+      }
+    });
+    return { deleted: existingRows.length };
+  });
+
   app.post("/customers/:id/addresses", async (request, reply) => {
     const tenantId = requireTenantId(request);
     const changedById = requireUserId(request);

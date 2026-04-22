@@ -349,6 +349,7 @@ function applyLoginBranding(b) {
   if (b.faviconUrl) applyFavicon(b.faviconUrl);
 
   applyLoginCustomization(b);
+  cacheBrandingForBoot(b);
 }
 
 // Apply login-screen-specific customizations (tagline, welcome, footer, hero image, button visibility).
@@ -788,6 +789,22 @@ function applyBrandingTheme(branding) {
 
   applyThemeMode(b.themeMode || "LIGHT");
   if (b.faviconUrl) applyFavicon(b.faviconUrl);
+  cacheBrandingForBoot(b);
+}
+
+// Persist the minimum branding fields needed by boot.js to hydrate CSS vars
+// before first paint on the next page load, preventing the default-blue flash.
+function cacheBrandingForBoot(b) {
+  if (!b || typeof b !== "object") return;
+  try {
+    const cached = {
+      appName: b.appName || null,
+      primaryColor: b.primaryColor || null,
+      secondaryColor: b.secondaryColor || null
+    };
+    if (!cached.primaryColor && !cached.appName) return;
+    localStorage.setItem("thinkcrm_branding", JSON.stringify(cached));
+  } catch { /* storage disabled — ignore */ }
 }
 
 function applyFavicon(url) {
@@ -8427,7 +8444,10 @@ function openContactsPopup(contacts) {
   overlay.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
 }
 
-function buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin) {
+function buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk) {
+  const selected = state.customerSelectedIds || new Set();
+  const pageIds = slice.map((c) => c.id);
+  const allOnPageSelected = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
   const tableHtml = all.length === 0 && state.customerListQuery
     ? `<div class="cust-empty">No customers match "<strong>${escHtml(state.customerListQuery)}</strong>"</div>`
     : all.length === 0
@@ -8435,6 +8455,7 @@ function buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin) {
     : `<table class="cust-table">
         <thead>
           <tr>
+            ${canBulk ? `<th class="cust-check-col"><input type="checkbox" class="cust-check-all" ${allOnPageSelected ? "checked" : ""} title="Select all on this page" /></th>` : ""}
             <th>#</th>
             <th>Code</th>
             <th>Name</th>
@@ -8448,8 +8469,10 @@ function buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin) {
             const ownerName = c.owner?.fullName
               || state.cache.allUsers?.find(u => u.id === c.ownerId)?.fullName
               || (c.ownerId === state.user?.id ? state.user?.fullName : null);
+            const isChecked = selected.has(c.id);
             return `
-            <tr class="cust-row" data-id="${c.id}">
+            <tr class="cust-row${isChecked ? " cust-row-selected" : ""}" data-id="${c.id}">
+              ${canBulk ? `<td class="cust-check-col"><input type="checkbox" class="cust-check-row" data-id="${c.id}" ${isChecked ? "checked" : ""} /></td>` : ""}
               <td>${start + i + 1}</td>
               <td><button class="cust-code-btn" data-id="${c.id}" data-code="${escHtml(c.customerCode)}">${escHtml(c.customerCode)}</button></td>
               <td><button class="cust-name-btn" data-id="${c.id}" data-code="${escHtml(c.customerCode)}">${escHtml(c.name)}</button></td>
@@ -8527,6 +8550,42 @@ function attachCustBodyListeners(container, totalPages, termOptions) {
     btn.addEventListener("click", () => openCustomer360(btn.dataset.id, btn.dataset.code));
   });
 
+  // Row checkbox
+  container.querySelectorAll(".cust-check-row").forEach((cb) => {
+    cb.addEventListener("click", (e) => e.stopPropagation());
+    cb.addEventListener("change", () => {
+      const id = cb.dataset.id;
+      if (!id) return;
+      if (!state.customerSelectedIds) state.customerSelectedIds = new Set();
+      if (cb.checked) state.customerSelectedIds.add(id);
+      else state.customerSelectedIds.delete(id);
+      const row = cb.closest(".cust-row");
+      if (row) row.classList.toggle("cust-row-selected", cb.checked);
+      const allCb = container.querySelector(".cust-check-all");
+      if (allCb) {
+        const pageIds = Array.from(container.querySelectorAll(".cust-check-row")).map((x) => x.dataset.id);
+        allCb.checked = pageIds.length > 0 && pageIds.every((i) => state.customerSelectedIds.has(i));
+      }
+      updateCustBulkToolbar();
+    });
+  });
+
+  // Header "select all on page"
+  container.querySelector(".cust-check-all")?.addEventListener("change", (e) => {
+    if (!state.customerSelectedIds) state.customerSelectedIds = new Set();
+    const check = e.target.checked;
+    container.querySelectorAll(".cust-check-row").forEach((cb) => {
+      cb.checked = check;
+      const id = cb.dataset.id;
+      if (!id) return;
+      if (check) state.customerSelectedIds.add(id);
+      else state.customerSelectedIds.delete(id);
+      const row = cb.closest(".cust-row");
+      if (row) row.classList.toggle("cust-row-selected", check);
+    });
+    updateCustBulkToolbar();
+  });
+
   // Pagination
   const bodyEl = container.querySelector("#cust-body");
   container.querySelector("#cust-prev")?.addEventListener("click", () => {
@@ -8539,6 +8598,242 @@ function attachCustBodyListeners(container, totalPages, termOptions) {
   });
 }
 
+function updateCustBulkToolbar() {
+  const bar = document.getElementById("cust-bulk-toolbar");
+  if (!bar) return;
+  const selected = state.customerSelectedIds || new Set();
+  const count = selected.size;
+  if (count === 0) {
+    bar.style.display = "none";
+    bar.innerHTML = "";
+    return;
+  }
+  const role = state.user?.role ?? "REP";
+  const isAdmin = role === "ADMIN";
+  bar.style.display = "flex";
+  bar.innerHTML = `
+    <span class="cust-bulk-count"><strong>${count}</strong> selected</span>
+    <div class="cust-bulk-actions">
+      ${isAdmin ? `<button type="button" class="ghost small" id="cust-bulk-edit">Bulk Edit</button>` : ""}
+      <button type="button" class="ghost small" id="cust-bulk-reassign">Reassign Owner</button>
+      ${isAdmin ? `<button type="button" class="danger small" id="cust-bulk-delete">Delete</button>` : ""}
+      <button type="button" class="ghost small" id="cust-bulk-clear">Clear</button>
+    </div>
+  `;
+  bar.querySelector("#cust-bulk-clear")?.addEventListener("click", () => {
+    state.customerSelectedIds = new Set();
+    document.querySelectorAll(".cust-check-row, .cust-check-all").forEach((cb) => { cb.checked = false; });
+    document.querySelectorAll(".cust-row-selected").forEach((r) => r.classList.remove("cust-row-selected"));
+    updateCustBulkToolbar();
+  });
+  bar.querySelector("#cust-bulk-reassign")?.addEventListener("click", () => openBulkReassignOwnerModal());
+  bar.querySelector("#cust-bulk-edit")?.addEventListener("click", () => openBulkEditCustomersModal());
+  bar.querySelector("#cust-bulk-delete")?.addEventListener("click", () => confirmBulkDeleteCustomers());
+}
+
+function clearCustomerSelection() {
+  state.customerSelectedIds = new Set();
+}
+
+function openBulkReassignOwnerModal() {
+  const ids = Array.from(state.customerSelectedIds || []);
+  if (ids.length === 0) return;
+  qs("#bulk-reassign-modal")?.remove();
+  const overlay = document.createElement("div");
+  overlay.id = "bulk-reassign-modal";
+  overlay.className = "modal-overlay";
+
+  const users = state.cache.allUsers || [];
+  const ownerOpts = users
+    .slice()
+    .sort((a, b) => (a.fullName || "").localeCompare(b.fullName || ""))
+    .map((u) => `<option value="${u.id}">${escHtml(u.fullName || u.email || u.id)}</option>`)
+    .join("");
+
+  overlay.innerHTML = `
+    <div class="ncm-card" style="max-width:440px">
+      <div class="ncm-header">
+        <span class="ncm-title">Reassign Owner · ${ids.length} customer${ids.length !== 1 ? "s" : ""}</span>
+        <button type="button" class="ncm-close" id="bro-close">${icon('x', 14)}</button>
+      </div>
+      <form id="bulk-reassign-form" class="ncm-body" novalidate>
+        <div class="ncm-row">
+          <label class="ncm-label" for="bro-owner">New Owner</label>
+          <select class="ncm-input" id="bro-owner" name="ownerId" required>
+            <option value="">— Select owner —</option>
+            ${ownerOpts}
+          </select>
+          <small class="muted">Must be a user within your hierarchy.</small>
+        </div>
+        <div class="ncm-footer">
+          <button type="button" class="ncm-cancel-btn" id="bro-cancel">Cancel</button>
+          <button type="submit" class="ncm-submit-btn" id="bro-submit">Reassign</button>
+        </div>
+      </form>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelector("#bro-close").addEventListener("click", close);
+  overlay.querySelector("#bro-cancel").addEventListener("click", close);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+
+  overlay.querySelector("#bulk-reassign-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const ownerId = overlay.querySelector("#bro-owner").value;
+    if (!ownerId) { setStatus("Select a new owner.", true); return; }
+    const btn = overlay.querySelector("#bro-submit");
+    btn.disabled = true;
+    btn.textContent = "Reassigning…";
+    try {
+      const res = await api("/customers/bulk-reassign-owner", {
+        method: "POST",
+        body: { ids, ownerId }
+      });
+      setStatus(`Reassigned ${res?.updated ?? 0} customer${(res?.updated ?? 0) !== 1 ? "s" : ""}.`);
+      close();
+      clearCustomerSelection();
+      await loadMaster();
+    } catch (err) {
+      setStatus(err.message || "Bulk reassign failed.", true);
+      btn.disabled = false;
+      btn.textContent = "Reassign";
+    }
+  });
+}
+
+async function confirmBulkDeleteCustomers() {
+  const ids = Array.from(state.customerSelectedIds || []);
+  if (ids.length === 0) return;
+  const confirmed = await openConfirmPopup({
+    title: "Delete Customers",
+    message: `Delete <strong>${ids.length}</strong> selected customer${ids.length !== 1 ? "s" : ""}? This cannot be undone and will remove all associated addresses, contacts, and history.`,
+    confirmLabel: "Delete All",
+    danger: true
+  });
+  if (!confirmed) return;
+  try {
+    const res = await api("/customers/bulk-delete", { method: "POST", body: { ids } });
+    setStatus(`Deleted ${res?.deleted ?? 0} customer${(res?.deleted ?? 0) !== 1 ? "s" : ""}.`);
+    clearCustomerSelection();
+    await loadMaster();
+  } catch (err) {
+    setStatus(err.message || "Bulk delete failed.", true);
+  }
+}
+
+function openBulkEditCustomersModal() {
+  const ids = Array.from(state.customerSelectedIds || []);
+  if (ids.length === 0) return;
+  qs("#bulk-edit-modal")?.remove();
+  const overlay = document.createElement("div");
+  overlay.id = "bulk-edit-modal";
+  overlay.className = "modal-overlay";
+
+  const users = state.cache.allUsers || [];
+  const ownerOpts = users
+    .slice()
+    .sort((a, b) => (a.fullName || "").localeCompare(b.fullName || ""))
+    .map((u) => `<option value="${u.id}">${escHtml(u.fullName || u.email || u.id)}</option>`)
+    .join("");
+  const terms = (state.cache.paymentTerms || []).filter((t) => t.isActive !== false);
+  const termOpts = terms
+    .map((t) => `<option value="${t.id}">${escHtml(t.code)} — ${escHtml(t.name)}</option>`)
+    .join("");
+
+  overlay.innerHTML = `
+    <div class="ncm-card" style="max-width:480px">
+      <div class="ncm-header">
+        <span class="ncm-title">Bulk Edit · ${ids.length} customer${ids.length !== 1 ? "s" : ""}</span>
+        <button type="button" class="ncm-close" id="be-close">${icon('x', 14)}</button>
+      </div>
+      <form id="bulk-edit-form" class="ncm-body" novalidate>
+        <p class="muted small" style="margin:0 0 var(--sp-2)">Only fields you change will be applied. Empty fields are left as-is.</p>
+        <div class="ncm-row">
+          <label class="ncm-label" for="be-type">Type</label>
+          <select class="ncm-input" id="be-type" name="customerType">
+            <option value="">— No change —</option>
+            <option value="COMPANY">Company</option>
+            <option value="PERSONAL">Personal</option>
+          </select>
+        </div>
+        <div class="ncm-row">
+          <label class="ncm-label" for="be-term">Payment Term</label>
+          <select class="ncm-input" id="be-term" name="defaultTermId">
+            <option value="">— No change —</option>
+            ${termOpts}
+          </select>
+        </div>
+        <div class="ncm-row">
+          <label class="ncm-label" for="be-owner">Owner</label>
+          <select class="ncm-input" id="be-owner" name="ownerId">
+            <option value="">— No change —</option>
+            ${ownerOpts}
+          </select>
+        </div>
+        <div class="ncm-footer">
+          <button type="button" class="ncm-cancel-btn" id="be-cancel">Cancel</button>
+          <button type="submit" class="ncm-submit-btn" id="be-submit">Apply</button>
+        </div>
+      </form>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelector("#be-close").addEventListener("click", close);
+  overlay.querySelector("#be-cancel").addEventListener("click", close);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+
+  overlay.querySelector("#bulk-edit-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const customerType = overlay.querySelector("#be-type").value;
+    const defaultTermId = overlay.querySelector("#be-term").value;
+    const ownerId = overlay.querySelector("#be-owner").value;
+    const patch = {};
+    if (customerType) patch.customerType = customerType;
+    if (defaultTermId) patch.defaultTermId = defaultTermId;
+    if (Object.keys(patch).length === 0 && !ownerId) {
+      setStatus("Pick at least one field to change.", true);
+      return;
+    }
+    const btn = overlay.querySelector("#be-submit");
+    btn.disabled = true;
+    btn.textContent = "Applying…";
+    let ok = 0;
+    let failed = 0;
+    try {
+      if (ownerId) {
+        const res = await api("/customers/bulk-reassign-owner", {
+          method: "POST",
+          body: { ids, ownerId }
+        });
+        ok += res?.updated ?? 0;
+      }
+      if (Object.keys(patch).length > 0) {
+        for (const id of ids) {
+          try {
+            await api(`/customers/${id}`, { method: "PATCH", body: patch });
+            ok += 1;
+          } catch {
+            failed += 1;
+          }
+        }
+      }
+      setStatus(
+        failed > 0
+          ? `Bulk edit: ${ok} succeeded, ${failed} failed.`
+          : `Bulk edit applied to ${ok || ids.length} customer${(ok || ids.length) !== 1 ? "s" : ""}.`,
+        failed > 0
+      );
+      close();
+      clearCustomerSelection();
+      await loadMaster();
+    } catch (err) {
+      setStatus(err.message || "Bulk edit failed.", true);
+      btn.disabled = false;
+      btn.textContent = "Apply";
+    }
+  });
+}
+
 function refreshCustBody(bodyEl, termOptions) {
   const all = filteredCustomers();
   const totalPages = Math.max(1, Math.ceil(all.length / CUST_PAGE_SIZE));
@@ -8546,9 +8841,12 @@ function refreshCustBody(bodyEl, termOptions) {
   const page = state.customerListPage;
   const start = (page - 1) * CUST_PAGE_SIZE;
   const slice = all.slice(start, start + CUST_PAGE_SIZE);
-  const isAdmin = (state.user?.role ?? "REP") === "ADMIN";
-  bodyEl.innerHTML = buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin);
+  const role = state.user?.role ?? "REP";
+  const isAdmin = role === "ADMIN";
+  const canBulk = ["ADMIN", "DIRECTOR", "MANAGER", "SUPERVISOR"].includes(role);
+  bodyEl.innerHTML = buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk);
   attachCustBodyListeners(bodyEl.closest(".cust-list-wrap")?.parentElement ?? bodyEl, totalPages, termOptions);
+  updateCustBulkToolbar();
 }
 
 function renderCustomerListSection(container, termOptions) {
@@ -8562,6 +8860,7 @@ function renderCustomerListSection(container, termOptions) {
   const isAdmin = role === "ADMIN";
   const canSeeTeam = ["MANAGER", "SUPERVISOR"].includes(role);
   const canSeeAll  = ["ADMIN", "DIRECTOR"].includes(role);
+  const canBulk    = ["ADMIN", "DIRECTOR", "MANAGER", "SUPERVISOR"].includes(role);
 
   const customerDefs = getCustomFieldDefinitions("customers").filter((d) => d.isActive);
   const activeCfFilterCount = Object.values(state.customerCustomFieldFilters || {}).filter((v) => v !== "" && v != null).length;
@@ -8596,7 +8895,8 @@ function renderCustomerListSection(container, termOptions) {
           </div>
         </form>
       ` : ""}
-      <div id="cust-body">${buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin)}</div>
+      <div id="cust-body">${buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk)}</div>
+      ${canBulk ? `<div id="cust-bulk-toolbar" class="cust-bulk-toolbar" style="display:none"></div>` : ""}
     </div>
   `;
 
