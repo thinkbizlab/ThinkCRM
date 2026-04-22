@@ -8973,6 +8973,7 @@ function renderCustomerListSection(container, termOptions) {
         ${showCfFilters ? `
           <button class="ghost small" id="cust-filter-toggle">${state.masterFiltersOpen ? "Hide" : "Show"} filters${activeCfFilterCount ? ` (${activeCfFilterCount})` : ""}</button>
         ` : ""}
+        ${isAdmin ? `<button class="ghost small" id="cust-find-dupes-btn" title="Scan for duplicate customers in this tenant">Find duplicates</button>` : ""}
         <button class="cust-create-btn" id="cust-open-modal">
           <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           New Customer
@@ -9016,6 +9017,11 @@ function renderCustomerListSection(container, termOptions) {
     openNewCustomerModal(termOptions);
   });
 
+  // Find duplicates
+  container.querySelector("#cust-find-dupes-btn")?.addEventListener("click", () => {
+    openDuplicatesModal();
+  });
+
   // Custom field filter toggle + form
   container.querySelector("#cust-filter-toggle")?.addEventListener("click", () => {
     state.masterFiltersOpen = !state.masterFiltersOpen;
@@ -9035,6 +9041,200 @@ function renderCustomerListSection(container, termOptions) {
   });
 
   attachCustBodyListeners(container, totalPages, termOptions);
+}
+
+// ── Duplicate Detection + Merge Modals ────────────────────────────────────
+
+const DUPE_SIGNAL_LABEL = {
+  TAX_ID: "Same Tax ID",
+  PHONE: "Same phone",
+  EMAIL: "Same email",
+  NAME_EXACT: "Same name",
+  NAME_FUZZY: "Similar name",
+  AI: "AI suggested"
+};
+
+function renderDupeCard(cand) {
+  const a = cand.a, b = cand.b;
+  if (!a || !b) return "";
+  const pct = Math.round((cand.confidence ?? 0) * 100);
+  const signal = DUPE_SIGNAL_LABEL[cand.signal] || cand.signal;
+  const side = (c) => `
+    <div class="dupe-side">
+      <div class="dupe-side-head">${escHtml(c.customerCode)}</div>
+      <div class="dupe-side-name">${escHtml(c.name)}</div>
+      <div class="muted small">Tax ID: ${escHtml(c.taxId || "—")}</div>
+      <div class="muted small">Owner: ${escHtml(c.owner?.fullName || "—")}</div>
+    </div>`;
+  return `
+    <div class="dupe-card" data-cand-id="${cand.id}">
+      <div class="dupe-card-header">
+        <span class="dupe-signal-pill">${escHtml(signal)}</span>
+        <span class="dupe-conf">${pct}% confidence</span>
+      </div>
+      <div class="dupe-reason muted small">${escHtml(cand.reasonText || "")}</div>
+      <div class="dupe-pair">
+        ${side(a)}
+        <div class="dupe-vs">↔</div>
+        ${side(b)}
+      </div>
+      <div class="dupe-actions">
+        <button type="button" class="ghost small" data-act="dismiss">Dismiss</button>
+        <button type="button" class="dupe-merge-btn" data-act="merge-ab">Merge → keep ${escHtml(a.customerCode)}</button>
+        <button type="button" class="dupe-merge-btn" data-act="merge-ba">Merge → keep ${escHtml(b.customerCode)}</button>
+      </div>
+    </div>`;
+}
+
+async function openDuplicatesModal() {
+  qs("#dupe-modal")?.remove();
+  const overlay = document.createElement("div");
+  overlay.id = "dupe-modal";
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="ncm-card" style="max-width:720px;max-height:90vh;display:flex;flex-direction:column">
+      <div class="ncm-header">
+        <span class="ncm-title">Duplicate Customers</span>
+        <button type="button" class="ncm-close" id="dupe-close">${icon('x', 14)}</button>
+      </div>
+      <div class="ncm-body" style="overflow:auto">
+        <div class="inline-actions" style="margin-bottom:var(--sp-3)">
+          <button type="button" class="ncm-submit-btn" id="dupe-scan-btn">Scan for duplicates</button>
+          <span class="muted small" id="dupe-scan-status"></span>
+        </div>
+        <div id="dupe-list"><p class="muted">Loading existing candidates…</p></div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const closeModal = () => overlay.remove();
+  overlay.querySelector("#dupe-close").addEventListener("click", closeModal);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) closeModal(); });
+
+  const listEl = overlay.querySelector("#dupe-list");
+  const statusEl = overlay.querySelector("#dupe-scan-status");
+
+  const refreshList = async () => {
+    try {
+      const { candidates } = await api("/customers/duplicates");
+      if (!candidates.length) {
+        listEl.innerHTML = `<p class="muted">No open duplicate candidates. Click "Scan for duplicates" to search.</p>`;
+        return;
+      }
+      listEl.innerHTML = candidates.map(renderDupeCard).join("");
+      listEl.querySelectorAll(".dupe-card").forEach((card) => {
+        const candId = card.dataset.candId;
+        const cand = candidates.find((c) => c.id === candId);
+        if (!cand) return;
+        card.querySelector('[data-act="dismiss"]')?.addEventListener("click", async () => {
+          if (!confirm("Dismiss this duplicate suggestion?")) return;
+          try {
+            await api(`/customers/duplicates/${candId}/dismiss`, { method: "POST" });
+            await refreshList();
+          } catch (err) {
+            setStatus(err.message || "Failed to dismiss.", true);
+          }
+        });
+        card.querySelector('[data-act="merge-ab"]')?.addEventListener("click", () => {
+          openMergeModal({ keeper: cand.a, loser: cand.b, onMerged: refreshList });
+        });
+        card.querySelector('[data-act="merge-ba"]')?.addEventListener("click", () => {
+          openMergeModal({ keeper: cand.b, loser: cand.a, onMerged: refreshList });
+        });
+      });
+    } catch (err) {
+      listEl.innerHTML = `<p class="muted" style="color:var(--danger)">${escHtml(err.message || "Failed to load.")}</p>`;
+    }
+  };
+
+  overlay.querySelector("#dupe-scan-btn")?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    statusEl.textContent = "Scanning…";
+    try {
+      const res = await api("/customers/duplicates/scan", { method: "POST" });
+      statusEl.textContent = `Scanned ${res.scannedCustomers} customers · ${res.deterministicPairs} exact match(es) · ${res.aiFlagged}/${res.aiEvaluated} AI flagged · ${res.openCandidates} open candidate(s).`;
+      await refreshList();
+    } catch (err) {
+      statusEl.textContent = err.message || "Scan failed.";
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  await refreshList();
+}
+
+async function openMergeModal({ keeper, loser, onMerged }) {
+  qs("#merge-modal")?.remove();
+  const overlay = document.createElement("div");
+  overlay.id = "merge-modal";
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="ncm-card" style="max-width:560px">
+      <div class="ncm-header">
+        <span class="ncm-title">Merge Customers</span>
+        <button type="button" class="ncm-close" id="mrg-close">${icon('x', 14)}</button>
+      </div>
+      <div class="ncm-body">
+        <p>You are about to merge <strong>${escHtml(loser.customerCode)} — ${escHtml(loser.name)}</strong> into <strong>${escHtml(keeper.customerCode)} — ${escHtml(keeper.name)}</strong>.</p>
+        <p class="muted small">All addresses, contacts, deals, visits, quotations, and AI recommendations from the loser will be moved to the keeper. The loser record will be deleted. This cannot be undone.</p>
+        <div id="mrg-preview" class="muted small" style="margin-top:var(--sp-2)">Loading preview…</div>
+        <div class="ncm-footer" style="margin-top:var(--sp-4)">
+          <button type="button" class="ncm-cancel-btn" id="mrg-cancel">Cancel</button>
+          <button type="button" class="ncm-submit-btn" id="mrg-confirm" disabled>Confirm Merge</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelector("#mrg-close").addEventListener("click", close);
+  overlay.querySelector("#mrg-cancel").addEventListener("click", close);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+
+  const previewEl = overlay.querySelector("#mrg-preview");
+  const confirmBtn = overlay.querySelector("#mrg-confirm");
+
+  try {
+    const { preview } = await api(`/customers/${keeper.id}/merge?dryRun=true`, {
+      method: "POST",
+      body: JSON.stringify({ loserIds: [loser.id] })
+    });
+    const c = preview.counts;
+    const conflicts = [];
+    if (preview.conflicts.taxIdConflict) conflicts.push("Tax ID differs between records");
+    if (preview.conflicts.externalRefConflict) conflicts.push("External ref differs between records");
+    previewEl.innerHTML = `
+      <strong>Will be moved to keeper:</strong><br>
+      • ${c.addresses} address(es) · ${c.contacts} contact(s)<br>
+      • ${c.deals} deal(s) · ${c.visits} visit(s) · ${c.quotations} quotation(s)<br>
+      • ${c.aiRecommendations} AI recommendation(s)
+      ${conflicts.length ? `<div style="color:var(--danger);margin-top:var(--sp-2)"><strong>Warning:</strong> ${conflicts.join("; ")}. Keeper values will be kept.</div>` : ""}
+    `;
+    confirmBtn.disabled = false;
+  } catch (err) {
+    previewEl.innerHTML = `<span style="color:var(--danger)">${escHtml(err.message || "Preview failed.")}</span>`;
+  }
+
+  confirmBtn.addEventListener("click", async () => {
+    if (!confirm(`Merge ${loser.customerCode} into ${keeper.customerCode}? This cannot be undone.`)) return;
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = "Merging…";
+    try {
+      await api(`/customers/${keeper.id}/merge`, {
+        method: "POST",
+        body: JSON.stringify({ loserIds: [loser.id] })
+      });
+      setStatus(`Merged ${loser.customerCode} into ${keeper.customerCode}.`);
+      close();
+      await loadMaster();
+      renderSettings?.();
+      if (typeof onMerged === "function") await onMerged();
+    } catch (err) {
+      setStatus(err.message || "Merge failed.", true);
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = "Confirm Merge";
+    }
+  });
 }
 
 // ── New Customer Modal ─────────────────────────────────────────────────────

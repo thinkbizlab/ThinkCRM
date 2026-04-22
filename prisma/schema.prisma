@@ -46,6 +46,7 @@ model Tenant {
   customFieldDefinitions CustomFieldDefinition[]
   quotationFormConfig    QuotationFormConfig?
   entityChangelogs       EntityChangelog[]
+  customerDuplicateCandidates CustomerDuplicateCandidate[]
   userDelegations        UserDelegation[]
   roleChainEntries       TenantRoleChain[]
   customDomain           TenantCustomDomain?
@@ -365,6 +366,40 @@ model Customer {
   @@unique([tenantId, customerCode])
   @@unique([tenantId, taxId])
   @@unique([tenantId, externalRef])
+}
+
+enum CustomerDuplicateSignal {
+  TAX_ID
+  PHONE
+  EMAIL
+  NAME_EXACT
+  NAME_FUZZY
+  AI
+}
+
+enum CustomerDuplicateStatus {
+  OPEN
+  DISMISSED
+  MERGED
+}
+
+model CustomerDuplicateCandidate {
+  id            String                   @id @default(cuid())
+  tenantId      String
+  customerAId   String
+  customerBId   String
+  signal        CustomerDuplicateSignal
+  confidence    Float                    @default(1.0)
+  reasonText    String?
+  status        CustomerDuplicateStatus  @default(OPEN)
+  decidedById   String?
+  decidedAt     DateTime?
+  createdAt     DateTime                 @default(now())
+  updatedAt     DateTime                 @updatedAt
+  tenant        Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, customerAId, customerBId, signal])
+  @@index([tenantId, status, createdAt])
 }
 
 model CustomerAddress {

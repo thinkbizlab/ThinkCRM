@@ -1,11 +1,12 @@
 import type { FastifyPluginAsync } from "fastify";
-import { CustomerType, CustomFieldDataType, EntityType, Prisma, UserRole } from "@prisma/client";
+import { CustomerDuplicateStatus, CustomerType, CustomFieldDataType, EntityType, Prisma, UserRole } from "@prisma/client";
 import { z } from "zod";
 import { listVisibleUserIds, requireRoleAtLeast, requireTenantId, requireUserId, zodMsg } from "../../lib/http.js";
 import { writeEntityChangelog } from "../../lib/changelog.js";
 import { prisma } from "../../lib/prisma.js";
 import { validateCustomFields, asRecord, extractCustomFieldsFromRow } from "../../lib/custom-fields.js";
 import { logAuditEvent } from "../../lib/audit.js";
+import { buildMergePreview, mergeCustomers, scanDuplicatesForTenant } from "./dedup.js";
 
 const customFieldValuesSchema = z.record(z.string(), z.unknown());
 
@@ -608,6 +609,106 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       }
     });
     return { deleted: existingRows.length };
+  });
+
+  // ── Duplicate detection & merge ───────────────────────────────────────────
+
+  app.post("/customers/duplicates/scan", async (request) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+    const result = await scanDuplicatesForTenant(tenantId);
+    await logAuditEvent(tenantId, requireUserId(request), "CUSTOMER_DEDUP_SCAN", result, request.ip);
+    return result;
+  });
+
+  app.get("/customers/duplicates", async (request) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+    const rows = await prisma.customerDuplicateCandidate.findMany({
+      where: { tenantId, status: CustomerDuplicateStatus.OPEN },
+      orderBy: [{ confidence: "desc" }, { createdAt: "desc" }],
+      take: 500
+    });
+    const ids = Array.from(new Set(rows.flatMap((r) => [r.customerAId, r.customerBId])));
+    const customers = await prisma.customer.findMany({
+      where: { tenantId, id: { in: ids } },
+      select: {
+        id: true,
+        customerCode: true,
+        name: true,
+        taxId: true,
+        ownerId: true,
+        owner: { select: { id: true, fullName: true } },
+        contacts: { select: { tel: true, email: true } }
+      }
+    });
+    const byId = new Map(customers.map((c) => [c.id, c]));
+    return {
+      candidates: rows.map((r) => ({
+        id: r.id,
+        signal: r.signal,
+        confidence: r.confidence,
+        reasonText: r.reasonText,
+        createdAt: r.createdAt,
+        a: byId.get(r.customerAId) ?? null,
+        b: byId.get(r.customerBId) ?? null
+      }))
+    };
+  });
+
+  app.post("/customers/duplicates/:id/dismiss", async (request, reply) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+    const changedById = requireUserId(request);
+    const params = request.params as { id: string };
+    const candidate = await prisma.customerDuplicateCandidate.findFirst({
+      where: { id: params.id, tenantId }
+    });
+    if (!candidate) throw app.httpErrors.notFound("Duplicate candidate not found.");
+    await prisma.customerDuplicateCandidate.update({
+      where: { id: candidate.id },
+      data: {
+        status: CustomerDuplicateStatus.DISMISSED,
+        decidedById: changedById,
+        decidedAt: new Date()
+      }
+    });
+    return reply.code(204).send();
+  });
+
+  const mergeBodySchema = z.object({
+    loserIds: z.array(z.string().min(1)).min(1).max(20)
+  });
+
+  app.post("/customers/:keeperId/merge", async (request) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+    const changedById = requireUserId(request);
+    const params = request.params as { keeperId: string };
+    const query = request.query as { dryRun?: string };
+    const parsed = mergeBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
+    }
+    const loserIds = Array.from(new Set(parsed.data.loserIds)).filter((id) => id !== params.keeperId);
+    if (loserIds.length === 0) {
+      throw app.httpErrors.badRequest("At least one loser customer is required.");
+    }
+    if (query.dryRun === "true" || query.dryRun === "1") {
+      return { dryRun: true, preview: await buildMergePreview(tenantId, params.keeperId, loserIds) };
+    }
+    const preview = await mergeCustomers({
+      tenantId,
+      keeperId: params.keeperId,
+      loserIds,
+      changedById
+    });
+    await logAuditEvent(tenantId, changedById, "CUSTOMER_MERGE", {
+      keeperId: params.keeperId,
+      loserIds,
+      counts: preview.counts
+    }, request.ip);
+    return { dryRun: false, preview };
   });
 
   app.post("/customers/:id/addresses", async (request, reply) => {
