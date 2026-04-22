@@ -245,11 +245,14 @@ async function loginWithPasskey() {
     if (window._checkSuperAdmin) window._checkSuperAdmin();
     updateUserMeta();
     const onMasterRoute = syncMasterPageFromLocation();
-    const onSimpleViewRoute = !onMasterRoute && syncSimpleViewFromLocation();
+    const onSettingsRoute = !onMasterRoute && syncSettingsPageFromLocation();
+    const onSimpleViewRoute = !onMasterRoute && !onSettingsRoute && syncSimpleViewFromLocation();
     await loadAllViews();
     applyBrandingTheme(state.cache.branding);
     if (onMasterRoute) {
       switchView("master");
+    } else if (onSettingsRoute) {
+      switchView("settings");
     } else if (onSimpleViewRoute) {
       switchView(onSimpleViewRoute);
       if (onSimpleViewRoute === "repHub") paintRepHubFull();
@@ -8776,11 +8779,14 @@ loginForm.addEventListener("submit", async (event) => {
     if (window._checkSuperAdmin) window._checkSuperAdmin();
     updateUserMeta();
     const onMasterRoute = syncMasterPageFromLocation();
-    const onSimpleViewRoute = !onMasterRoute && syncSimpleViewFromLocation();
+    const onSettingsRoute = !onMasterRoute && syncSettingsPageFromLocation();
+    const onSimpleViewRoute = !onMasterRoute && !onSettingsRoute && syncSimpleViewFromLocation();
     await loadAllViews();
     applyBrandingTheme(state.cache.branding);
     if (onMasterRoute) {
       switchView("master");
+    } else if (onSettingsRoute) {
+      switchView("settings");
     } else if (onSimpleViewRoute) {
       switchView(onSimpleViewRoute);
       if (onSimpleViewRoute === "repHub") paintRepHubFull();
