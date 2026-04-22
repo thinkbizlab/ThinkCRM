@@ -8491,7 +8491,7 @@ function openContactsPopup(contacts) {
   overlay.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
 }
 
-function buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk) {
+function buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk, canReassign) {
   const selected = state.customerSelectedIds || new Set();
   const pageIds = slice.map((c) => c.id);
   const allOnPageSelected = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
@@ -8529,6 +8529,7 @@ function buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk
                 : '<span class="muted small">—</span>'}</td>
               <td><div class="cust-actions-cell">
                 <button class="cust-action-btn cust-360-btn" data-id="${c.id}" data-code="${escHtml(c.customerCode)}">360°</button>
+                ${canReassign ? `<button class="cust-action-btn cust-reassign-btn" data-id="${c.id}" data-name="${escHtml(c.name)}" title="Reassign owner">Reassign</button>` : ""}
                 <button class="cust-action-btn cust-edit-btn" data-id="${c.id}" data-customer='${escHtml(JSON.stringify({ id: c.id, customerCode: c.customerCode, name: c.name, customerType: c.customerType, taxId: c.taxId || "", defaultTermId: c.paymentTerm?.id || "", externalRef: c.externalRef || "" }))}'>Edit</button>
                 ${isAdmin ? `<button class="cust-action-btn cust-delete-btn danger" data-id="${c.id}" data-name="${escHtml(c.name)}">Delete</button>` : ""}
               </div></td>
@@ -8595,6 +8596,16 @@ function attachCustBodyListeners(container, totalPages, termOptions) {
   // Open 360
   container.querySelectorAll(".cust-code-btn, .cust-name-btn, .cust-360-btn").forEach((btn) => {
     btn.addEventListener("click", () => openCustomer360(btn.dataset.id, btn.dataset.code));
+  });
+
+  // Per-row Reassign Owner (>= SUPERVISOR)
+  container.querySelectorAll(".cust-reassign-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      openBulkReassignOwnerModal({
+        ids: [btn.dataset.id],
+        titleSuffix: btn.dataset.name || "Customer"
+      });
+    });
   });
 
   // Row checkbox
@@ -8727,16 +8738,25 @@ function updatePaymentTermBulkToolbar() {
   });
 }
 
-function openBulkReassignOwnerModal() {
-  const ids = Array.from(state.customerSelectedIds || []);
+function openBulkReassignOwnerModal(opts = {}) {
+  const ids = Array.isArray(opts.ids) && opts.ids.length
+    ? opts.ids
+    : Array.from(state.customerSelectedIds || []);
   if (ids.length === 0) return;
+  const titleSuffix = opts.titleSuffix
+    || `${ids.length} customer${ids.length !== 1 ? "s" : ""}`;
+  const isSingle = ids.length === 1;
   qs("#bulk-reassign-modal")?.remove();
   const overlay = document.createElement("div");
   overlay.id = "bulk-reassign-modal";
   overlay.className = "ncm-overlay";
 
-  const users = state.cache.allUsers || [];
-  const ownerOpts = users
+  // Prefer the hierarchy-scoped /users/visible-reps list when available,
+  // so REPs / out-of-chain users never appear as valid targets.
+  const scopedUsers = (state.cache.salesReps && state.cache.salesReps.length)
+    ? state.cache.salesReps
+    : (state.cache.allUsers || []);
+  const ownerOpts = scopedUsers
     .slice()
     .sort((a, b) => (a.fullName || "").localeCompare(b.fullName || ""))
     .map((u) => `<option value="${u.id}">${escHtml(u.fullName || u.email || u.id)}</option>`)
@@ -8745,7 +8765,7 @@ function openBulkReassignOwnerModal() {
   overlay.innerHTML = `
     <div class="ncm-panel" style="max-width:440px">
       <div class="ncm-header">
-        <span class="ncm-title">Reassign Owner · ${ids.length} customer${ids.length !== 1 ? "s" : ""}</span>
+        <span class="ncm-title">Reassign Owner · ${escHtml(titleSuffix)}</span>
         <button type="button" class="ncm-close" id="bro-close">${icon('x', 14)}</button>
       </div>
       <form id="bulk-reassign-form" class="ncm-body" novalidate>
@@ -8782,10 +8802,14 @@ function openBulkReassignOwnerModal() {
         method: "POST",
         body: { ids, ownerId }
       });
-      setStatus(`Reassigned ${res?.updated ?? 0} customer${(res?.updated ?? 0) !== 1 ? "s" : ""}.`);
+      const updated = res?.updated ?? 0;
+      setStatus(isSingle
+        ? (updated ? "Owner reassigned." : "Owner unchanged.")
+        : `Reassigned ${updated} customer${updated !== 1 ? "s" : ""}.`);
       close();
-      clearCustomerSelection();
+      if (!opts.ids) clearCustomerSelection();
       await loadMaster();
+      if (typeof opts.onDone === "function") opts.onDone();
     } catch (err) {
       setStatus(err.message || "Bulk reassign failed.", true);
       btn.disabled = false;
@@ -8938,7 +8962,8 @@ function refreshCustBody(bodyEl, termOptions) {
   const role = state.user?.role ?? "REP";
   const isAdmin = role === "ADMIN";
   const canBulk = ["ADMIN", "DIRECTOR", "MANAGER", "SUPERVISOR"].includes(role);
-  bodyEl.innerHTML = buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk);
+  const canReassign = canBulk;
+  bodyEl.innerHTML = buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk, canReassign);
   attachCustBodyListeners(bodyEl.closest(".cust-list-wrap")?.parentElement ?? bodyEl, totalPages, termOptions);
   updateCustBulkToolbar();
 }
@@ -8955,6 +8980,7 @@ function renderCustomerListSection(container, termOptions) {
   const canSeeTeam = ["MANAGER", "SUPERVISOR"].includes(role);
   const canSeeAll  = ["ADMIN", "DIRECTOR"].includes(role);
   const canBulk    = ["ADMIN", "DIRECTOR", "MANAGER", "SUPERVISOR"].includes(role);
+  const canReassign = canBulk;
 
   const customerDefs = getCustomFieldDefinitions("customers").filter((d) => d.isActive);
   const activeCfFilterCount = Object.values(state.customerCustomFieldFilters || {}).filter((v) => v !== "" && v != null).length;
@@ -8990,7 +9016,7 @@ function renderCustomerListSection(container, termOptions) {
           </div>
         </form>
       ` : ""}
-      <div id="cust-body">${buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk)}</div>
+      <div id="cust-body">${buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk, canReassign)}</div>
       ${canBulk ? `<div id="cust-bulk-toolbar" class="cust-bulk-toolbar" style="display:none"></div>` : ""}
     </div>
   `;
