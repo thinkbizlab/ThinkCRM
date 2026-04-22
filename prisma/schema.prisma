@@ -89,6 +89,7 @@ model User {
   integrationLogs     IntegrationExecutionLog[]
   ownedDeals          Deal[]                @relation("DealOwner")
   ownedVisits         Visit[]               @relation("VisitRep")
+  ownedCustomers      Customer[]            @relation("CustomerOwner")
   createdCustomers    Customer[]            @relation("CustomerCreatedBy")
   createdDeals        Deal[]                @relation("DealCreatedBy")
   createdVisits       Visit[]               @relation("VisitCreatedBy")
@@ -356,6 +357,7 @@ model Customer {
   updatedAt         DateTime           @updatedAt
   tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   paymentTerm       PaymentTerm        @relation(fields: [defaultTermId], references: [id], onDelete: Restrict)
+  owner             User?              @relation("CustomerOwner", fields: [ownerId], references: [id], onDelete: SetNull)
   createdBy         User?              @relation("CustomerCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   addresses         CustomerAddress[]
   contacts          CustomerContact[]
