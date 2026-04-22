@@ -1429,12 +1429,22 @@ function renderMasterData(paymentTerms) {
         ${paymentTermFieldDefinitions.filter((d) => d.isActive).length} active custom field(s) · <a href="/settings/custom-fields" data-settings-link="custom-fields">Manage custom fields</a>
       </p>
       ` : ""}
+      ${isAdmin && paymentTerms.length > 0 ? `
+      <div class="pt-select-all-bar" style="display:flex;align-items:center;gap:var(--sp-2);margin:var(--sp-3) 0 var(--sp-2)">
+        <label style="display:inline-flex;align-items:center;gap:var(--sp-1);font-size:0.85rem">
+          <input type="checkbox" id="pt-check-all" />
+          <span class="muted">Select all</span>
+        </label>
+      </div>` : ""}
       <div class="list">
         ${paymentTerms
           .map(
-            (p) => `
-          <div class="row">
-            <h4>${escHtml(p.name)} (${escHtml(p.code)})</h4>
+            (p) => {
+              const selected = (state.paymentTermSelectedIds || new Set()).has(p.id);
+              return `
+          <div class="row${selected ? " pt-row-selected" : ""}" data-pt-id="${p.id}">
+            ${isAdmin ? `<label class="pt-check-wrap" style="display:inline-flex;align-items:center;margin-right:var(--sp-2);vertical-align:middle"><input type="checkbox" class="pt-check-row" data-id="${p.id}" ${selected ? "checked" : ""} /></label>` : ""}
+            <h4 style="display:inline">${escHtml(p.name)} (${escHtml(p.code)})</h4>
             <div class="muted">Due ${p.dueDays} days</div>
             <div class="chip ${p.isActive ? "chip-success" : "chip-danger"}">${p.isActive ? "Active" : "Inactive"}</div>
             ${isAdmin ? renderCustomFieldsSummary(p.customFields) : ""}
@@ -1444,10 +1454,12 @@ function renderMasterData(paymentTerms) {
               </button>
               <button class="payment-term-delete ghost" data-id="${p.id}">Delete</button>
             </div>
-          </div>`
+          </div>`;
+            }
           )
           .join("")}
       </div>
+      ${isAdmin ? `<div id="pt-bulk-toolbar" class="cust-bulk-toolbar" style="display:none"></div>` : ""}
     </section>
     <section class="card" ${state.masterPage !== "customers" ? 'style="display:none"' : ""} id="customers-section">
       <div style="display:flex;align-items:center;margin-bottom:var(--sp-4)">
@@ -1657,6 +1669,41 @@ function renderMasterData(paymentTerms) {
       }
     });
   });
+
+  // Payment term multiselect (ADMIN only)
+  if (state.user?.role === "ADMIN") {
+    if (!state.paymentTermSelectedIds) state.paymentTermSelectedIds = new Set();
+    views.master.querySelectorAll(".pt-check-row").forEach((cb) => {
+      cb.addEventListener("change", () => {
+        const id = cb.dataset.id;
+        if (!id) return;
+        if (cb.checked) state.paymentTermSelectedIds.add(id);
+        else state.paymentTermSelectedIds.delete(id);
+        const row = cb.closest(".row");
+        if (row) row.classList.toggle("pt-row-selected", cb.checked);
+        const allCb = views.master.querySelector("#pt-check-all");
+        if (allCb) {
+          const pageIds = Array.from(views.master.querySelectorAll(".pt-check-row")).map((x) => x.dataset.id);
+          allCb.checked = pageIds.length > 0 && pageIds.every((i) => state.paymentTermSelectedIds.has(i));
+        }
+        updatePaymentTermBulkToolbar();
+      });
+    });
+    views.master.querySelector("#pt-check-all")?.addEventListener("change", (e) => {
+      const check = e.target.checked;
+      views.master.querySelectorAll(".pt-check-row").forEach((cb) => {
+        cb.checked = check;
+        const id = cb.dataset.id;
+        if (!id) return;
+        if (check) state.paymentTermSelectedIds.add(id);
+        else state.paymentTermSelectedIds.delete(id);
+        const row = cb.closest(".row");
+        if (row) row.classList.toggle("pt-row-selected", check);
+      });
+      updatePaymentTermBulkToolbar();
+    });
+    updatePaymentTermBulkToolbar();
+  }
 
   qs("#item-form").addEventListener("submit", async (event) => {
     if (state.masterPage !== "items") return;
@@ -8633,6 +8680,51 @@ function updateCustBulkToolbar() {
 
 function clearCustomerSelection() {
   state.customerSelectedIds = new Set();
+}
+
+function updatePaymentTermBulkToolbar() {
+  const bar = document.getElementById("pt-bulk-toolbar");
+  if (!bar) return;
+  const selected = state.paymentTermSelectedIds || new Set();
+  const count = selected.size;
+  if (count === 0) {
+    bar.style.display = "none";
+    bar.innerHTML = "";
+    return;
+  }
+  bar.style.display = "flex";
+  bar.innerHTML = `
+    <span class="cust-bulk-count"><strong>${count}</strong> selected</span>
+    <div class="cust-bulk-actions">
+      <button type="button" class="danger small" id="pt-bulk-delete">Delete</button>
+      <button type="button" class="ghost small" id="pt-bulk-clear">Clear</button>
+    </div>
+  `;
+  bar.querySelector("#pt-bulk-clear")?.addEventListener("click", () => {
+    state.paymentTermSelectedIds = new Set();
+    document.querySelectorAll(".pt-check-row, #pt-check-all").forEach((cb) => { cb.checked = false; });
+    document.querySelectorAll(".pt-row-selected").forEach((r) => r.classList.remove("pt-row-selected"));
+    updatePaymentTermBulkToolbar();
+  });
+  bar.querySelector("#pt-bulk-delete")?.addEventListener("click", async () => {
+    const ids = Array.from(state.paymentTermSelectedIds || []);
+    if (ids.length === 0) return;
+    const confirmed = await openConfirmPopup({
+      title: "Delete Payment Terms",
+      message: `Delete <strong>${ids.length}</strong> selected payment term${ids.length !== 1 ? "s" : ""}? Terms in use by customers or quotations will block the operation.`,
+      confirmLabel: "Delete All",
+      danger: true
+    });
+    if (!confirmed) return;
+    try {
+      const res = await api("/payment-terms/bulk-delete", { method: "POST", body: { ids } });
+      setStatus(`Deleted ${res?.deleted ?? 0} payment term${(res?.deleted ?? 0) !== 1 ? "s" : ""}.`);
+      state.paymentTermSelectedIds = new Set();
+      await loadMaster();
+    } catch (err) {
+      setStatus(err.message || "Bulk delete failed.", true);
+    }
+  });
 }
 
 function openBulkReassignOwnerModal() {

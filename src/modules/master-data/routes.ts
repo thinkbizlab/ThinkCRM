@@ -855,6 +855,52 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     return reply.code(204).send();
   });
 
+  app.post("/payment-terms/bulk-delete", async (request) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+    const parsed = bulkIdsSchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
+    }
+    const uniqueIds = Array.from(new Set(parsed.data.ids));
+    const existingRows = await prisma.paymentTerm.findMany({
+      where: { id: { in: uniqueIds }, tenantId },
+      select: { id: true, code: true, name: true }
+    });
+    if (existingRows.length !== uniqueIds.length) {
+      throw app.httpErrors.notFound(
+        `${uniqueIds.length - existingRows.length} payment term(s) not found in this tenant.`
+      );
+    }
+    const [customerUsage, quotationUsage] = await Promise.all([
+      prisma.customer.groupBy({
+        by: ["defaultTermId"],
+        where: { tenantId, defaultTermId: { in: uniqueIds } },
+        _count: { _all: true }
+      }),
+      prisma.quotation.groupBy({
+        by: ["paymentTermId"],
+        where: { tenantId, paymentTermId: { in: uniqueIds } },
+        _count: { _all: true }
+      })
+    ]);
+    const inUse = new Set<string>([
+      ...customerUsage.map((r) => r.defaultTermId),
+      ...quotationUsage.map((r) => r.paymentTermId).filter((v): v is string => v != null)
+    ]);
+    if (inUse.size > 0) {
+      const blocked = existingRows.filter((r) => inUse.has(r.id));
+      const labels = blocked.map((r) => `${r.code} (${r.name})`).join(", ");
+      throw app.httpErrors.conflict(
+        `${blocked.length} payment term(s) in use by customers or quotations: ${labels}.`
+      );
+    }
+    const deleted = await prisma.paymentTerm.deleteMany({
+      where: { id: { in: uniqueIds }, tenantId }
+    });
+    return { deleted: deleted.count };
+  });
+
   // ── DBD Datawarehouse proxy ──────────────────────────────────────────────
   // Proxies requests to Thailand's DBD company registry to avoid CORS.
   // Set DBD_API_KEY env var if the target API requires one.

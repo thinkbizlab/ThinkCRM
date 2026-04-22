@@ -36,6 +36,7 @@ export const state = {
   customerListPage: 1,
   customerScope: "mine",
   customerSelectedIds: new Set(),
+  paymentTermSelectedIds: new Set(),
   customerCustomFieldFilters: {},
   itemCustomFieldFilters: {},
   masterFiltersOpen: false,
