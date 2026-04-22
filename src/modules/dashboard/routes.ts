@@ -1,7 +1,7 @@
 import { DealStatus, UserRole, VisitStatus } from "@prisma/client";
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { requireTenantId, resolveVisibleUserIds } from "../../lib/http.js";
+import { listVisibleUserIds, requireTenantId, resolveVisibleUserIds } from "../../lib/http.js";
 import { prisma } from "../../lib/prisma.js";
 
 const monthQuerySchema = z.object({
@@ -282,6 +282,57 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
       gamification,
       teamPerformance
     };
+  });
+
+  // Deals rolled up by customer group. Returns one row per group plus an
+  // "Ungrouped" bucket for customers with no customerGroupId. Counts all
+  // deals visible to the caller's hierarchy.
+  app.get("/dashboard/by-customer-group", async (request) => {
+    const tenantId = requireTenantId(request);
+    const visibleUserIds = [...(await listVisibleUserIds(request))];
+    const [groups, rows] = await Promise.all([
+      prisma.customerGroup.findMany({
+        where: { tenantId },
+        select: { id: true, code: true, name: true },
+        orderBy: { name: "asc" }
+      }),
+      prisma.deal.findMany({
+        where: { tenantId, ownerId: { in: visibleUserIds } },
+        select: {
+          estimatedValue: true,
+          status: true,
+          customer: { select: { customerGroupId: true } }
+        }
+      })
+    ]);
+    const byGroup = new Map<string, { count: number; estimatedValue: number; won: number }>();
+    const addTo = (key: string, estimated: number, status: DealStatus) => {
+      const cur = byGroup.get(key) ?? { count: 0, estimatedValue: 0, won: 0 };
+      cur.count += 1;
+      cur.estimatedValue += estimated;
+      if (status === DealStatus.WON) cur.won += estimated;
+      byGroup.set(key, cur);
+    };
+    for (const r of rows) {
+      const key = r.customer.customerGroupId ?? "__none__";
+      addTo(key, Number(r.estimatedValue ?? 0), r.status);
+    }
+    const result = groups.map((g) => ({
+      id: g.id,
+      code: g.code,
+      name: g.name,
+      ...(byGroup.get(g.id) ?? { count: 0, estimatedValue: 0, won: 0 })
+    }));
+    const none = byGroup.get("__none__");
+    if (none) {
+      result.push({
+        id: null as unknown as string,
+        code: "",
+        name: "Ungrouped",
+        ...none
+      });
+    }
+    return result;
   });
 
   app.get("/rep-todo", async (request) => {

@@ -1067,7 +1067,8 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         select: {
           manageCustomersByApi: true,
           manageItemsByApi: true,
-          managePaymentTermsByApi: true
+          managePaymentTermsByApi: true,
+          manageCustomerGroupsByApi: true
         }
       })
     ]);
@@ -1085,8 +1086,14 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       masterApiLock: tenant ? {
         manageCustomersByApi: tenant.manageCustomersByApi,
         manageItemsByApi: tenant.manageItemsByApi,
-        managePaymentTermsByApi: tenant.managePaymentTermsByApi
-      } : { manageCustomersByApi: false, manageItemsByApi: false, managePaymentTermsByApi: false }
+        managePaymentTermsByApi: tenant.managePaymentTermsByApi,
+        manageCustomerGroupsByApi: tenant.manageCustomerGroupsByApi
+      } : {
+        manageCustomersByApi: false,
+        manageItemsByApi: false,
+        managePaymentTermsByApi: false,
+        manageCustomerGroupsByApi: false
+      }
     };
   });
 

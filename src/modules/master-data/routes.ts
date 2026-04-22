@@ -67,12 +67,22 @@ const paymentTermUpdateSchema = paymentTermSchema.partial().extend({
   isActive: z.boolean().optional()
 });
 
+const customerGroupSchema = z.object({
+  code: z.string().trim().min(1).max(50),
+  name: z.string().trim().min(1).max(120),
+  description: z.string().trim().max(500).nullable().optional(),
+  isActive: z.boolean().optional(),
+  customFields: customFieldValuesSchema.optional()
+});
+const customerGroupUpdateSchema = customerGroupSchema.partial();
+
 const customerSchema = z.object({
   customerCode: z.string().min(2).max(40),
   name: z.string().min(2).max(200),
   customerType: z.nativeEnum(CustomerType).optional(),
   taxId: z.string().max(20).optional(),
   defaultTermId: z.string().min(1),
+  customerGroupId: z.string().min(1).nullable().optional(),
   ownerId: z.string().optional(),
   siteLat: z.number().min(-90).max(90).optional(),
   siteLng: z.number().min(-180).max(180).optional(),
@@ -81,6 +91,7 @@ const customerSchema = z.object({
 });
 const customerUpdateSchema = customerSchema.omit({ customerCode: true }).partial().extend({
   defaultTermId: z.string().min(1).optional(),
+  customerGroupId: z.string().min(1).nullable().optional(),
   disabled: z.boolean().optional()
 });
 
@@ -131,7 +142,15 @@ function resolveCustomFieldEntityType(raw: string, app: Parameters<FastifyPlugin
   ) {
     return EntityType.PAYMENT_TERM;
   }
-  throw app.httpErrors.badRequest("Unsupported entity type. Use customer, item, or payment-term.");
+  if (
+    normalized === "customer-group" ||
+    normalized === "customer_group" ||
+    normalized === "customergroup" ||
+    normalized === "customer-groups"
+  ) {
+    return EntityType.CUSTOMER_GROUP;
+  }
+  throw app.httpErrors.badRequest("Unsupported entity type. Use customer, item, payment-term, or customer-group.");
 }
 
 
@@ -169,24 +188,29 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
   // go through a separate auth layer and are unaffected.
   async function assertMasterWritable(
     tenantId: string,
-    entity: "customer" | "item" | "paymentTerm"
+    entity: "customer" | "item" | "paymentTerm" | "customerGroup"
   ) {
     const t = await prisma.tenant.findUnique({
       where: { id: tenantId },
       select: {
         manageCustomersByApi: true,
         manageItemsByApi: true,
-        managePaymentTermsByApi: true
+        managePaymentTermsByApi: true,
+        manageCustomerGroupsByApi: true
       }
     });
     if (!t) return;
     const locked =
       (entity === "customer" && t.manageCustomersByApi) ||
       (entity === "item" && t.manageItemsByApi) ||
-      (entity === "paymentTerm" && t.managePaymentTermsByApi);
+      (entity === "paymentTerm" && t.managePaymentTermsByApi) ||
+      (entity === "customerGroup" && t.manageCustomerGroupsByApi);
     if (locked) {
       const label =
-        entity === "customer" ? "Customer" : entity === "item" ? "Item" : "Payment Term";
+        entity === "customer" ? "Customer"
+        : entity === "item" ? "Item"
+        : entity === "paymentTerm" ? "Payment Term"
+        : "Customer Group";
       throw app.httpErrors.forbidden(
         `${label} master is managed via API for this tenant. UI changes are disabled.`
       );
@@ -360,6 +384,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
         addresses: true,
         contacts: true,
         paymentTerm: true,
+        customerGroup: { select: { id: true, code: true, name: true } },
         owner: { select: { id: true, fullName: true } }
       },
       orderBy: { createdAt: "desc" }
@@ -379,7 +404,8 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       include: {
         addresses: true,
         contacts: true,
-        paymentTerm: true
+        paymentTerm: true,
+        customerGroup: { select: { id: true, code: true, name: true } }
       }
     });
     if (!customer) {
@@ -422,6 +448,16 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
+    if (parsed.data.customerGroupId) {
+      const group = await prisma.customerGroup.findFirst({
+        where: { id: parsed.data.customerGroupId, tenantId },
+        select: { id: true }
+      });
+      if (!group) {
+        throw app.httpErrors.badRequest("customerGroupId is invalid for this tenant.");
+      }
+    }
+
     const definitions = await prisma.customFieldDefinition.findMany({
       where: { tenantId, entityType: EntityType.CUSTOMER }
     });
@@ -435,6 +471,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
           customerType: parsed.data.customerType ?? CustomerType.COMPANY,
           taxId: parsed.data.taxId,
           defaultTermId: parsed.data.defaultTermId,
+          customerGroupId: parsed.data.customerGroupId ?? null,
           ownerId,
           createdByUserId: changedById,
           customFields
@@ -494,6 +531,16 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
+    if (parsed.data.customerGroupId) {
+      const group = await prisma.customerGroup.findFirst({
+        where: { id: parsed.data.customerGroupId, tenantId },
+        select: { id: true }
+      });
+      if (!group) {
+        throw app.httpErrors.badRequest("customerGroupId is invalid for this tenant.");
+      }
+    }
+
     let customFields: Prisma.InputJsonValue | undefined;
     if (parsed.data.customFields !== undefined) {
       const definitions = await prisma.customFieldDefinition.findMany({
@@ -512,6 +559,8 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
           customerType: parsed.data.customerType,
           taxId: parsed.data.taxId,
           defaultTermId: parsed.data.defaultTermId,
+          customerGroupId:
+            parsed.data.customerGroupId === undefined ? undefined : parsed.data.customerGroupId,
           ownerId: parsed.data.ownerId,
           disabled: parsed.data.disabled,
           customFields
@@ -1066,6 +1115,158 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     return { deleted: deleted.count };
   });
 
+  // ── Customer Groups ─────────────────────────────────────────────────────
+  app.get("/customer-groups", async (request) => {
+    const tenantId = requireTenantId(request);
+    return prisma.customerGroup.findMany({
+      where: { tenantId },
+      orderBy: { name: "asc" }
+    });
+  });
+
+  app.post("/customer-groups", async (request, reply) => {
+    requireRoleAtLeast(request, UserRole.MANAGER);
+    const tenantId = requireTenantId(request);
+    await assertMasterWritable(tenantId, "customerGroup");
+    const changedById = requireUserId(request);
+    const parsed = customerGroupSchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
+    }
+    const definitions = await prisma.customFieldDefinition.findMany({
+      where: { tenantId, entityType: EntityType.CUSTOMER_GROUP }
+    });
+    const customFields = validateCustomFields(app, definitions, parsed.data.customFields ?? {});
+    const created = await prisma.$transaction(async (tx) => {
+      const row = await tx.customerGroup.create({
+        data: {
+          tenantId,
+          code: parsed.data.code,
+          name: parsed.data.name,
+          description: parsed.data.description ?? null,
+          isActive: parsed.data.isActive ?? true,
+          customFields
+        }
+      });
+      await writeEntityChangelog({
+        db: tx,
+        tenantId,
+        entityType: EntityType.CUSTOMER_GROUP,
+        entityId: row.id,
+        action: "CREATE",
+        changedById,
+        after: row
+      });
+      return row;
+    });
+    return reply.code(201).send(created);
+  });
+
+  app.patch("/customer-groups/:id", async (request) => {
+    requireRoleAtLeast(request, UserRole.MANAGER);
+    const tenantId = requireTenantId(request);
+    await assertMasterWritable(tenantId, "customerGroup");
+    const changedById = requireUserId(request);
+    const params = request.params as { id: string };
+    const parsed = customerGroupUpdateSchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
+    }
+    const existing = await prisma.customerGroup.findFirst({
+      where: { id: params.id, tenantId }
+    });
+    if (!existing) {
+      throw app.httpErrors.notFound("Customer group not found.");
+    }
+    let customFields: Prisma.InputJsonValue | undefined;
+    if (parsed.data.customFields !== undefined) {
+      const definitions = await prisma.customFieldDefinition.findMany({
+        where: { tenantId, entityType: EntityType.CUSTOMER_GROUP }
+      });
+      customFields = validateCustomFields(app, definitions, {
+        ...asRecord(existing.customFields),
+        ...parsed.data.customFields
+      });
+    }
+    return prisma.$transaction(async (tx) => {
+      const updated = await tx.customerGroup.update({
+        where: { id: params.id },
+        data: {
+          code: parsed.data.code,
+          name: parsed.data.name,
+          description:
+            parsed.data.description === undefined ? undefined : parsed.data.description,
+          isActive: parsed.data.isActive,
+          customFields
+        }
+      });
+      await writeEntityChangelog({
+        db: tx,
+        tenantId,
+        entityType: EntityType.CUSTOMER_GROUP,
+        entityId: updated.id,
+        action: "UPDATE",
+        changedById,
+        before: existing,
+        after: updated
+      });
+      return updated;
+    });
+  });
+
+  app.delete("/customer-groups/:id", async (request, reply) => {
+    requireRoleAtLeast(request, UserRole.MANAGER);
+    const tenantId = requireTenantId(request);
+    await assertMasterWritable(tenantId, "customerGroup");
+    const changedById = requireUserId(request);
+    const params = request.params as { id: string };
+    const existing = await prisma.customerGroup.findFirst({
+      where: { id: params.id, tenantId }
+    });
+    if (!existing) {
+      throw app.httpErrors.notFound("Customer group not found.");
+    }
+    // onDelete: SetNull on Customer.customerGroupId means no precheck needed —
+    // customers simply lose their group assignment.
+    await prisma.$transaction(async (tx) => {
+      await tx.customerGroup.delete({ where: { id: params.id } });
+      await writeEntityChangelog({
+        db: tx,
+        tenantId,
+        entityType: EntityType.CUSTOMER_GROUP,
+        entityId: params.id,
+        action: "DELETE",
+        changedById,
+        before: existing
+      });
+    });
+    return reply.code(204).send();
+  });
+
+  app.post("/customer-groups/bulk-delete", async (request) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+    await assertMasterWritable(tenantId, "customerGroup");
+    const parsed = bulkIdsSchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
+    }
+    const uniqueIds = Array.from(new Set(parsed.data.ids));
+    const existingRows = await prisma.customerGroup.findMany({
+      where: { id: { in: uniqueIds }, tenantId },
+      select: { id: true }
+    });
+    if (existingRows.length !== uniqueIds.length) {
+      throw app.httpErrors.notFound(
+        `${uniqueIds.length - existingRows.length} customer group(s) not found in this tenant.`
+      );
+    }
+    const deleted = await prisma.customerGroup.deleteMany({
+      where: { id: { in: uniqueIds }, tenantId }
+    });
+    return { deleted: deleted.count };
+  });
+
   // ── DBD Datawarehouse proxy ──────────────────────────────────────────────
   // Proxies requests to Thailand's DBD company registry to avoid CORS.
   // Set DBD_API_KEY env var if the target API requires one.
@@ -1308,6 +1509,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     name: z.string().trim().min(2).max(200),
     paymentTermCode: z.string().trim().min(1).max(30),
     customerType: z.nativeEnum(CustomerType).optional(),
+    customerGroupCode: z.string().trim().min(1).max(50).optional(),
     taxId: z.string().trim().max(20).optional(),
     externalRef: z.string().trim().max(100).optional(),
     siteLat: z.coerce.number().min(-90).max(90).optional(),
@@ -1329,6 +1531,12 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     });
     const termIdByCode = new Map(terms.map((t) => [t.code.toLowerCase(), t.id]));
 
+    const groups = await prisma.customerGroup.findMany({
+      where: { tenantId },
+      select: { id: true, code: true }
+    });
+    const groupIdByCode = new Map(groups.map((g) => [g.code.toLowerCase(), g.id]));
+
     const customerDefinitions = await prisma.customFieldDefinition.findMany({
       where: { tenantId, entityType: EntityType.CUSTOMER }
     });
@@ -1347,6 +1555,15 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       if (!defaultTermId) {
         errors.push({ row: i + 1, customerCode: row.customerCode, error: `paymentTermCode "${row.paymentTermCode}" not found.` });
         continue;
+      }
+      let customerGroupId: string | null = null;
+      if (row.customerGroupCode) {
+        const found = groupIdByCode.get(row.customerGroupCode.toLowerCase());
+        if (!found) {
+          errors.push({ row: i + 1, customerCode: row.customerCode, error: `customerGroupCode "${row.customerGroupCode}" not found.` });
+          continue;
+        }
+        customerGroupId = found;
       }
       // Enforce taxId uniqueness (same rule as the create/edit form)
       if (row.taxId) {
@@ -1374,6 +1591,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
             name: row.name,
             defaultTermId,
             customerType: row.customerType,
+            ...(row.customerGroupCode !== undefined ? { customerGroupId } : {}),
             taxId: row.taxId || null,
             externalRef: row.externalRef || null,
             siteLat: row.siteLat,
@@ -1386,6 +1604,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
             customerCode: row.customerCode,
             name: row.name,
             defaultTermId,
+            customerGroupId,
             customerType: row.customerType ?? CustomerType.COMPANY,
             taxId: row.taxId || null,
             externalRef: row.externalRef || null,
@@ -1401,6 +1620,81 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     }
 
     await logAuditEvent(tenantId, ownerId, "CUSTOMER_IMPORT", {
+      total: rawRows.length, imported, errors: errors.length, errorSample: errors.slice(0, 5)
+    }, request.ip);
+
+    return { imported, errors: errors.length, errorDetails: errors };
+  });
+
+  const customerGroupImportRow = z.object({
+    code: z.string().trim().min(1).max(50),
+    name: z.string().trim().min(1).max(120),
+    description: z.string().trim().max(500).optional(),
+    isActive: z.coerce.boolean().optional()
+  });
+
+  app.post("/customer-groups/import", async (request) => {
+    requireRoleAtLeast(request, UserRole.MANAGER);
+    const tenantId = requireTenantId(request);
+    await assertMasterWritable(tenantId, "customerGroup");
+    const rawRows = readRows(request.body);
+    if (!rawRows.length) throw app.httpErrors.badRequest("Expected { rows: [...] } with at least one row.");
+    if (rawRows.length > 1000) throw app.httpErrors.badRequest("Maximum 1000 rows per import.");
+
+    const definitions = await prisma.customFieldDefinition.findMany({
+      where: { tenantId, entityType: EntityType.CUSTOMER_GROUP }
+    });
+
+    const errors: { row: number; code?: string; error: string }[] = [];
+    let imported = 0;
+    const seenCodes = new Set<string>();
+    for (let i = 0; i < rawRows.length; i++) {
+      const rawRow = rawRows[i] as Record<string, unknown>;
+      const parsed = customerGroupImportRow.safeParse(rawRow);
+      if (!parsed.success) {
+        errors.push({ row: i + 1, error: zodMsg(parsed.error) });
+        continue;
+      }
+      const row = parsed.data;
+      const codeKey = row.code.toLowerCase();
+      if (seenCodes.has(codeKey)) {
+        errors.push({ row: i + 1, code: row.code, error: `Duplicate code "${row.code}" in this import batch.` });
+        continue;
+      }
+      seenCodes.add(codeKey);
+      let customFields: Prisma.InputJsonValue | undefined;
+      try {
+        const cfRaw = extractCustomFieldsFromRow(rawRow, definitions);
+        customFields = validateCustomFields(app, definitions, cfRaw);
+      } catch (error) {
+        errors.push({ row: i + 1, code: row.code, error: (error as Error).message });
+        continue;
+      }
+      try {
+        await prisma.customerGroup.upsert({
+          where: { tenantId_code: { tenantId, code: row.code } },
+          update: {
+            name: row.name,
+            description: row.description ?? null,
+            ...(row.isActive !== undefined ? { isActive: row.isActive } : {}),
+            ...(customFields !== undefined ? { customFields } : {})
+          },
+          create: {
+            tenantId,
+            code: row.code,
+            name: row.name,
+            description: row.description ?? null,
+            isActive: row.isActive ?? true,
+            customFields
+          }
+        });
+        imported += 1;
+      } catch (error) {
+        errors.push({ row: i + 1, code: row.code, error: (error as Error).message });
+      }
+    }
+
+    await logAuditEvent(tenantId, requireUserId(request), "CUSTOMER_GROUP_IMPORT", {
       total: rawRows.length, imported, errors: errors.length, errorSample: errors.slice(0, 5)
     }, request.ip);
 

@@ -61,6 +61,7 @@ function renderC360TabContent(c360) {
           <div class="c360-info-row"><span class="c360-info-key">Code</span><span class="c360-info-val">${escHtml(customer.customerCode)}</span></div>
           <div class="c360-info-row"><span class="c360-info-key">Payment Term</span><span class="c360-info-val">${customer.paymentTerm ? escHtml(customer.paymentTerm.code + " — " + customer.paymentTerm.name) : "—"}</span></div>
           <div class="c360-info-row"><span class="c360-info-key">Due Days</span><span class="c360-info-val">${customer.paymentTerm?.dueDays ?? "—"} days</span></div>
+          <div class="c360-info-row"><span class="c360-info-key">Group</span><span class="c360-info-val">${customer.customerGroup ? escHtml(customer.customerGroup.code + " — " + customer.customerGroup.name) : "—"}</span></div>
           <div class="c360-info-row"><span class="c360-info-key">Created</span><span class="c360-info-val">${new Date(customer.createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</span></div>
           ${customer.siteLat != null && customer.siteLng != null
             ? `<div class="c360-info-row"><span class="c360-info-key">Location</span><span class="c360-info-val"><a class="c360-address-map" href="https://maps.google.com/?q=${customer.siteLat},${customer.siteLng}" target="_blank" rel="noopener">${icon('location')} Open map</a></span></div>`

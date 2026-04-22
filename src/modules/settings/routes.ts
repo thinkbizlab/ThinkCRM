@@ -1139,7 +1139,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       select: {
         manageCustomersByApi: true,
         manageItemsByApi: true,
-        managePaymentTermsByApi: true
+        managePaymentTermsByApi: true,
+        manageCustomerGroupsByApi: true
       }
     });
     if (!t) throw app.httpErrors.notFound("Tenant not found.");
@@ -1153,7 +1154,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     const parsed = z.object({
       manageCustomersByApi: z.boolean(),
       manageItemsByApi: z.boolean(),
-      managePaymentTermsByApi: z.boolean()
+      managePaymentTermsByApi: z.boolean(),
+      manageCustomerGroupsByApi: z.boolean()
     }).safeParse(request.body);
     if (!parsed.success) throw app.httpErrors.badRequest(zodMsg(parsed.error));
     return prisma.tenant.update({
@@ -1162,7 +1164,8 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       select: {
         manageCustomersByApi: true,
         manageItemsByApi: true,
-        managePaymentTermsByApi: true
+        managePaymentTermsByApi: true,
+        manageCustomerGroupsByApi: true
       }
     });
   });

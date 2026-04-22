@@ -67,15 +67,16 @@ const DAY_OF_WEEK = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday"
 // src/modules/integrations/connector-framework.ts.
 const CRM_TARGET_FIELDS = {
   CUSTOMER: [
-    { value: "customerCode",    label: "Customer Code",         required: true },
-    { value: "name",            label: "Customer Name",         required: true },
-    { value: "customerType",    label: "Customer Type",         required: false },
-    { value: "taxId",           label: "Tax ID",                 required: false },
-    { value: "defaultTermCode", label: "Default Payment Term",  required: false },
-    { value: "ownerId",         label: "Owner User ID",         required: false },
-    { value: "siteLat",         label: "Site Latitude",          required: false },
-    { value: "siteLng",         label: "Site Longitude",         required: false },
-    { value: "externalRef",     label: "External Reference",    required: false }
+    { value: "customerCode",       label: "Customer Code",         required: true },
+    { value: "name",               label: "Customer Name",         required: true },
+    { value: "customerType",       label: "Customer Type",         required: false },
+    { value: "taxId",              label: "Tax ID",                required: false },
+    { value: "defaultTermCode",    label: "Default Payment Term",  required: false },
+    { value: "customerGroupCode",  label: "Customer Group",        required: false },
+    { value: "ownerId",            label: "Owner User ID",         required: false },
+    { value: "siteLat",            label: "Site Latitude",         required: false },
+    { value: "siteLng",            label: "Site Longitude",        required: false },
+    { value: "externalRef",        label: "External Reference",    required: false }
   ],
   ITEM: [
     { value: "itemCode",    label: "Item Code",           required: true },
@@ -87,6 +88,12 @@ const CRM_TARGET_FIELDS = {
     { value: "code",    label: "Term Code", required: true },
     { value: "name",    label: "Term Name", required: true },
     { value: "dueDays", label: "Due Days",  required: true }
+  ],
+  CUSTOMER_GROUP: [
+    { value: "code",        label: "Code",        required: true },
+    { value: "name",        label: "Name",        required: true },
+    { value: "description", label: "Description", required: false },
+    { value: "isActive",    label: "Active",      required: false }
   ]
 };
 
@@ -647,7 +654,8 @@ function getActiveCurrency() {
 const masterPageRouteMap = {
   "payment-terms": "/master/payment-terms",
   customers: "/master/customers",
-  items: "/master/items"
+  items: "/master/items",
+  "customer-groups": "/master/customer-groups"
 };
 
 function asMoney(value) {
@@ -1241,13 +1249,29 @@ const MASTER_DATA_IMPORT_SPECS = {
     })),
     fileBase: "items"
   },
+  "customer-groups": {
+    label: "Customer Groups",
+    endpoint: "/customer-groups/import",
+    columns: ["code", "name", "description", "isActive"],
+    sample: [
+      { code: "UNI",    name: "University",  description: "Universities and colleges", isActive: true },
+      { code: "GOV",    name: "Government",  description: "Government bodies",         isActive: true },
+      { code: "FACT",   name: "Factory",     description: "Factories and manufacturers", isActive: true },
+      { code: "SME",    name: "SME",         description: "Small and medium enterprises", isActive: true },
+      { code: "CORP",   name: "Corporate",   description: "Large corporations",        isActive: true }
+    ],
+    sourceRows: () => (state.cache.customerGroups || []).map((g) => ({
+      code: g.code, name: g.name, description: g.description || "", isActive: g.isActive
+    })),
+    fileBase: "customer-groups"
+  },
   "customers": {
     label: "Customers",
     endpoint: "/customers/import",
-    columns: ["customerCode", "name", "paymentTermCode", "customerType", "taxId", "externalRef", "siteLat", "siteLng"],
+    columns: ["customerCode", "name", "paymentTermCode", "customerGroupCode", "customerType", "taxId", "externalRef", "siteLat", "siteLng"],
     sample: [
-      { customerCode: "CUST-0001", name: "Acme Co., Ltd.", paymentTermCode: "NET30", customerType: "COMPANY", taxId: "0105555123456", externalRef: "", siteLat: 13.7563, siteLng: 100.5018 },
-      { customerCode: "CUST-0002", name: "Jane Individual",  paymentTermCode: "COD",   customerType: "INDIVIDUAL", taxId: "", externalRef: "", siteLat: "", siteLng: "" }
+      { customerCode: "CUST-0001", name: "Acme Co., Ltd.", paymentTermCode: "NET30", customerGroupCode: "CORP", customerType: "COMPANY", taxId: "0105555123456", externalRef: "", siteLat: 13.7563, siteLng: 100.5018 },
+      { customerCode: "CUST-0002", name: "Jane Individual",  paymentTermCode: "COD",   customerGroupCode: "",    customerType: "INDIVIDUAL", taxId: "", externalRef: "", siteLat: "", siteLng: "" }
     ],
     sourceRows: () => {
       const terms = state.cache.paymentTerms || [];
@@ -1256,6 +1280,7 @@ const MASTER_DATA_IMPORT_SPECS = {
         customerCode: c.customerCode,
         name: c.name,
         paymentTermCode: c.paymentTerm?.code || codeById.get(c.defaultTermId) || "",
+        customerGroupCode: c.customerGroup?.code || "",
         customerType: c.customerType || "COMPANY",
         taxId: c.taxId || "",
         externalRef: c.externalRef || "",
@@ -1398,6 +1423,8 @@ function renderMasterData(paymentTerms) {
     .join("");
   const paymentTermFieldDefinitions = getCustomFieldDefinitions("payment-terms");
   const itemFieldDefinitions = getCustomFieldDefinitions("items");
+  const customerGroupFieldDefinitions = getCustomFieldDefinitions("customer-groups");
+  const customerGroups = state.cache.customerGroups || [];
   const isAdmin = state.user?.role === "ADMIN";
   const canManageMaster = isAdmin || state.user?.role === "DIRECTOR" || state.user?.role === "MANAGER";
   const exportBtn = (id) => isAdmin ? `
@@ -1408,7 +1435,8 @@ function renderMasterData(paymentTerms) {
   const entityLocked = (id) =>
     (id === "customers" && isCustomerApiLocked()) ||
     (id === "items" && isItemApiLocked()) ||
-    (id === "payment-terms" && isPaymentTermApiLocked());
+    (id === "payment-terms" && isPaymentTermApiLocked()) ||
+    (id === "customer-groups" && isCustomerGroupApiLocked());
   const importBtns = (id) => (canManageMaster && !entityLocked(id)) ? `
     <div style="display:inline-flex;gap:var(--sp-1);margin-left:var(--sp-2)">
       <button class="ghost small md-template-btn" data-entity="${id}" style="font-size:0.8rem">⬇ Template</button>
@@ -1423,6 +1451,7 @@ function renderMasterData(paymentTerms) {
       <button class="master-page-btn ${state.masterPage === "customers" ? "active-master-btn" : ""}" data-page="customers">${icon('building')} Customers</button>
       <button class="master-page-btn ${state.masterPage === "items" ? "active-master-btn" : ""}" data-page="items">${icon('box')} Items</button>
       <button class="master-page-btn ${state.masterPage === "payment-terms" ? "active-master-btn" : ""}" data-page="payment-terms">${icon('card')} Payment Terms</button>
+      <button class="master-page-btn ${state.masterPage === "customer-groups" ? "active-master-btn" : ""}" data-page="customer-groups">${icon('folder')} Customer Groups</button>
     </div>
 
     <section class="card" ${state.masterPage !== "payment-terms" ? 'style="display:none"' : ""}>
@@ -1499,6 +1528,28 @@ function renderMasterData(paymentTerms) {
       ` : ""}
       <div class="list" id="item-list"></div>
       <div id="item-pagination"></div>
+    </section>
+    <section class="card" ${state.masterPage !== "customer-groups" ? 'style="display:none"' : ""}>
+      <div style="display:flex;align-items:center;margin-bottom:var(--sp-4)">
+        <h3 class="section-title" style="margin:0">Customer Groups</h3>
+        ${importBtns("customer-groups")}
+        ${exportBtn("customer-groups")}
+      </div>
+      ${isCustomerGroupApiLocked() ? "" : `
+      <form id="customer-group-form" class="mini-form">
+        <input name="code" placeholder="Code (e.g. UNI)" required maxlength="50" />
+        <input name="name" placeholder="Name (e.g. University)" required maxlength="120" />
+        <input name="description" placeholder="Description (optional)" maxlength="500" />
+        ${isAdmin ? renderCustomFieldInputs(customerGroupFieldDefinitions) : ""}
+        <button type="submit">Create Customer Group</button>
+      </form>`}
+      ${isAdmin ? `
+      <p class="muted small" style="margin-top:var(--sp-3)">
+        ${customerGroupFieldDefinitions.filter((d) => d.isActive).length} active custom field(s) · <a href="/settings/custom-fields" data-settings-link="custom-fields">Manage custom fields</a>
+      </p>
+      ` : ""}
+      <div class="list" id="cg-list-body"></div>
+      <div id="cg-pagination"></div>
     </section>
     </div>
   `;
@@ -1596,6 +1647,51 @@ function renderMasterData(paymentTerms) {
   state.cache.masterRenderers.item = renderItemsList;
   renderItemsList();
 
+  // ── Customer Groups list (paginated) ────────────────────────────────────
+  const renderCustomerGroupsList = () => {
+    const listEl = qs("#cg-list-body");
+    const pagEl  = qs("#cg-pagination");
+    if (!listEl || !pagEl) return;
+    const all = customerGroups;
+    const ps = getMasterPageSize("customerGroup");
+    const totalPages = Math.max(1, Math.ceil(all.length / (ps === Infinity ? Math.max(1, all.length) : ps)));
+    state.customerGroupListPage = Math.min(Math.max(1, state.customerGroupListPage || 1), totalPages);
+    const page = state.customerGroupListPage;
+    const start = ps === Infinity ? 0 : (page - 1) * ps;
+    const slice = ps === Infinity ? all : all.slice(start, start + ps);
+    if (!slice.length) {
+      listEl.innerHTML = `<div class="empty-state compact"><div><strong>No customer groups</strong><p>Create groups like University, Government, Factory, SME, Corporate to classify customers.</p></div></div>`;
+    } else {
+      listEl.innerHTML = slice.map((g) => `
+        <div class="row">
+          <h4 style="display:inline">${escHtml(g.name)} (${escHtml(g.code)})</h4>
+          ${g.description ? `<div class="muted">${escHtml(g.description)}</div>` : ""}
+          <div class="chip ${g.isActive ? "chip-success" : "chip-danger"}">${g.isActive ? "Active" : "Inactive"}</div>
+          ${isAdmin ? renderCustomFieldsSummary(g.customFields) : ""}
+          ${isCustomerGroupApiLocked() ? "" : `
+          <div class="inline-actions wrap">
+            <button class="customer-group-toggle" data-id="${g.id}" data-active="${g.isActive}">
+              ${g.isActive ? "Deactivate" : "Activate"}
+            </button>
+            <button class="customer-group-delete ghost" data-id="${g.id}">Delete</button>
+          </div>`}
+        </div>`).join("");
+    }
+    pagEl.innerHTML = masterPaginationHtml({
+      total: all.length, page, totalPages, key: "customerGroup", pageSize: ps, noun: "customer group"
+    });
+    pagEl.querySelector('[data-page-prev="customerGroup"]')?.addEventListener("click", () => {
+      state.customerGroupListPage = Math.max(1, (state.customerGroupListPage || 1) - 1);
+      renderCustomerGroupsList();
+    });
+    pagEl.querySelector('[data-page-next="customerGroup"]')?.addEventListener("click", () => {
+      state.customerGroupListPage = Math.min(totalPages, (state.customerGroupListPage || 1) + 1);
+      renderCustomerGroupsList();
+    });
+  };
+  state.cache.masterRenderers.customerGroup = renderCustomerGroupsList;
+  renderCustomerGroupsList();
+
   views.master.querySelectorAll(".master-page-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       navigateToMasterPage(btn.dataset.page);
@@ -1637,9 +1733,16 @@ function renderMasterData(paymentTerms) {
         customerCode: c.customerCode, name: c.name, customerType: c.customerType || "",
         taxId: c.taxId || "", externalRef: c.externalRef || "",
         paymentTermCode: c.paymentTerm?.code || "", paymentTermName: c.paymentTerm?.name || "",
+        customerGroupCode: c.customerGroup?.code || "", customerGroupName: c.customerGroup?.name || "",
         createdAt: c.createdAt ? new Date(c.createdAt).toISOString().slice(0, 10) : ""
       }));
       exportRows("customers", rows, fmt);
+    } else if (type === "customer-groups") {
+      const rows = (state.cache.customerGroups || []).map((g) => ({
+        code: g.code, name: g.name, description: g.description || "", isActive: g.isActive,
+        createdAt: g.createdAt ? new Date(g.createdAt).toISOString().slice(0, 10) : ""
+      }));
+      exportRows("customer-groups", rows, fmt);
     }
   };
 
@@ -1705,6 +1808,7 @@ function renderMasterData(paymentTerms) {
       const entity = btn.dataset.entity;
       const title = entity === "customers" ? "Customer Import History"
         : entity === "items" ? "Item Import History"
+        : entity === "customer-groups" ? "Customer Group Import History"
         : "Payment Term Import History";
       openImportHistoryModal(entity, title);
     });
@@ -1821,6 +1925,55 @@ function renderMasterData(paymentTerms) {
       try {
         await api(`/items/${btn.dataset.id}`, { method: "DELETE" });
         setStatus("Item deleted.");
+        await loadMaster();
+      } catch (error) {
+        setStatus(error.message, true);
+      }
+    });
+  });
+
+  qs("#customer-group-form")?.addEventListener("submit", async (event) => {
+    if (state.masterPage !== "customer-groups") return;
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const description = String(formData.get("description") || "").trim();
+    const payload = {
+      code: String(formData.get("code") || ""),
+      name: String(formData.get("name") || ""),
+      ...(description && { description })
+    };
+    const customFields = collectCustomFieldPayload(formData, customerGroupFieldDefinitions);
+    if (Object.keys(customFields).length) payload.customFields = customFields;
+    try {
+      await api("/customer-groups", { method: "POST", body: payload });
+      setStatus("Customer group created.");
+      await loadMaster();
+    } catch (error) {
+      setStatus(error.message, true);
+    }
+  });
+
+  views.master.querySelectorAll(".customer-group-toggle").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      try {
+        await api(`/customer-groups/${btn.dataset.id}`, {
+          method: "PATCH",
+          body: { isActive: btn.dataset.active !== "true" }
+        });
+        setStatus("Customer group updated.");
+        await loadMaster();
+      } catch (error) {
+        setStatus(error.message, true);
+      }
+    });
+  });
+
+  views.master.querySelectorAll(".customer-group-delete").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("Delete this customer group? Customers assigned to it will lose the group.")) return;
+      try {
+        await api(`/customer-groups/${btn.dataset.id}`, { method: "DELETE" });
+        setStatus("Customer group deleted.");
         await loadMaster();
       } catch (error) {
         setStatus(error.message, true);
@@ -3590,12 +3743,13 @@ function renderSettings() {
     Promise.all([
       api("/custom-fields/payment-term"),
       api("/custom-fields/customer"),
-      api("/custom-fields/item")
-    ]).then(([pt, cu, it]) => {
-      state.cache.customFieldSettings = { "payment-term": pt, customer: cu, item: it };
+      api("/custom-fields/item"),
+      api("/custom-fields/customer-group")
+    ]).then(([pt, cu, it, cg]) => {
+      state.cache.customFieldSettings = { "payment-term": pt, customer: cu, item: it, "customer-group": cg };
       renderSettings();
     }).catch(() => {
-      state.cache.customFieldSettings = { "payment-term": [], customer: [], item: [] };
+      state.cache.customFieldSettings = { "payment-term": [], customer: [], item: [], "customer-group": [] };
       renderSettings();
     });
   }
@@ -3606,7 +3760,7 @@ function renderSettings() {
   const activePresetSlug = detectPresetSlug({ ...brandingTokens, primaryColor: branding.primaryColor, secondaryColor: branding.secondaryColor });
   const tax = state.cache.taxConfig || { vatEnabled: true, vatRatePercent: 7 };
   const visitCfg = state.cache.visitConfig || { checkInMaxDistanceM: 1000, minVisitDurationMinutes: 15 };
-  const masterLock = state.cache.masterApiLock || { manageCustomersByApi: false, manageItemsByApi: false, managePaymentTermsByApi: false };
+  const masterLock = state.cache.masterApiLock || { manageCustomersByApi: false, manageItemsByApi: false, managePaymentTermsByApi: false, manageCustomerGroupsByApi: false };
   const tenantThemeMode = branding.themeMode || "LIGHT";
   const integrationCredentials = state.cache.integrationCredentials || [];
   const teams = state.cache.teams || [];
@@ -4027,6 +4181,10 @@ function renderSettings() {
           <label class="settings-checkbox-label">
             <input name="managePaymentTermsByApi" type="checkbox" ${masterLock.managePaymentTermsByApi ? "checked" : ""} />
             Manage <strong>Payment Term</strong> by API only
+          </label>
+          <label class="settings-checkbox-label">
+            <input name="manageCustomerGroupsByApi" type="checkbox" ${masterLock.manageCustomerGroupsByApi ? "checked" : ""} />
+            Manage <strong>Customer Group</strong> by API only
           </label>
           <button type="submit">Save Master Data Lock</button>
         </form>
@@ -5103,6 +5261,7 @@ function renderSettings() {
                   <option value="CUSTOMER">CUSTOMER</option>
                   <option value="ITEM">ITEM</option>
                   <option value="PAYMENT_TERM">PAYMENT_TERM</option>
+                  <option value="CUSTOMER_GROUP">CUSTOMER_GROUP</option>
                 </select>
               </label>
             </div>
@@ -5197,6 +5356,7 @@ function renderSettings() {
                           <option value="CUSTOMER"${cfg.entityType === "CUSTOMER" ? " selected" : ""}>Customers</option>
                           <option value="ITEM"${cfg.entityType === "ITEM" ? " selected" : ""}>Items</option>
                           <option value="PAYMENT_TERM"${cfg.entityType === "PAYMENT_TERM" ? " selected" : ""}>Payment Terms</option>
+                          <option value="CUSTOMER_GROUP"${cfg.entityType === "CUSTOMER_GROUP" ? " selected" : ""}>Customer Groups</option>
                         </select>
                       </label>
                     </div>
@@ -5266,6 +5426,7 @@ function renderSettings() {
                     <option value="CUSTOMER">Customers</option>
                     <option value="ITEM">Items</option>
                     <option value="PAYMENT_TERM">Payment Terms</option>
+                    <option value="CUSTOMER_GROUP">Customer Groups</option>
                   </select>
                 </label>
               </div>
@@ -5903,17 +6064,19 @@ function renderSettings() {
   if (state.settingsPage === "custom-fields") {
     const cfRefresh = async () => {
       try {
-        const [pt, cu, it] = await Promise.all([
+        const [pt, cu, it, cg] = await Promise.all([
           api("/custom-fields/payment-term"),
           api("/custom-fields/customer"),
-          api("/custom-fields/item")
+          api("/custom-fields/item"),
+          api("/custom-fields/customer-group")
         ]);
-        state.cache.customFieldSettings = { "payment-term": pt, customer: cu, item: it };
+        state.cache.customFieldSettings = { "payment-term": pt, customer: cu, item: it, "customer-group": cg };
         // Also invalidate master-data cache so list pages pick up changes
         state.cache.customFieldDefinitions = {
           "payment-terms": pt,
           customers: cu,
-          items: it
+          items: it,
+          "customer-groups": cg
         };
       } catch (err) {
         setStatus(err.message, true);
@@ -7347,7 +7510,8 @@ function renderSettings() {
         body: {
           manageCustomersByApi:   !!fd.get("manageCustomersByApi"),
           manageItemsByApi:       !!fd.get("manageItemsByApi"),
-          managePaymentTermsByApi: !!fd.get("managePaymentTermsByApi")
+          managePaymentTermsByApi: !!fd.get("managePaymentTermsByApi"),
+          manageCustomerGroupsByApi: !!fd.get("manageCustomerGroupsByApi")
         }
       });
       setStatus("Master data lock saved.");
@@ -8439,7 +8603,8 @@ function installMasterPageSizeDelegation() {
     // Visual loading feedback — brief flash while the list re-renders.
     const listSel = key === "customer" ? "#cust-body"
       : key === "item" ? "#item-list"
-      : key === "paymentTerm" ? "#pt-list-body" : null;
+      : key === "paymentTerm" ? "#pt-list-body"
+      : key === "customerGroup" ? "#cg-list-body" : null;
     const listEl = listSel ? document.querySelector(listSel) : null;
     if (listEl) listEl.classList.add("master-list-loading");
     setStatus("Loading…");
@@ -8457,6 +8622,9 @@ function installMasterPageSizeDelegation() {
         } else if (key === "paymentTerm") {
           state.paymentTermListPage = 1;
           state.cache.masterRenderers?.paymentTerm?.();
+        } else if (key === "customerGroup") {
+          state.customerGroupListPage = 1;
+          state.cache.masterRenderers?.customerGroup?.();
         }
       } finally {
         const el = listSel ? document.querySelector(listSel) : null;
@@ -8476,11 +8644,15 @@ function isItemApiLocked() {
 function isPaymentTermApiLocked() {
   return !!(state.user?.masterApiLock?.managePaymentTermsByApi || state.cache.masterApiLock?.managePaymentTermsByApi);
 }
+function isCustomerGroupApiLocked() {
+  return !!(state.user?.masterApiLock?.manageCustomerGroupsByApi || state.cache.masterApiLock?.manageCustomerGroupsByApi);
+}
 
 function filteredCustomers() {
   const q = (state.customerListQuery || "").toLowerCase().trim();
   const defs = getCustomFieldDefinitions("customers");
   const cfFilters = state.customerCustomFieldFilters || {};
+  const groupFilter = state.customerGroupFilter || "";
   return state.cache.customers.filter((c) => {
     if (q) {
       const matches =
@@ -8488,6 +8660,13 @@ function filteredCustomers() {
         c.name?.toLowerCase().includes(q) ||
         c.taxId?.toLowerCase().includes(q);
       if (!matches) return false;
+    }
+    if (groupFilter) {
+      if (groupFilter === "__none__") {
+        if (c.customerGroup) return false;
+      } else if ((c.customerGroup?.id || "") !== groupFilter) {
+        return false;
+      }
     }
     return matchesCustomFieldFilters(c, defs, cfFilters);
   });
@@ -8760,7 +8939,7 @@ function buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk
               ${canBulk ? `<td class="cust-check-col"><input type="checkbox" class="cust-check-row" data-id="${c.id}" ${isChecked ? "checked" : ""} /></td>` : ""}
               <td>${start + i + 1}</td>
               <td><button class="cust-code-btn" data-id="${c.id}" data-code="${escHtml(c.customerCode)}">${escHtml(c.customerCode)}</button></td>
-              <td><button class="cust-name-btn" data-id="${c.id}" data-code="${escHtml(c.customerCode)}">${escHtml(c.name)}</button>${c.disabled ? ' <span class="cust-disabled-pill" title="Disabled — cannot be used for new deals/visits/quotations">Disabled</span>' : ""}</td>
+              <td><button class="cust-name-btn" data-id="${c.id}" data-code="${escHtml(c.customerCode)}">${escHtml(c.name)}</button>${c.customerGroup ? ` <span class="cust-group-pill" title="Customer group">${escHtml(c.customerGroup.name)}</span>` : ""}${c.disabled ? ' <span class="cust-disabled-pill" title="Disabled — cannot be used for new deals/visits/quotations">Disabled</span>' : ""}</td>
               <td>${ownerName ? escHtml(ownerName) : '<span class="muted small">—</span>'}</td>
               <td>${c.contacts?.length
                 ? `<button class="cust-badge-contact cust-contacts-btn" data-id="${c.id}" data-contacts='${escHtml(JSON.stringify(c.contacts))}' title="View contacts"><svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>${c.contacts.length}</button>`
@@ -8768,7 +8947,7 @@ function buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk
               <td><div class="cust-actions-cell">
                 <button class="cust-action-btn cust-360-btn" data-id="${c.id}" data-code="${escHtml(c.customerCode)}">360°</button>
                 ${!apiLocked && canReassign ? `<button class="cust-action-btn cust-reassign-btn" data-id="${c.id}" data-name="${escHtml(c.name)}" title="Reassign owner">Reassign</button>` : ""}
-                ${!apiLocked ? `<button class="cust-action-btn cust-edit-btn" data-id="${c.id}" data-customer='${escHtml(JSON.stringify({ id: c.id, customerCode: c.customerCode, name: c.name, customerType: c.customerType, taxId: c.taxId || "", defaultTermId: c.paymentTerm?.id || "", externalRef: c.externalRef || "", disabled: !!c.disabled }))}'>Edit</button>` : ""}
+                ${!apiLocked ? `<button class="cust-action-btn cust-edit-btn" data-id="${c.id}" data-customer='${escHtml(JSON.stringify({ id: c.id, customerCode: c.customerCode, name: c.name, customerType: c.customerType, taxId: c.taxId || "", defaultTermId: c.paymentTerm?.id || "", externalRef: c.externalRef || "", disabled: !!c.disabled, customerGroupId: c.customerGroup?.id || "" }))}'>Edit</button>` : ""}
                 ${!apiLocked && isAdmin ? `<button class="cust-action-btn cust-delete-btn danger" data-id="${c.id}" data-name="${escHtml(c.name)}">Delete</button>` : ""}
               </div></td>
             </tr>`;
@@ -9259,6 +9438,13 @@ function renderCustomerListSection(container, termOptions) {
             ${canSeeTeam || canSeeAll ? `<button class="cust-scope-pill ${state.customerScope === "team" ? "active" : ""}" data-scope="team">My Team</button>` : ""}
             ${canSeeAll ? `<button class="cust-scope-pill ${state.customerScope === "all" ? "active" : ""}" data-scope="all">All</button>` : ""}
           </div>` : ""}
+        ${(state.cache.customerGroups || []).length ? `
+          <select class="ncm-input" id="cust-group-filter" style="width:auto;min-width:160px">
+            <option value="" ${!state.customerGroupFilter ? "selected" : ""}>All groups</option>
+            <option value="__none__" ${state.customerGroupFilter === "__none__" ? "selected" : ""}>No group</option>
+            ${(state.cache.customerGroups || []).filter((g) => g.isActive).map((g) => `<option value="${g.id}" ${state.customerGroupFilter === g.id ? "selected" : ""}>${escHtml(g.name)}</option>`).join("")}
+          </select>
+        ` : ""}
         ${showCfFilters ? `
           <button class="ghost small" id="cust-filter-toggle">${state.masterFiltersOpen ? "Hide" : "Show"} filters${activeCfFilterCount ? ` (${activeCfFilterCount})` : ""}</button>
         ` : ""}
@@ -9310,6 +9496,14 @@ function renderCustomerListSection(container, termOptions) {
   // Find duplicates
   container.querySelector("#cust-find-dupes-btn")?.addEventListener("click", () => {
     openDuplicatesModal();
+  });
+
+  // Customer group filter
+  container.querySelector("#cust-group-filter")?.addEventListener("change", (e) => {
+    state.customerGroupFilter = e.target.value || "";
+    state.customerListPage = 1;
+    const bodyEl = container.querySelector("#cust-body");
+    refreshCustBody(bodyEl, termOptions);
   });
 
   // Custom field filter toggle + form
@@ -9653,6 +9847,16 @@ function openNewCustomerModal(termOptions) {
               </select>
             </div>` : ""}
           </div>
+
+          <div class="ncm-row">
+            <div class="ncm-field">
+              <label class="ncm-label" for="ncm-group">Customer Group</label>
+              <select class="ncm-input" id="ncm-group" name="customerGroupId">
+                <option value="">No group</option>
+                ${(state.cache.customerGroups || []).filter((g) => g.isActive).map((g) => `<option value="${g.id}">${escHtml(g.code)} — ${escHtml(g.name)}</option>`).join("")}
+              </select>
+            </div>
+          </div>
         </div>
 
         <!-- ── Section 2: Addresses ── -->
@@ -9981,6 +10185,7 @@ function openNewCustomerModal(termOptions) {
     }
 
     const externalRefRaw = String(formData.get("externalRef") ?? "").trim();
+    const customerGroupIdRaw = String(formData.get("customerGroupId") ?? "").trim();
     const payload = {
       customerCode: String(formData.get("customerCode") ?? "").trim(),
       name:         String(formData.get("name") ?? "").trim(),
@@ -9989,6 +10194,7 @@ function openNewCustomerModal(termOptions) {
       defaultTermId: String(formData.get("defaultTermId") ?? ""),
       ownerId:      String(formData.get("ownerId") ?? state.user?.id ?? ""),
       externalRef:  externalRefRaw || undefined,
+      customerGroupId: customerGroupIdRaw || undefined,
     };
 
     if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "Creating…"; }
@@ -10064,6 +10270,13 @@ function openEditCustomerModal(cust, termOptions) {
           </select>
         </div>
         <div class="ncm-row">
+          <label class="ncm-label" for="ecm-group">Customer Group</label>
+          <select class="ncm-input" id="ecm-group" name="customerGroupId">
+            <option value="">No group</option>
+            ${(state.cache.customerGroups || []).filter((g) => g.isActive || g.id === cust.customerGroupId).map((g) => `<option value="${g.id}" ${g.id === cust.customerGroupId ? "selected" : ""}>${escHtml(g.code)} — ${escHtml(g.name)}</option>`).join("")}
+          </select>
+        </div>
+        <div class="ncm-row">
           <label class="ncm-label" for="ecm-disabled">Status</label>
           <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
             <input type="checkbox" id="ecm-disabled" name="disabled" ${cust.disabled ? "checked" : ""} />
@@ -10116,6 +10329,7 @@ function openEditCustomerModal(cust, termOptions) {
       return;
     }
     const externalRefEdit = String(formData.get("externalRef") ?? "").trim();
+    const customerGroupIdEdit = String(formData.get("customerGroupId") ?? "").trim();
     const payload = {
       customerCode:  String(formData.get("customerCode") ?? "").trim(),
       name:          String(formData.get("name") ?? "").trim(),
@@ -10124,6 +10338,7 @@ function openEditCustomerModal(cust, termOptions) {
       defaultTermId: String(formData.get("defaultTermId") ?? "") || undefined,
       externalRef:   externalRefEdit || undefined,
       disabled:      !!formData.get("disabled"),
+      customerGroupId: customerGroupIdEdit || null,
     };
     if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "Saving…"; }
     try {
@@ -10147,10 +10362,11 @@ function syncMappingRowHtml(idx, m, lockedEntity) {
   const entity = lockedEntity || d.entityType || "CUSTOMER";
   const entityCell = lockedEntity
     ? `<input type="hidden" name="entityType" value="${escHtml(lockedEntity)}">`
-    : `<select name="entityType" class="form-control sync-mapping-entity" style="width:130px">
+    : `<select name="entityType" class="form-control sync-mapping-entity" style="width:150px">
          <option value="CUSTOMER" ${entity === "CUSTOMER" ? "selected" : ""}>Customer</option>
          <option value="ITEM" ${entity === "ITEM" ? "selected" : ""}>Item</option>
          <option value="PAYMENT_TERM" ${entity === "PAYMENT_TERM" ? "selected" : ""}>Payment Term</option>
+         <option value="CUSTOMER_GROUP" ${entity === "CUSTOMER_GROUP" ? "selected" : ""}>Customer Group</option>
        </select>`;
   return `
     <div class="sync-mapping-row" data-row-idx="${idx}" style="display:flex;gap:var(--sp-2);align-items:flex-start;margin-bottom:var(--sp-2);flex-wrap:wrap">
@@ -10246,21 +10462,34 @@ async function loadMaster() {
   const scopeParam = state.customerScope !== "mine"
     ? `?scope=${encodeURIComponent(state.customerScope)}`
     : "";
-  const [paymentTerms, customers, items, paymentTermCustomFields, customerCustomFields, itemCustomFields] = await Promise.all([
+  const [
+    paymentTerms,
+    customers,
+    items,
+    customerGroups,
+    paymentTermCustomFields,
+    customerCustomFields,
+    itemCustomFields,
+    customerGroupCustomFields
+  ] = await Promise.all([
     api("/payment-terms"),
     api(`/customers${scopeParam}`),
     api("/items"),
+    api("/customer-groups"),
     api("/custom-fields/payment-term"),
     api("/custom-fields/customer"),
-    api("/custom-fields/item")
+    api("/custom-fields/item"),
+    api("/custom-fields/customer-group")
   ]);
   state.cache.paymentTerms = paymentTerms;
   state.cache.customers = customers;
   state.cache.items = items;
+  state.cache.customerGroups = customerGroups;
   state.cache.customFieldDefinitions = {
     "payment-terms": paymentTermCustomFields,
     customers: customerCustomFields,
-    items: itemCustomFields
+    items: itemCustomFields,
+    "customer-groups": customerGroupCustomFields
   };
   renderMasterData(paymentTerms);
 }
@@ -10326,7 +10555,7 @@ async function loadSettings() {
   state.cache.salesReps = salesReps;
   state.cache.integrationCredentials = integrationCredentials;
   state.cache.teams = teams;
-  state.cache.masterApiLock = masterApiLock || { manageCustomersByApi: false, manageItemsByApi: false, managePaymentTermsByApi: false };
+  state.cache.masterApiLock = masterApiLock || { manageCustomersByApi: false, manageItemsByApi: false, managePaymentTermsByApi: false, manageCustomerGroupsByApi: false };
   state.cache.allUsers = tenantSummary?.users || [];
   state.cache.tenantInfo = tenantSummary ? { id: tenantSummary.id, name: tenantSummary.name, slug: tenantSummary.slug, timezone: tenantSummary.timezone ?? "Asia/Bangkok" } : null;
   if (isAdmin) await loadDelegations();

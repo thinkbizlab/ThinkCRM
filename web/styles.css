@@ -3667,6 +3667,20 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   vertical-align: middle;
 }
 
+.cust-group-pill {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 8px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--accent);
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  vertical-align: middle;
+}
+
 /* Bulk toolbar */
 .cust-bulk-toolbar {
   position: sticky;

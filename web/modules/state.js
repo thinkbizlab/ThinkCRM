@@ -8,10 +8,12 @@ export const state = {
     paymentTerms: [],
     customers: [],
     items: [],
+    customerGroups: [],
     customFieldDefinitions: {
       "payment-terms": [],
       customers: [],
-      items: []
+      items: [],
+      "customer-groups": []
     },
     kanban: null,
     dealStages: [],
@@ -38,6 +40,7 @@ export const state = {
   customerSelectedIds: new Set(),
   paymentTermSelectedIds: new Set(),
   customerCustomFieldFilters: {},
+  customerGroupFilter: "",
   itemCustomFieldFilters: {},
   masterFiltersOpen: false,
   customerCreateOpen: false,

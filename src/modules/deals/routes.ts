@@ -731,12 +731,16 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
   app.get("/deals", async (request) => {
     const tenantId = requireTenantId(request);
     const visibleUserIdList = [...(await listVisibleUserIds(request))];
-    const { customerId } = request.query as { customerId?: string };
+    const { customerId, customerGroupId } = request.query as {
+      customerId?: string;
+      customerGroupId?: string;
+    };
     const deals = await prisma.deal.findMany({
       where: {
         tenantId,
         ownerId: { in: visibleUserIdList },
-        ...(customerId ? { customerId } : {})
+        ...(customerId ? { customerId } : {}),
+        ...(customerGroupId ? { customer: { customerGroupId } } : {})
       },
       include: { customer: true, stage: true, owner: true },
       orderBy: { createdAt: "desc" }
