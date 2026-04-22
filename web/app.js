@@ -4750,7 +4750,15 @@ function renderSettings() {
                 </div>
                 ${src.sourceType === "REST" ? (() => {
                   const cfg = src.configJson || {};
-                  const qpJson = cfg.queryParams ? JSON.stringify(cfg.queryParams, null, 2) : "";
+                  const qpRows = cfg.queryParams && typeof cfg.queryParams === "object" ? Object.entries(cfg.queryParams) : [];
+                  const rowsHtml = qpRows.length
+                    ? qpRows.map(([k, v]) => `
+                        <div class="qp-row" style="display:grid;grid-template-columns:1fr 1fr auto;gap:var(--sp-2);margin-bottom:var(--sp-2)">
+                          <input type="text" name="qpKey" value="${escHtml(k)}" placeholder="key" class="form-control">
+                          <input type="text" name="qpVal" value="${escHtml(String(v))}" placeholder="value" class="form-control">
+                          <button type="button" class="ghost small qp-remove">&times;</button>
+                        </div>`).join("")
+                    : "";
                   return `
                     <div class="form-row">
                       <label class="form-label">Entity to pull
@@ -4772,9 +4780,9 @@ function renderSettings() {
                       <label class="form-label">Auth value (leave blank to keep existing) <input type="text" name="authValue" placeholder="${cfg.authValueEnc ? "•••• (stored)" : "Bearer ey…"}" class="form-control"></label>
                     </div>
                     <div class="form-row">
-                      <label class="form-label">Query parameters (JSON object)
-                        <textarea name="queryParams" class="form-control" rows="2" placeholder='{"limit": 100}'>${escHtml(qpJson)}</textarea>
-                      </label>
+                      <label class="form-label">Query parameters (optional)</label>
+                      <div class="qp-rows" data-qp-rows="${src.id}">${rowsHtml}</div>
+                      <button type="button" class="ghost small" data-qp-add="${src.id}">+ Add parameter</button>
                     </div>
                   `;
                 })() : ""}
@@ -4822,9 +4830,9 @@ function renderSettings() {
                 <label class="form-label">Auth value (stored encrypted) <input type="text" name="authValue" placeholder="Bearer ey…" class="form-control"></label>
               </div>
               <div class="form-row">
-                <label class="form-label">Query parameters (optional, JSON)
-                  <textarea name="queryParams" placeholder='{"limit": 100, "status": "active"}' class="form-control" rows="2"></textarea>
-                </label>
+                <label class="form-label">Query parameters (optional)</label>
+                <div class="qp-rows" data-qp-rows="create"></div>
+                <button type="button" class="ghost small" data-qp-add="create">+ Add parameter</button>
               </div>
               <p class="muted" style="font-size:0.78rem;margin:0">Request sent: <code>GET &lt;endpoint&gt;?&lt;params&gt;</code> with <code>Accept: application/json</code> + auth header. Pull runs nightly at 02:00 (tenant timezone) for every ENABLED REST source, plus whenever you click <strong>Pull now</strong>.</p>
             </div>
@@ -5680,6 +5688,38 @@ function renderSettings() {
   });
 
   // Source CRUD
+  function readQueryParamRows(container) {
+    const out = {};
+    if (!container) return out;
+    container.querySelectorAll(".qp-row").forEach(row => {
+      const k = row.querySelector('input[name="qpKey"]')?.value?.trim();
+      const v = row.querySelector('input[name="qpVal"]')?.value?.trim();
+      if (k) out[k] = v ?? "";
+    });
+    return out;
+  }
+  function appendQueryParamRow(container) {
+    if (!container) return;
+    const row = document.createElement("div");
+    row.className = "qp-row";
+    row.style.cssText = "display:grid;grid-template-columns:1fr 1fr auto;gap:var(--sp-2);margin-bottom:var(--sp-2)";
+    row.innerHTML = `
+      <input type="text" name="qpKey" placeholder="key" class="form-control">
+      <input type="text" name="qpVal" placeholder="value" class="form-control">
+      <button type="button" class="ghost small qp-remove">&times;</button>`;
+    container.appendChild(row);
+  }
+  views.settings.querySelectorAll("[data-qp-add]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      appendQueryParamRow(btn.parentElement?.querySelector(`[data-qp-rows="${btn.dataset.qpAdd}"]`));
+    });
+  });
+  views.settings.addEventListener("click", (e) => {
+    if (e.target instanceof HTMLElement && e.target.classList.contains("qp-remove")) {
+      e.target.closest(".qp-row")?.remove();
+    }
+  });
+
   qs("#sync-create-source-btn")?.addEventListener("click", () => {
     const f = qs("#sync-source-form-wrap");
     if (f) f.style.display = f.style.display === "none" ? "block" : "none";
@@ -5707,18 +5747,8 @@ function renderSettings() {
       const val = String(fd.get("authValue") || "").trim();
       if (hdr) configJson.authHeaderName = hdr;
       if (val) configJson.authValue = val; // backend encrypts → authValueEnc
-      const qpRaw = String(fd.get("queryParams") || "").trim();
-      if (qpRaw) {
-        try {
-          const parsed = JSON.parse(qpRaw);
-          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-            setStatus("Query parameters must be a JSON object."); return;
-          }
-          configJson.queryParams = parsed;
-        } catch {
-          setStatus("Query parameters is not valid JSON."); return;
-        }
-      }
+      const qp = readQueryParamRows(e.currentTarget.querySelector('[data-qp-rows="create"]'));
+      if (Object.keys(qp).length) configJson.queryParams = qp;
     }
     try {
       await api("/integrations/master-data/sources", {
@@ -5789,20 +5819,7 @@ function renderSettings() {
         };
         const authValue = String(fd.get("authValue") || "").trim();
         if (authValue) configJson.authValue = authValue; // backend encrypts, otherwise preserves existing
-        const qpRaw = String(fd.get("queryParams") || "").trim();
-        if (qpRaw) {
-          try {
-            const parsed = JSON.parse(qpRaw);
-            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-              setStatus("Query parameters must be a JSON object."); return;
-            }
-            configJson.queryParams = parsed;
-          } catch {
-            setStatus("Query parameters is not valid JSON."); return;
-          }
-        } else {
-          configJson.queryParams = {};
-        }
+        configJson.queryParams = readQueryParamRows(form.querySelector(`[data-qp-rows="${form.dataset.sourceId}"]`));
         body.configJson = configJson;
       }
       try {
