@@ -1,10 +1,13 @@
 import type { FastifyPluginAsync } from "fastify";
+import os from "node:os";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
-import { isSuperAdmin, requireSuperAdmin } from "../../lib/http.js";
+import { isSuperAdmin, requireSuperAdmin, requireUserId } from "../../lib/http.js";
 import { prisma } from "../../lib/prisma.js";
 import { logAuditEvent } from "../../lib/audit.js";
 import { getTenantR2Storage, isR2Configured } from "../../lib/r2-storage.js";
 import { removeVercelDomain } from "../../lib/vercel-domains.js";
+import { sendInvoiceEmail } from "../billing/invoice-email.js";
 
 const tenantUpdateSchema = z.object({
   name: z.string().min(2).max(120).trim().optional(),
@@ -254,4 +257,272 @@ export const superAdminRoutes: FastifyPluginAsync = async (app) => {
     const totalUsedBytes = storageResults.reduce((sum, t) => sum + Math.max(0, t.usedBytes), 0);
     return { configured: true, totalUsedBytes, tenants: storageResults };
   });
+
+  // ── Realtime tenant activity ─────────────────────────────────────────────
+  // One response covers: platform totals + per-tenant online count + today's
+  // activity + 7-day audit sparkline. Frontend polls this every 20s.
+  app.get("/super-admin/realtime", async () => {
+    const now = new Date();
+    const threeMinAgo = new Date(now.getTime() - 3 * 60 * 1000);
+    const startOfDayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const sevenDaysAgo = new Date(startOfDayUtc);
+    sevenDaysAgo.setUTCDate(sevenDaysAgo.getUTCDate() - 6);
+
+    const [tenants, onlineGroups, loginGroups, dealGroups, visitGroups, sparkRows] = await Promise.all([
+      prisma.tenant.findMany({
+        orderBy: { createdAt: "desc" },
+        select: { id: true, name: true, slug: true, isActive: true },
+      }),
+      prisma.user.groupBy({
+        by: ["tenantId"],
+        where: { lastSeenAt: { gte: threeMinAgo } },
+        _count: { _all: true },
+      }),
+      prisma.auditLog.groupBy({
+        by: ["tenantId"],
+        where: { action: "LOGIN", createdAt: { gte: startOfDayUtc } },
+        _count: { _all: true },
+      }),
+      prisma.deal.groupBy({
+        by: ["tenantId"],
+        where: { createdAt: { gte: startOfDayUtc } },
+        _count: { _all: true },
+      }),
+      prisma.visit.groupBy({
+        by: ["tenantId"],
+        where: { createdAt: { gte: startOfDayUtc } },
+        _count: { _all: true },
+      }),
+      // 7-day audit activity bucketed by day, grouped by tenant
+      prisma.$queryRaw<{ tenantId: string; day: Date; n: bigint }[]>`
+        SELECT "tenantId", DATE_TRUNC('day', "createdAt") AS day, COUNT(*)::bigint AS n
+        FROM "AuditLog"
+        WHERE "createdAt" >= ${sevenDaysAgo}
+        GROUP BY "tenantId", day
+        ORDER BY day ASC
+      `,
+    ]);
+
+    const onlineByTenant = new Map(onlineGroups.map((g) => [g.tenantId, g._count._all]));
+    const loginsByTenant = new Map(loginGroups.map((g) => [g.tenantId, g._count._all]));
+    const dealsByTenant  = new Map(dealGroups.map((g)  => [g.tenantId, g._count._all]));
+    const visitsByTenant = new Map(visitGroups.map((g) => [g.tenantId, g._count._all]));
+
+    // Build sparkline array of 7 ints per tenant. Day 0 = 6 days ago, day 6 = today.
+    const sparkByTenant = new Map<string, number[]>();
+    for (const row of sparkRows) {
+      const dayStart = new Date(Date.UTC(row.day.getUTCFullYear(), row.day.getUTCMonth(), row.day.getUTCDate()));
+      const offsetDays = Math.floor((dayStart.getTime() - sevenDaysAgo.getTime()) / (86400 * 1000));
+      if (offsetDays < 0 || offsetDays > 6) continue;
+      const arr = sparkByTenant.get(row.tenantId) ?? new Array(7).fill(0);
+      arr[offsetDays] = Number(row.n);
+      sparkByTenant.set(row.tenantId, arr);
+    }
+
+    const tenantSnapshot = tenants.map((t) => ({
+      id: t.id,
+      name: t.name,
+      slug: t.slug,
+      isActive: t.isActive,
+      onlineUsers: onlineByTenant.get(t.id) ?? 0,
+      loginsToday: loginsByTenant.get(t.id) ?? 0,
+      dealsCreatedToday: dealsByTenant.get(t.id) ?? 0,
+      visitsCreatedToday: visitsByTenant.get(t.id) ?? 0,
+      spark: sparkByTenant.get(t.id) ?? new Array(7).fill(0),
+    }));
+
+    const onlineTotal  = tenantSnapshot.reduce((s, t) => s + t.onlineUsers, 0);
+    const loginsTotal  = tenantSnapshot.reduce((s, t) => s + t.loginsToday, 0);
+    const dealsTotal   = tenantSnapshot.reduce((s, t) => s + t.dealsCreatedToday, 0);
+    const activeCount  = tenantSnapshot.filter((t) => t.isActive).length;
+
+    return {
+      generatedAt: now.toISOString(),
+      totals: {
+        onlineUsers: onlineTotal,
+        loginsToday: loginsTotal,
+        dealsCreatedToday: dealsTotal,
+        activeTenants: activeCount,
+        totalTenants: tenantSnapshot.length,
+      },
+      tenants: tenantSnapshot,
+    };
+  });
+
+  // ── Infrastructure monitor ───────────────────────────────────────────────
+  // What the Node process can truthfully report + DB-side queries. The sample
+  // instance fields reflect the CURRENT Vercel function instance only.
+  app.get("/super-admin/infra", async () => {
+    const mem = process.memoryUsage();
+
+    type DbStatsRow = { active: number; idle: number; max: number; dbSize: bigint };
+    let dbStats: DbStatsRow = { active: 0, idle: 0, max: 0, dbSize: BigInt(0) };
+    try {
+      const rows = await prisma.$queryRaw<DbStatsRow[]>`
+        SELECT
+          (SELECT count(*)::int FROM pg_stat_activity WHERE state = 'active') AS active,
+          (SELECT count(*)::int FROM pg_stat_activity WHERE state = 'idle')   AS idle,
+          (SELECT setting::int FROM pg_settings WHERE name = 'max_connections') AS max,
+          pg_database_size(current_database()) AS "dbSize"
+      `;
+      if (rows[0]) dbStats = rows[0];
+    } catch (err) {
+      // Neon may restrict pg_stat_activity access; fall through with zeros
+      request_log_warn(err);
+    }
+
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    const auditEventsLastHour = await prisma.auditLog.count({ where: { createdAt: { gte: oneHourAgo } } });
+
+    return {
+      sampleInstance: {
+        rssBytes: mem.rss,
+        heapUsedBytes: mem.heapUsed,
+        heapTotalBytes: mem.heapTotal,
+        externalBytes: mem.external,
+        uptimeSec: Math.round(process.uptime()),
+        nodeVersion: process.version,
+        region: process.env.VERCEL_REGION ?? process.env.AWS_REGION ?? null,
+        loadAvg: os.loadavg(),
+      },
+      database: {
+        activeConnections: dbStats.active,
+        idleConnections: dbStats.idle,
+        maxConnections: dbStats.max,
+        dbSizeBytes: Number(dbStats.dbSize),
+      },
+      audit: {
+        auditEventsLastHour,
+      },
+      external: {
+        vercelDashboardUrl: "https://vercel.com/dashboard",
+        neonDashboardUrl: "https://console.neon.tech/",
+        sentryDashboardUrl: process.env.SENTRY_DSN ? "https://sentry.io/" : null,
+      },
+    };
+  });
+
+  // ── Subscriptions overview ───────────────────────────────────────────────
+  app.get("/super-admin/subscriptions", async () => {
+    const subs = await prisma.subscription.findMany({
+      orderBy: [{ status: "asc" }, { billingPeriodEnd: "asc" }],
+      select: {
+        id: true,
+        status: true,
+        billingCycle: true,
+        seatCount: true,
+        seatPriceCents: true,
+        currency: true,
+        billingPeriodStart: true,
+        billingPeriodEnd: true,
+        trialEndsAt: true,
+        externalCustomerId: true,
+        tenant: { select: { id: true, name: true, slug: true, isActive: true } },
+      },
+    });
+
+    const now = Date.now();
+    const rows = subs.map((s) => {
+      const gross = (s.seatCount * s.seatPriceCents) / 100;
+      const mrr = s.billingCycle === "YEARLY" ? gross / 12 : gross;
+      const daysUntilRenewal = Math.ceil((s.billingPeriodEnd.getTime() - now) / 86_400_000);
+      const daysUntilTrialEnd = s.trialEndsAt
+        ? Math.ceil((s.trialEndsAt.getTime() - now) / 86_400_000)
+        : null;
+      return {
+        subscriptionId: s.id,
+        tenantId: s.tenant.id,
+        tenantName: s.tenant.name,
+        tenantSlug: s.tenant.slug,
+        tenantActive: s.tenant.isActive,
+        status: s.status,
+        billingCycle: s.billingCycle,
+        seatCount: s.seatCount,
+        seatPriceCents: s.seatPriceCents,
+        currency: s.currency,
+        billingPeriodStart: s.billingPeriodStart,
+        billingPeriodEnd: s.billingPeriodEnd,
+        trialEndsAt: s.trialEndsAt,
+        daysUntilRenewal,
+        daysUntilTrialEnd,
+        mrrCents: Math.round(mrr * 100),
+        stripeCustomerId: s.externalCustomerId,
+      };
+    });
+
+    const totals = rows.reduce(
+      (acc, r) => {
+        acc.mrrCents += r.mrrCents;
+        acc.byStatus[r.status] = (acc.byStatus[r.status] ?? 0) + 1;
+        return acc;
+      },
+      { mrrCents: 0, byStatus: {} as Record<string, number> }
+    );
+
+    return {
+      totals: {
+        ...totals,
+        arrCents: totals.mrrCents * 12,
+      },
+      subscriptions: rows,
+    };
+  });
+
+  // ── Tenant invoices (list) ───────────────────────────────────────────────
+  app.get("/super-admin/tenants/:tenantId/invoices", async (request) => {
+    const { tenantId } = request.params as { tenantId: string };
+    const invoices = await prisma.tenantInvoice.findMany({
+      where: { tenantId },
+      orderBy: { invoiceMonth: "desc" },
+      select: {
+        id: true,
+        invoiceMonth: true,
+        periodStart: true,
+        periodEnd: true,
+        currency: true,
+        seatsBaseCents: true,
+        storageOverageCents: true,
+        prorationAdjustmentsCents: true,
+        totalDueCents: true,
+        status: true,
+        finalizedAt: true,
+        createdAt: true,
+      },
+    });
+
+    // Find the last INVOICE_EMAIL_SENT audit entry per invoice so the UI can
+    // show "sentAt" without a schema change.
+    const invoiceIds = invoices.map((i) => i.id);
+    const sentRows = invoiceIds.length === 0
+      ? []
+      : await prisma.$queryRaw<{ invoiceId: string; sentAt: Date }[]>`
+          SELECT detail->>'invoiceId' AS "invoiceId", MAX("createdAt") AS "sentAt"
+          FROM "AuditLog"
+          WHERE action = 'INVOICE_EMAIL_SENT'
+            AND "tenantId" = ${tenantId}
+            AND detail->>'invoiceId' IN (${Prisma.join(invoiceIds)})
+          GROUP BY detail->>'invoiceId'
+        `;
+    const sentMap = new Map(sentRows.map((r) => [r.invoiceId, r.sentAt]));
+
+    return invoices.map((i) => ({ ...i, sentAt: sentMap.get(i.id) ?? null }));
+  });
+
+  // ── Send / resend invoice email ──────────────────────────────────────────
+  app.post("/super-admin/tenants/:tenantId/invoices/:invoiceId/send", async (request, reply) => {
+    const { tenantId, invoiceId } = request.params as { tenantId: string; invoiceId: string };
+    const actorUserId = requireUserId(request);
+    const result = await sendInvoiceEmail({ tenantId, invoiceId, actorUserId });
+    if (!result.ok) {
+      return reply.status(400).send(result);
+    }
+    return result;
+  });
 };
+
+// Tiny local helper — scoped to this file — so the tenant-scoped queries above
+// don't swallow exceptions silently.
+function request_log_warn(err: unknown): void {
+  const msg = err instanceof Error ? err.message : String(err);
+  console.warn(`[super-admin/infra] db stats unavailable: ${msg}`);
+}

@@ -1508,6 +1508,20 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     return { ok: true };
   });
 
+  // ── Presence heartbeat ─────────────────────────────────────────────────────
+  // Bumps User.lastSeenAt for the authenticated user. Clients ping ~every 60s
+  // while the tab is visible; "online" is defined as lastSeenAt > now-3min.
+  app.post("/auth/heartbeat", async (request, reply) => {
+    requireAuth(request);
+    const userId = requireUserId(request);
+    await prisma.user.update({
+      where: { id: userId },
+      data: { lastSeenAt: new Date() },
+      select: { id: true },
+    });
+    return reply.status(204).send();
+  });
+
   // ── Device registration (push tokens) ─────────────────────────────────────────
 
   app.post("/auth/devices", async (request) => {

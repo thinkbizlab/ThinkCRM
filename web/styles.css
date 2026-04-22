@@ -1224,7 +1224,7 @@ body {
 
 button { font-family: 'Kanit', sans-serif; cursor: pointer; }
 
-button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-logout-btn):not(.topnav-user):not(.login-submit):not(.sp-close-btn):not(.sp-text-btn):not(.sp-view-all-btn):not(.spi):not(.master-page-btn):not(.user-dropdown-item):not(.cal-filter-apply):not(.cal-filter-reset):not(.cal-autocomplete-clear):not(.cal-autocomplete-item):not(.ms-dropdown-btn):not(.ms-select-all):not(.ms-clear):not(.vp-chip):not(.vn-lang-btn):not(.section-info-btn):not(.modal-close-btn):not(.deal-detail-btn):not(.deal-menu-btn):not(.lr-confirm-btn):not(.intg-info-btn):not(.oauth-btn):not(.profile-avatar-btn):not(.team-ch-toggle-btn):not(.cron-run-now-btn):not(.cron-save-btn):not(.cron-load-more-btn):not(.cron-history-toggle):not(.cron-help-btn):not(.notif-channel-help-btn):not(.teams-app-pkg-btn):not(.notif-teams-dm-test-btn):not(.teams-push-all-btn):not(.onboarding-wizard-dismiss):not(.ob-step-action):not(.ob-hero-close):not(.ob-later-btn):not(.demo-generate-btn):not(.demo-delete-btn):not(.btn-danger):not(.btn-danger-outline):not(.passkey-register-btn):not(.passkey-delete-btn):not(.passkey-admin-btn):not(.settings-nav-item):not(.settings-sidenav-collapser):not(.segmented-item) {
+button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-logout-btn):not(.topnav-user):not(.login-submit):not(.sp-close-btn):not(.sp-text-btn):not(.sp-view-all-btn):not(.spi):not(.master-page-btn):not(.user-dropdown-item):not(.cal-filter-apply):not(.cal-filter-reset):not(.cal-autocomplete-clear):not(.cal-autocomplete-item):not(.ms-dropdown-btn):not(.ms-select-all):not(.ms-clear):not(.vp-chip):not(.vn-lang-btn):not(.section-info-btn):not(.modal-close-btn):not(.deal-detail-btn):not(.deal-menu-btn):not(.lr-confirm-btn):not(.intg-info-btn):not(.oauth-btn):not(.profile-avatar-btn):not(.team-ch-toggle-btn):not(.cron-run-now-btn):not(.cron-save-btn):not(.cron-load-more-btn):not(.cron-history-toggle):not(.cron-help-btn):not(.notif-channel-help-btn):not(.teams-app-pkg-btn):not(.notif-teams-dm-test-btn):not(.teams-push-all-btn):not(.onboarding-wizard-dismiss):not(.ob-step-action):not(.ob-hero-close):not(.ob-later-btn):not(.demo-generate-btn):not(.demo-delete-btn):not(.btn-danger):not(.btn-danger-outline):not(.passkey-register-btn):not(.passkey-delete-btn):not(.passkey-admin-btn):not(.settings-nav-item):not(.settings-sidenav-collapser):not(.segmented-item):not(.sa-tab) {
   background: var(--accent);
   color: var(--accent-text);
   border: none;
@@ -1238,12 +1238,12 @@ button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-l
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
 }
 
-button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-logout-btn):not(.topnav-user):not(.login-submit):not(.sp-close-btn):not(.sp-text-btn):not(.sp-view-all-btn):not(.spi):not(.master-page-btn):not(.user-dropdown-item):not(.cal-filter-apply):not(.cal-filter-reset):not(.cal-autocomplete-clear):not(.cal-autocomplete-item):not(.ms-dropdown-btn):not(.ms-select-all):not(.ms-clear):not(.vp-chip):not(.vn-lang-btn):not(.section-info-btn):not(.modal-close-btn):not(.deal-detail-btn):not(.deal-menu-btn):not(.cron-run-now-btn):not(.cron-save-btn):not(.cron-load-more-btn):not(.cron-history-toggle):not(.cron-help-btn):not(.notif-channel-help-btn):not(.teams-app-pkg-btn):not(.notif-teams-dm-test-btn):not(.teams-push-all-btn):not(.onboarding-wizard-dismiss):not(.demo-generate-btn):not(.demo-delete-btn):not(.btn-danger):not(.btn-danger-outline):not(.passkey-register-btn):not(.passkey-delete-btn):not(.passkey-admin-btn):not(.settings-nav-item):not(.settings-sidenav-collapser):not(.segmented-item):hover {
+button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-logout-btn):not(.topnav-user):not(.login-submit):not(.sp-close-btn):not(.sp-text-btn):not(.sp-view-all-btn):not(.spi):not(.master-page-btn):not(.user-dropdown-item):not(.cal-filter-apply):not(.cal-filter-reset):not(.cal-autocomplete-clear):not(.cal-autocomplete-item):not(.ms-dropdown-btn):not(.ms-select-all):not(.ms-clear):not(.vp-chip):not(.vn-lang-btn):not(.section-info-btn):not(.modal-close-btn):not(.deal-detail-btn):not(.deal-menu-btn):not(.cron-run-now-btn):not(.cron-save-btn):not(.cron-load-more-btn):not(.cron-history-toggle):not(.cron-help-btn):not(.notif-channel-help-btn):not(.teams-app-pkg-btn):not(.notif-teams-dm-test-btn):not(.teams-push-all-btn):not(.onboarding-wizard-dismiss):not(.demo-generate-btn):not(.demo-delete-btn):not(.btn-danger):not(.btn-danger-outline):not(.passkey-register-btn):not(.passkey-delete-btn):not(.passkey-admin-btn):not(.settings-nav-item):not(.settings-sidenav-collapser):not(.segmented-item):not(.sa-tab):hover {
   background: var(--accent-bright);
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
 }
 
-button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-logout-btn):not(.topnav-user):not(.login-submit):not(.sp-close-btn):not(.sp-text-btn):not(.sp-view-all-btn):not(.spi):not(.master-page-btn):not(.user-dropdown-item):not(.cal-filter-apply):not(.cal-filter-reset):not(.cal-autocomplete-clear):not(.cal-autocomplete-item):not(.ms-dropdown-btn):not(.ms-select-all):not(.ms-clear):not(.vp-chip):not(.vn-lang-btn):not(.section-info-btn):not(.modal-close-btn):not(.notif-channel-help-btn):not(.teams-app-pkg-btn):not(.notif-teams-dm-test-btn):not(.teams-push-all-btn):not(.onboarding-wizard-dismiss):not(.demo-generate-btn):not(.demo-delete-btn):not(.btn-danger):not(.btn-danger-outline):not(.passkey-register-btn):not(.passkey-delete-btn):not(.passkey-admin-btn):not(.settings-nav-item):not(.settings-sidenav-collapser):not(.segmented-item):disabled {
+button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-logout-btn):not(.topnav-user):not(.login-submit):not(.sp-close-btn):not(.sp-text-btn):not(.sp-view-all-btn):not(.spi):not(.master-page-btn):not(.user-dropdown-item):not(.cal-filter-apply):not(.cal-filter-reset):not(.cal-autocomplete-clear):not(.cal-autocomplete-item):not(.ms-dropdown-btn):not(.ms-select-all):not(.ms-clear):not(.vp-chip):not(.vn-lang-btn):not(.section-info-btn):not(.modal-close-btn):not(.notif-channel-help-btn):not(.teams-app-pkg-btn):not(.notif-teams-dm-test-btn):not(.teams-push-all-btn):not(.onboarding-wizard-dismiss):not(.demo-generate-btn):not(.demo-delete-btn):not(.btn-danger):not(.btn-danger-outline):not(.passkey-register-btn):not(.passkey-delete-btn):not(.passkey-admin-btn):not(.settings-nav-item):not(.settings-sidenav-collapser):not(.segmented-item):not(.sa-tab):disabled {
   opacity: 0.5;
   cursor: default;
 }
@@ -1266,11 +1266,11 @@ button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-l
 
 /* ── GRADIENT ACCENT ─────────────────────────────────────── */
 
-html.accent-gradient-on button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-logout-btn):not(.topnav-user):not(.login-submit):not(.sp-close-btn):not(.sp-text-btn):not(.sp-view-all-btn):not(.spi):not(.master-page-btn):not(.user-dropdown-item):not(.cal-filter-apply):not(.cal-filter-reset):not(.cal-autocomplete-clear):not(.cal-autocomplete-item):not(.ms-dropdown-btn):not(.ms-select-all):not(.ms-clear):not(.vp-chip):not(.vn-lang-btn):not(.section-info-btn):not(.modal-close-btn):not(.deal-detail-btn):not(.deal-menu-btn):not(.lr-confirm-btn):not(.intg-info-btn):not(.oauth-btn):not(.profile-avatar-btn):not(.team-ch-toggle-btn):not(.cron-run-now-btn):not(.cron-save-btn):not(.cron-load-more-btn):not(.cron-history-toggle):not(.cron-help-btn):not(.notif-channel-help-btn):not(.teams-app-pkg-btn):not(.notif-teams-dm-test-btn):not(.teams-push-all-btn):not(.onboarding-wizard-dismiss):not(.ob-step-action):not(.ob-hero-close):not(.ob-later-btn):not(.demo-generate-btn):not(.demo-delete-btn):not(.btn-danger):not(.btn-danger-outline):not(.passkey-register-btn):not(.passkey-delete-btn):not(.passkey-admin-btn):not(.settings-nav-item):not(.settings-sidenav-collapser):not(.segmented-item):not(.ghost) {
+html.accent-gradient-on button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-logout-btn):not(.topnav-user):not(.login-submit):not(.sp-close-btn):not(.sp-text-btn):not(.sp-view-all-btn):not(.spi):not(.master-page-btn):not(.user-dropdown-item):not(.cal-filter-apply):not(.cal-filter-reset):not(.cal-autocomplete-clear):not(.cal-autocomplete-item):not(.ms-dropdown-btn):not(.ms-select-all):not(.ms-clear):not(.vp-chip):not(.vn-lang-btn):not(.section-info-btn):not(.modal-close-btn):not(.deal-detail-btn):not(.deal-menu-btn):not(.lr-confirm-btn):not(.intg-info-btn):not(.oauth-btn):not(.profile-avatar-btn):not(.team-ch-toggle-btn):not(.cron-run-now-btn):not(.cron-save-btn):not(.cron-load-more-btn):not(.cron-history-toggle):not(.cron-help-btn):not(.notif-channel-help-btn):not(.teams-app-pkg-btn):not(.notif-teams-dm-test-btn):not(.teams-push-all-btn):not(.onboarding-wizard-dismiss):not(.ob-step-action):not(.ob-hero-close):not(.ob-later-btn):not(.demo-generate-btn):not(.demo-delete-btn):not(.btn-danger):not(.btn-danger-outline):not(.passkey-register-btn):not(.passkey-delete-btn):not(.passkey-admin-btn):not(.settings-nav-item):not(.settings-sidenav-collapser):not(.segmented-item):not(.sa-tab):not(.ghost) {
   background: var(--accent-gradient, var(--accent));
 }
 
-html.accent-gradient-on button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-logout-btn):not(.topnav-user):not(.login-submit):not(.sp-close-btn):not(.sp-text-btn):not(.sp-view-all-btn):not(.spi):not(.master-page-btn):not(.user-dropdown-item):not(.cal-filter-apply):not(.cal-filter-reset):not(.cal-autocomplete-clear):not(.cal-autocomplete-item):not(.ms-dropdown-btn):not(.ms-select-all):not(.ms-clear):not(.vp-chip):not(.vn-lang-btn):not(.section-info-btn):not(.modal-close-btn):not(.deal-detail-btn):not(.deal-menu-btn):not(.lr-confirm-btn):not(.intg-info-btn):not(.oauth-btn):not(.profile-avatar-btn):not(.team-ch-toggle-btn):not(.cron-run-now-btn):not(.cron-save-btn):not(.cron-load-more-btn):not(.cron-history-toggle):not(.cron-help-btn):not(.notif-channel-help-btn):not(.teams-app-pkg-btn):not(.notif-teams-dm-test-btn):not(.teams-push-all-btn):not(.onboarding-wizard-dismiss):not(.ob-step-action):not(.ob-hero-close):not(.ob-later-btn):not(.demo-generate-btn):not(.demo-delete-btn):not(.btn-danger):not(.btn-danger-outline):not(.passkey-register-btn):not(.passkey-delete-btn):not(.passkey-admin-btn):not(.settings-nav-item):not(.settings-sidenav-collapser):not(.segmented-item):not(.ghost):hover {
+html.accent-gradient-on button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-logout-btn):not(.topnav-user):not(.login-submit):not(.sp-close-btn):not(.sp-text-btn):not(.sp-view-all-btn):not(.spi):not(.master-page-btn):not(.user-dropdown-item):not(.cal-filter-apply):not(.cal-filter-reset):not(.cal-autocomplete-clear):not(.cal-autocomplete-item):not(.ms-dropdown-btn):not(.ms-select-all):not(.ms-clear):not(.vp-chip):not(.vn-lang-btn):not(.section-info-btn):not(.modal-close-btn):not(.deal-detail-btn):not(.deal-menu-btn):not(.lr-confirm-btn):not(.intg-info-btn):not(.oauth-btn):not(.profile-avatar-btn):not(.team-ch-toggle-btn):not(.cron-run-now-btn):not(.cron-save-btn):not(.cron-load-more-btn):not(.cron-history-toggle):not(.cron-help-btn):not(.notif-channel-help-btn):not(.teams-app-pkg-btn):not(.notif-teams-dm-test-btn):not(.teams-push-all-btn):not(.onboarding-wizard-dismiss):not(.ob-step-action):not(.ob-hero-close):not(.ob-later-btn):not(.demo-generate-btn):not(.demo-delete-btn):not(.btn-danger):not(.btn-danger-outline):not(.passkey-register-btn):not(.passkey-delete-btn):not(.passkey-admin-btn):not(.settings-nav-item):not(.settings-sidenav-collapser):not(.segmented-item):not(.sa-tab):not(.ghost):hover {
   background: var(--accent-gradient, var(--accent-bright));
   filter: brightness(1.08);
 }
@@ -10500,3 +10500,300 @@ button.cust-badge-contact:hover { opacity: 0.7; }
   flex-wrap: wrap;
 }
 /* .dupe-merge-btn inherits the global accent button style on purpose. */
+
+/* ── SUPER ADMIN: tabs, analytics, infrastructure, subscriptions ──────── */
+
+.sa-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 20px;
+  overflow-x: auto;
+}
+.sa-tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-2);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.12s ease, border-color 0.12s ease;
+  font-family: inherit;
+}
+.sa-tab:hover { color: var(--text); }
+.sa-tab.sa-tab--active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.sa-tab-panel { min-height: 100px; }
+.sa-tab-panel[hidden] { display: none; }
+
+.sa-kpi-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.sa-kpi-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 14px 16px;
+  box-shadow: var(--shadow-sm, 0 1px 2px rgba(0,0,0,0.04));
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.sa-kpi-val {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.01em;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sa-kpi-lbl {
+  font-size: 11px;
+  color: var(--text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.sa-kpi-sub {
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.sa-online-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 0 0 rgba(34,197,94,0.5);
+  animation: sa-pulse 1.8s ease-out infinite;
+  flex-shrink: 0;
+}
+.sa-offline-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border-strong, #cbd5e1);
+  flex-shrink: 0;
+}
+@keyframes sa-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(34,197,94,0.55); }
+  70%  { box-shadow: 0 0 0 8px rgba(34,197,94,0); }
+  100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); }
+}
+
+.sa-status--green { color: #16a34a; }
+.sa-status--amber { color: #d97706; }
+.sa-status--red   { color: #dc2626; }
+
+.sa-status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.sa-status-dot.sa-status--green { background: #22c55e; }
+.sa-status-dot.sa-status--amber { background: #f59e0b; }
+.sa-status-dot.sa-status--red   { background: #ef4444; }
+
+.sa-tenant-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+.sa-tenant-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 14px;
+  box-shadow: var(--shadow-sm, 0 1px 2px rgba(0,0,0,0.04));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.sa-tc-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+}
+.sa-tc-name { font-weight: 600; font-size: 14px; color: var(--text); }
+.sa-tc-slug { font-size: 11px; color: var(--text-2); }
+.sa-tc-online {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1;
+}
+.sa-tc-online-lbl {
+  font-size: 11px;
+  color: var(--text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.sa-tc-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.sa-tc-metric-val { font-weight: 600; color: var(--text); font-size: 14px; }
+.sa-tc-spark {
+  display: block;
+  width: 100%;
+  height: 30px;
+}
+.sa-tc-foot {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.sa-infra-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.sa-infra-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 16px;
+  box-shadow: var(--shadow-sm, 0 1px 2px rgba(0,0,0,0.04));
+}
+.sa-infra-title {
+  font-size: 12px;
+  color: var(--text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 12px;
+  font-weight: 600;
+}
+.sa-infra-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+}
+.sa-infra-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.sa-infra-row-lbl { color: var(--text-2); }
+.sa-infra-row-val { color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; }
+
+.sa-metric-bar {
+  width: 100%;
+  height: 6px;
+  background: var(--surface-soft, #f1f5f9);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+.sa-metric-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+.sa-metric-bar-fill.sa-status--amber { background: #f59e0b; }
+.sa-metric-bar-fill.sa-status--red   { background: #ef4444; }
+
+.sa-infra-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.sa-infra-link {
+  font-size: 12px;
+  color: var(--accent);
+  text-decoration: none;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm, 4px);
+}
+.sa-infra-link:hover { background: var(--surface-soft); }
+
+.sa-infra-hint {
+  font-size: 12px;
+  color: var(--text-2);
+  padding: 10px 14px;
+  background: var(--surface-soft);
+  border-radius: var(--r-sm, 6px);
+  border-left: 3px solid var(--border-strong, #cbd5e1);
+}
+
+.sa-subs-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.sa-subs-table th {
+  text-align: left;
+  padding: 8px 10px;
+  font-weight: 600;
+  color: var(--text-2);
+  border-bottom: 2px solid var(--border);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.sa-subs-table td {
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.sa-subs-table tr:hover td { background: var(--surface-soft); }
+
+.sa-updated {
+  font-size: 11px;
+  color: var(--text-2);
+  margin-left: 8px;
+}
+.sa-empty {
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--text-2);
+  font-size: 13px;
+}
+.sa-muted { color: var(--text-2); }
+.sa-analytics-foot {
+  margin-top: 12px;
+  font-size: 11px;
+  color: var(--text-2);
+  text-align: right;
+}
+
+/* Invoice list inside tenant-detail modal */
+.sa-invoice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sa-invoice-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto auto auto;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--surface-soft);
+  border-radius: var(--r-sm, 6px);
+  font-size: 13px;
+  align-items: center;
+}
+
+:root[data-theme="dark"] .sa-metric-bar { background: oklch(25% 0.01 260); }
+:root[data-theme="dark"] .sa-online-dot { background: #4ade80; }

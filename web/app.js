@@ -40,6 +40,13 @@ import { renderCronPicker, initCronPicker } from "./modules/cron-picker.js";
 import { icon } from "./modules/icons.js";
 import { DEFAULT_TOKENS, SHADOW_PRESETS, PRESETS, findPresetBySlug, detectPresetSlug } from "./modules/theme-presets.js";
 import {
+  renderAnalytics as saRenderAnalytics,
+  renderInfra as saRenderInfra,
+  renderSubscriptions as saRenderSubscriptions,
+  openInvoicesModal as saOpenInvoicesModal,
+  createPoller as saCreatePoller,
+} from "./modules/super-admin-analytics.js";
+import {
   getCustomFieldDefinitions,
   collectCustomFieldPayload,
   renderCustomFieldInputs,
@@ -513,6 +520,7 @@ async function loginWithPasskey() {
     showApp();
     showTrialBanner(result.user.subscription);
     if (window._checkSuperAdmin) window._checkSuperAdmin();
+    startHeartbeat();
     updateUserMeta();
     const onMasterRoute = syncMasterPageFromLocation();
     const onSettingsRoute = !onMasterRoute && syncSettingsPageFromLocation();
@@ -8576,6 +8584,25 @@ let _idleCountdownInterval = null;
 let _idleOverlayEl = null;
 let _idleActivityHandler = null;
 
+// ── Presence heartbeat ────────────────────────────────────────────────────────
+// Bumps the authenticated user's lastSeenAt every 60s while tab is visible
+// so the Super Admin → Analytics dashboard can show "online now" counts.
+let _heartbeatTimerId = null;
+function startHeartbeat() {
+  if (_heartbeatTimerId) return;
+  const tick = () => {
+    if (document.hidden) return;
+    if (!state.token) return;
+    api("/auth/heartbeat", { method: "POST" }).catch(() => {});
+  };
+  tick();
+  _heartbeatTimerId = setInterval(tick, 60_000);
+}
+function stopHeartbeat() {
+  if (_heartbeatTimerId) clearInterval(_heartbeatTimerId);
+  _heartbeatTimerId = null;
+}
+
 function stopIdleWatch() {
   if (_idleTimerId) { clearTimeout(_idleTimerId); _idleTimerId = null; }
   if (_idleCountdownInterval) { clearInterval(_idleCountdownInterval); _idleCountdownInterval = null; }
@@ -8616,6 +8643,7 @@ function idleSignOut() {
   state.cache.cronJobs = undefined;
   _notifPrefsCache = null;
   clearTokens();
+  stopHeartbeat();
   showAuth();
   if (authMessage) authMessage.textContent = "Signed out due to inactivity. Please sign in again.";
 }
@@ -10351,6 +10379,7 @@ loginForm.addEventListener("submit", async (event) => {
     showApp();
     showTrialBanner(result.user.subscription);
     if (window._checkSuperAdmin) window._checkSuperAdmin();
+    startHeartbeat();
     updateUserMeta();
     const onMasterRoute = syncMasterPageFromLocation();
     const onSettingsRoute = !onMasterRoute && syncSettingsPageFromLocation();
@@ -11094,6 +11123,7 @@ qs("#logout-btn").addEventListener("click", () => {
   state.cache.cronJobs = undefined;
   _notifPrefsCache = null;
   clearTokens();
+  stopHeartbeat();
   showAuth();
   authMessage.textContent = "";
 });
@@ -11384,6 +11414,7 @@ async function bootstrap() {
     showApp();
     showTrialBanner(me.subscription);
     if (window._checkSuperAdmin) window._checkSuperAdmin();
+    startHeartbeat();
     const userEditId = syncUserEditFromLocation();
     const c360Id = !userEditId && syncC360FromLocation();
     const deal360No = !userEditId && !c360Id && syncDeal360FromLocation();
@@ -11560,6 +11591,13 @@ applyThemeMode("LIGHT");
     }
   }
 
+  let _saPoller = null;
+  let _saActiveTab = "tenants";
+
+  function stopSAPoller() {
+    if (_saPoller) { _saPoller.stop(); _saPoller = null; }
+  }
+
   function renderSuperAdmin(stats, tenants) {
     panel.innerHTML = `
       <div class="sa-wrap">
@@ -11571,40 +11609,67 @@ applyThemeMode("LIGHT");
           <div class="sa-stat"><div class="sa-stat-val">${stats.dealCount}</div><div class="sa-stat-lbl">Total Deals</div></div>
           <div class="sa-stat" id="sa-storage-stat"><div class="sa-stat-val">-</div><div class="sa-stat-lbl">R2 Storage</div></div>
         </div>
-        <div class="sa-toolbar">
-          <input class="sa-search" id="sa-search" type="text" placeholder="Search workspaces..." />
-          <select class="sa-filter" id="sa-status-filter">
-            <option value="">All</option>
-            <option value="active">Active</option>
-            <option value="inactive">Inactive</option>
-          </select>
-          <button class="sa-btn sa-btn--refresh" id="sa-refresh">Refresh</button>
-          <button class="sa-btn sa-btn--primary" id="sa-load-storage">Load R2 Storage</button>
+        <div class="sa-tabs" role="tablist">
+          <button class="sa-tab sa-tab--active" data-sa-tab="tenants" role="tab">Tenants</button>
+          <button class="sa-tab" data-sa-tab="analytics" role="tab">Analytics</button>
+          <button class="sa-tab" data-sa-tab="infra" role="tab">Infrastructure</button>
+          <button class="sa-tab" data-sa-tab="subscriptions" role="tab">Subscriptions</button>
         </div>
-        <div class="sa-table-wrap">
-          <table class="sa-table">
-            <thead>
-              <tr>
-                <th>Workspace</th>
-                <th>Slug</th>
-                <th>Status</th>
-                <th>Subscription</th>
-                <th>Users</th>
-                <th>Deals</th>
-                <th>Customers</th>
-                <th>R2 Storage</th>
-                <th>Created</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody id="sa-tenants-body"></tbody>
-          </table>
-        </div>
+
+        <section class="sa-tab-panel" data-sa-panel="tenants">
+          <div class="sa-toolbar">
+            <input class="sa-search" id="sa-search" type="text" placeholder="Search workspaces..." />
+            <select class="sa-filter" id="sa-status-filter">
+              <option value="">All</option>
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
+            </select>
+            <button class="sa-btn sa-btn--refresh" id="sa-refresh">Refresh</button>
+            <button class="sa-btn sa-btn--primary" id="sa-load-storage">Load R2 Storage</button>
+          </div>
+          <div class="sa-table-wrap">
+            <table class="sa-table">
+              <thead>
+                <tr>
+                  <th>Workspace</th>
+                  <th>Slug</th>
+                  <th>Status</th>
+                  <th>Subscription</th>
+                  <th>Users</th>
+                  <th>Deals</th>
+                  <th>Customers</th>
+                  <th>R2 Storage</th>
+                  <th>Created</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="sa-tenants-body"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="sa-tab-panel" data-sa-panel="analytics" hidden>
+          <div id="sa-analytics-root"><div class="sa-empty">Loading realtime activity…</div></div>
+        </section>
+
+        <section class="sa-tab-panel" data-sa-panel="infra" hidden>
+          <div id="sa-infra-root"><div class="sa-empty">Loading infrastructure…</div></div>
+        </section>
+
+        <section class="sa-tab-panel" data-sa-panel="subscriptions" hidden>
+          <div id="sa-subs-root"><div class="sa-empty">Loading subscriptions…</div></div>
+        </section>
+
         <div id="sa-detail-modal" class="sa-modal" hidden>
           <div class="sa-modal-backdrop"></div>
           <div class="sa-modal-content"></div>
         </div>
       </div>`;
+
+    // Tab switching
+    panel.querySelectorAll("[data-sa-tab]").forEach((btn) => {
+      btn.addEventListener("click", () => switchSATab(btn.dataset.saTab));
+    });
 
     renderTenantRows(tenants);
     qs("#sa-refresh")?.addEventListener("click", () => { loaded = false; loadSuperAdminDashboard(); });
@@ -11613,6 +11678,65 @@ applyThemeMode("LIGHT");
     qs("#sa-detail-modal .sa-modal-backdrop")?.addEventListener("click", closeSAModal);
     qs("#sa-load-storage")?.addEventListener("click", loadR2Storage);
     panel._tenants = tenants;
+    _saActiveTab = "tenants";
+  }
+
+  function switchSATab(tabKey) {
+    if (_saActiveTab === tabKey) return;
+    _saActiveTab = tabKey;
+    panel.querySelectorAll("[data-sa-tab]").forEach((b) =>
+      b.classList.toggle("sa-tab--active", b.dataset.saTab === tabKey)
+    );
+    panel.querySelectorAll("[data-sa-panel]").forEach((p) => {
+      p.hidden = p.dataset.saPanel !== tabKey;
+    });
+
+    stopSAPoller();
+    if (tabKey === "analytics") startAnalyticsTab();
+    else if (tabKey === "infra") startInfraTab();
+    else if (tabKey === "subscriptions") startSubscriptionsTab();
+  }
+
+  function startAnalyticsTab() {
+    const root = qs("#sa-analytics-root");
+    if (!root) return;
+    _saPoller = saCreatePoller({
+      tick: async () => {
+        const data = await api("/super-admin/realtime");
+        saRenderAnalytics(root, data);
+      },
+    });
+    _saPoller.start();
+  }
+
+  function startInfraTab() {
+    const root = qs("#sa-infra-root");
+    if (!root) return;
+    _saPoller = saCreatePoller({
+      tick: async () => {
+        const data = await api("/super-admin/infra");
+        saRenderInfra(root, data);
+      },
+    });
+    _saPoller.start();
+  }
+
+  function startSubscriptionsTab() {
+    const root = qs("#sa-subs-root");
+    if (!root) return;
+    _saPoller = saCreatePoller({
+      intervalMs: 60_000, // subs don't change often; slower cadence
+      tick: async () => {
+        const data = await api("/super-admin/subscriptions");
+        saRenderSubscriptions(root, data, {
+          onSend: (tenantId, tenantName) => {
+            const modal = qs("#sa-detail-modal");
+            saOpenInvoicesModal(tenantId, tenantName, { modalEl: modal });
+          },
+        });
+      },
+    });
+    _saPoller.start();
   }
 
   function formatBytes(bytes) {

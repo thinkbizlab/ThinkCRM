@@ -59,6 +59,16 @@ export const JOB_DEFS: JobDef[] = [
       const { pullAllRestSourcesForTenant } = await import("../modules/sync/rest-pull.js");
       return pullAllRestSourcesForTenant(tenantId);
     }
+  },
+  {
+    key: "invoiceAutoSend",
+    label: "Invoice Auto-Send",
+    description: "Finalizes DRAFT tenant invoices whose billing period has ended and emails them to the first active tenant admin.",
+    defaultCronExpr: "0 9 * * *", // 09:00 tenant TZ
+    run: async (tenantId) => {
+      const { runInvoiceAutoSendForTenant } = await import("../modules/billing/invoice-email.js");
+      return runInvoiceAutoSendForTenant(tenantId);
+    }
   }
 ];
 
