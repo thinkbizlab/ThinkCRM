@@ -8733,7 +8733,7 @@ function openBulkReassignOwnerModal() {
   qs("#bulk-reassign-modal")?.remove();
   const overlay = document.createElement("div");
   overlay.id = "bulk-reassign-modal";
-  overlay.className = "modal-overlay";
+  overlay.className = "ncm-overlay";
 
   const users = state.cache.allUsers || [];
   const ownerOpts = users
@@ -8743,7 +8743,7 @@ function openBulkReassignOwnerModal() {
     .join("");
 
   overlay.innerHTML = `
-    <div class="ncm-card" style="max-width:440px">
+    <div class="ncm-panel" style="max-width:440px">
       <div class="ncm-header">
         <span class="ncm-title">Reassign Owner · ${ids.length} customer${ids.length !== 1 ? "s" : ""}</span>
         <button type="button" class="ncm-close" id="bro-close">${icon('x', 14)}</button>
@@ -8764,6 +8764,7 @@ function openBulkReassignOwnerModal() {
       </form>
     </div>`;
   document.body.appendChild(overlay);
+  requestAnimationFrame(() => overlay.classList.add("ncm-open"));
   const close = () => overlay.remove();
   overlay.querySelector("#bro-close").addEventListener("click", close);
   overlay.querySelector("#bro-cancel").addEventListener("click", close);
@@ -8819,7 +8820,7 @@ function openBulkEditCustomersModal() {
   qs("#bulk-edit-modal")?.remove();
   const overlay = document.createElement("div");
   overlay.id = "bulk-edit-modal";
-  overlay.className = "modal-overlay";
+  overlay.className = "ncm-overlay";
 
   const users = state.cache.allUsers || [];
   const ownerOpts = users
@@ -8833,7 +8834,7 @@ function openBulkEditCustomersModal() {
     .join("");
 
   overlay.innerHTML = `
-    <div class="ncm-card" style="max-width:480px">
+    <div class="ncm-panel" style="max-width:480px">
       <div class="ncm-header">
         <span class="ncm-title">Bulk Edit · ${ids.length} customer${ids.length !== 1 ? "s" : ""}</span>
         <button type="button" class="ncm-close" id="be-close">${icon('x', 14)}</button>
@@ -8869,6 +8870,7 @@ function openBulkEditCustomersModal() {
       </form>
     </div>`;
   document.body.appendChild(overlay);
+  requestAnimationFrame(() => overlay.classList.add("ncm-open"));
   const close = () => overlay.remove();
   overlay.querySelector("#be-close").addEventListener("click", close);
   overlay.querySelector("#be-cancel").addEventListener("click", close);
