@@ -55,17 +55,68 @@ function parseRestConfig(raw: unknown): RestSourceConfig {
   };
 }
 
+/**
+ * Resolve `{{token}}` placeholders in URL and query-param values.
+ * Tokens:
+ *   {{today}}, {{yesterday}}, {{tomorrow}}, {{monthStart}}, {{year}}
+ *   {{now}}                          → ISO timestamp (default if no :fmt)
+ *   {{today:YYYY-MM-DD}}             → custom format
+ *   {{today-7d}} / {{today+1m:YYYYMMDD}} → offsets (d/w/m/y)
+ */
+export function expandTemplate(input: string, now: Date = new Date()): string {
+  const TOKEN = /\{\{\s*([a-zA-Z]+)([+-]\d+[dwmy])?(?::([^}]+))?\s*\}\}/g;
+  return input.replace(TOKEN, (match, baseRaw: string, offset: string | undefined, fmt: string | undefined) => {
+    const base = baseRaw.toLowerCase();
+    let d = new Date(now);
+    let isDate = true;
+    switch (base) {
+      case "today":       break;
+      case "yesterday":   d.setDate(d.getDate() - 1); break;
+      case "tomorrow":    d.setDate(d.getDate() + 1); break;
+      case "monthstart":  d = new Date(now.getFullYear(), now.getMonth(), 1); break;
+      case "now":         isDate = false; break;
+      case "year":        return String(now.getFullYear());
+      default:            return match;
+    }
+    if (offset) {
+      const m = offset.match(/^([+-])(\d+)([dwmy])$/);
+      if (m && m[1] && m[2] && m[3]) {
+        const sign = m[1] === "-" ? -1 : 1;
+        const n = parseInt(m[2], 10) * sign;
+        if (m[3] === "d") d.setDate(d.getDate() + n);
+        if (m[3] === "w") d.setDate(d.getDate() + n * 7);
+        if (m[3] === "m") d.setMonth(d.getMonth() + n);
+        if (m[3] === "y") d.setFullYear(d.getFullYear() + n);
+      }
+    }
+    if (!fmt && !isDate) return d.toISOString();
+    return formatDate(d, fmt || "YYYY-MM-DD");
+  });
+}
+
+function formatDate(d: Date, fmt: string): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return fmt
+    .replace(/YYYY/g, String(d.getFullYear()))
+    .replace(/MM/g,   pad(d.getMonth() + 1))
+    .replace(/DD/g,   pad(d.getDate()))
+    .replace(/HH/g,   pad(d.getHours()))
+    .replace(/mm/g,   pad(d.getMinutes()))
+    .replace(/ss/g,   pad(d.getSeconds()));
+}
+
 function buildRequest(cfg: RestSourceConfig): { url: string; headers: Record<string, string> } {
+  const now = new Date();
   const headers: Record<string, string> = { Accept: "application/json" };
   if (cfg.authHeaderName && cfg.authValueEnc) {
     const plain = decryptField(cfg.authValueEnc);
     if (plain) headers[cfg.authHeaderName] = plain;
   }
-  let url = cfg.endpointUrl;
+  let url = expandTemplate(cfg.endpointUrl, now);
   if (cfg.queryParams && Object.keys(cfg.queryParams).length > 0) {
     const u = new URL(url);
     for (const [k, v] of Object.entries(cfg.queryParams)) {
-      u.searchParams.set(k, v);
+      u.searchParams.set(k, expandTemplate(v, now));
     }
     url = u.toString();
   }

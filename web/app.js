@@ -4784,6 +4784,7 @@ function renderSettings() {
                       <label class="form-label">Query parameters (optional)</label>
                       <div class="qp-rows" data-qp-rows="${src.id}">${rowsHtml}</div>
                       <button type="button" class="ghost small" data-qp-add="${src.id}">+ Add parameter</button>
+                      <p class="muted" style="font-size:0.75rem;margin:6px 0 0">Tip: type <code>{</code> in a value to insert date variables like <code>{{today}}</code>.</p>
                     </div>
                   `;
                 })() : ""}
@@ -4840,6 +4841,7 @@ function renderSettings() {
                 <label class="form-label">Query parameters (optional)</label>
                 <div class="qp-rows" data-qp-rows="create"></div>
                 <button type="button" class="ghost small" data-qp-add="create">+ Add parameter</button>
+                <p class="muted" style="font-size:0.75rem;margin:6px 0 0">Tip: type <code>{</code> in a value to insert date variables like <code>{{today}}</code> or <code>{{today-7d:YYYYMMDD}}</code>.</p>
               </div>
               <p class="muted" style="font-size:0.78rem;margin:0">Request sent: <code>GET &lt;endpoint&gt;?&lt;params&gt;</code> with <code>Accept: application/json</code> + auth header. Pull runs nightly at 02:00 (tenant timezone) for every ENABLED REST source, plus whenever you click <strong>Pull now</strong>.</p>
             </div>
@@ -5695,6 +5697,90 @@ function renderSettings() {
   });
 
   // Source CRUD
+  // ── Template token autocomplete (query param values) ───────────────────
+  const TEMPLATE_TOKENS = [
+    { token: "{{today}}",                 desc: "Today, YYYY-MM-DD (e.g. 2026-04-22)" },
+    { token: "{{today:YYYYMMDD}}",        desc: "Today, no separators (20260422)" },
+    { token: "{{today:DD/MM/YYYY}}",      desc: "Today, slash format (22/04/2026)" },
+    { token: "{{yesterday}}",             desc: "Yesterday, YYYY-MM-DD" },
+    { token: "{{tomorrow}}",              desc: "Tomorrow, YYYY-MM-DD" },
+    { token: "{{today-7d}}",              desc: "7 days ago" },
+    { token: "{{today-1m:YYYY-MM-DD}}",   desc: "1 month ago, custom format" },
+    { token: "{{monthStart}}",            desc: "First day of current month" },
+    { token: "{{year}}",                  desc: "Current year (e.g. 2026)" },
+    { token: "{{now}}",                   desc: "Current ISO timestamp" }
+  ];
+  const tplPopup = document.createElement("div");
+  tplPopup.className = "tpl-autocomplete";
+  tplPopup.style.cssText = "position:absolute;z-index:9999;background:var(--surface,#fff);border:1px solid var(--border,#e2e8f0);border-radius:6px;box-shadow:0 6px 20px rgba(0,0,0,0.12);padding:4px;max-height:260px;overflow-y:auto;min-width:320px;display:none;font-size:0.85rem";
+  document.body.appendChild(tplPopup);
+  let tplActiveInput = null;
+
+  function renderTplPopup(filter = "") {
+    const f = filter.toLowerCase();
+    const rows = TEMPLATE_TOKENS.filter(t => t.token.toLowerCase().includes(f) || t.desc.toLowerCase().includes(f));
+    if (rows.length === 0) { tplPopup.style.display = "none"; return; }
+    tplPopup.innerHTML = rows.map((t, i) => `
+      <div class="tpl-opt" data-token="${t.token.replace(/"/g, "&quot;")}" data-idx="${i}" style="padding:6px 10px;cursor:pointer;border-radius:4px;display:flex;justify-content:space-between;gap:12px">
+        <code style="color:var(--accent-bright,#2563eb)">${t.token}</code>
+        <span class="muted" style="font-size:0.78rem">${t.desc}</span>
+      </div>`).join("");
+    tplPopup.style.display = "block";
+  }
+  function positionTplPopup(input) {
+    const r = input.getBoundingClientRect();
+    tplPopup.style.top  = `${window.scrollY + r.bottom + 4}px`;
+    tplPopup.style.left = `${window.scrollX + r.left}px`;
+  }
+  function hideTplPopup() { tplPopup.style.display = "none"; tplActiveInput = null; }
+
+  function handleTplInput(e) {
+    const el = e.target;
+    if (!(el instanceof HTMLInputElement) || el.name !== "qpVal") return;
+    const val = el.value;
+    const caret = el.selectionStart ?? val.length;
+    // Find the nearest preceding "{" that isn't closed by "}"
+    const before = val.slice(0, caret);
+    const lastOpen = before.lastIndexOf("{");
+    if (lastOpen === -1 || before.slice(lastOpen).includes("}")) { hideTplPopup(); return; }
+    tplActiveInput = el;
+    const filter = before.slice(lastOpen).replace(/^\{+/, "");
+    positionTplPopup(el);
+    renderTplPopup(filter);
+  }
+  function insertToken(token) {
+    if (!tplActiveInput) return;
+    const el = tplActiveInput;
+    const val = el.value;
+    const caret = el.selectionStart ?? val.length;
+    const before = val.slice(0, caret);
+    const after = val.slice(caret);
+    const lastOpen = before.lastIndexOf("{");
+    const prefix = lastOpen >= 0 ? before.slice(0, lastOpen) : before;
+    el.value = prefix + token + after;
+    const newCaret = (prefix + token).length;
+    el.setSelectionRange(newCaret, newCaret);
+    el.focus();
+    hideTplPopup();
+  }
+
+  views.settings.addEventListener("input", handleTplInput);
+  views.settings.addEventListener("keydown", (e) => {
+    if (tplPopup.style.display !== "block") return;
+    if (e.key === "Escape") { hideTplPopup(); e.preventDefault(); }
+  });
+  tplPopup.addEventListener("mousedown", (e) => {
+    const opt = e.target.closest(".tpl-opt");
+    if (!opt) return;
+    e.preventDefault(); // keep focus on input
+    insertToken(opt.dataset.token);
+  });
+  document.addEventListener("click", (e) => {
+    if (tplPopup.contains(e.target)) return;
+    if (e.target instanceof HTMLElement && e.target.name === "qpVal") return;
+    hideTplPopup();
+  });
+
   function readQueryParamRows(container) {
     const out = {};
     if (!container) return out;
