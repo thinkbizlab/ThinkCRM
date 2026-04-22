@@ -8394,19 +8394,19 @@ function masterPaginationHtml({ total, page, totalPages, key, pageSize, noun }) 
         }).join("")}
       </select>
     </label>`;
-  if (pageSize !== Infinity && total > pageSize) {
-    return `<div class="cust-pagination">
-      <span class="cust-page-info">Page ${page} of ${totalPages} · ${total} ${noun}${total !== 1 ? "s" : ""}</span>
-      <div class="cust-page-btns" style="display:inline-flex;align-items:center;gap:12px">
-        ${picker}
-        <button class="cust-page-btn" data-page-prev="${key}" ${page <= 1 ? "disabled" : ""}>← Prev</button>
-        <button class="cust-page-btn" data-page-next="${key}" ${page >= totalPages ? "disabled" : ""}>Next →</button>
-      </div>
-    </div>`;
-  }
+  const start = pageSize === Infinity ? 1 : Math.min(total, (page - 1) * pageSize + 1);
+  const end   = pageSize === Infinity ? total : Math.min(total, page * pageSize);
+  const rangeTxt = total === 0
+    ? `No ${noun}s`
+    : `Showing ${start}${end !== start ? `–${end}` : ""} of ${total} ${noun}${total !== 1 ? "s" : ""}`;
+  const singlePage = pageSize === Infinity || total <= pageSize;
   return `<div class="cust-pagination">
-    <span class="cust-page-info" style="font-size:0.8rem;color:var(--muted-color)">${total} ${noun}${total !== 1 ? "s" : ""}</span>
-    ${picker}
+    <span class="cust-page-info">${rangeTxt}${singlePage ? "" : ` · Page ${page} of ${totalPages}`}</span>
+    <div class="cust-page-btns" style="display:inline-flex;align-items:center;gap:12px">
+      ${picker}
+      <button class="cust-page-btn" data-page-prev="${key}" ${page <= 1 ? "disabled" : ""}>← Prev</button>
+      <button class="cust-page-btn" data-page-next="${key}" ${page >= totalPages ? "disabled" : ""}>Next →</button>
+    </div>
   </div>`;
 }
 
