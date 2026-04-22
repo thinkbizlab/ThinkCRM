@@ -52,6 +52,9 @@ import {
 const loginForm = qs("#login-form");
 const authMessage = qs("#auth-message");
 
+const HOUR_OPTIONS = Array.from({ length: 24 }, (_, h) => `<option value="${h}">${String(h).padStart(2,"0")}:00</option>`).join("");
+const DAY_OF_WEEK = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+
 // Apply branding (app name + colors) to the login page before authentication.
 function applyLoginBranding(b) {
   const appName = b.appName || "ThinkCRM";
@@ -5803,9 +5806,6 @@ function renderSettings() {
     if (e.target instanceof HTMLElement && e.target.name === "qpVal") return;
     hideTplPopup();
   });
-
-  const HOUR_OPTIONS = Array.from({ length: 24 }, (_, h) => `<option value="${h}">${String(h).padStart(2,"0")}:00</option>`).join("");
-  const DAY_OF_WEEK = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 
   function renderScheduleBlock(scope, current) {
     const s = current || { kind: "MANUAL" };
