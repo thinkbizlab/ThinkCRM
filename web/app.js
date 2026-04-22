@@ -1442,30 +1442,8 @@ function renderMasterData(paymentTerms) {
           <span class="muted">Select all</span>
         </label>
       </div>` : ""}
-      <div class="list">
-        ${paymentTerms
-          .map(
-            (p) => {
-              const selected = (state.paymentTermSelectedIds || new Set()).has(p.id);
-              return `
-          <div class="row${selected ? " pt-row-selected" : ""}" data-pt-id="${p.id}">
-            ${isAdmin && !isPaymentTermApiLocked() ? `<label class="pt-check-wrap" style="display:inline-flex;align-items:center;margin-right:var(--sp-2);vertical-align:middle"><input type="checkbox" class="pt-check-row" data-id="${p.id}" ${selected ? "checked" : ""} /></label>` : ""}
-            <h4 style="display:inline">${escHtml(p.name)} (${escHtml(p.code)})</h4>
-            <div class="muted">Due ${p.dueDays} days</div>
-            <div class="chip ${p.isActive ? "chip-success" : "chip-danger"}">${p.isActive ? "Active" : "Inactive"}</div>
-            ${isAdmin ? renderCustomFieldsSummary(p.customFields) : ""}
-            ${isPaymentTermApiLocked() ? "" : `
-            <div class="inline-actions wrap">
-              <button class="payment-term-toggle" data-id="${p.id}" data-active="${p.isActive}">
-                ${p.isActive ? "Deactivate" : "Activate"}
-              </button>
-              <button class="payment-term-delete ghost" data-id="${p.id}">Delete</button>
-            </div>`}
-          </div>`;
-            }
-          )
-          .join("")}
-      </div>
+      <div class="list" id="pt-list-body"></div>
+      <div id="pt-pagination"></div>
       ${isAdmin ? `<div id="pt-bulk-toolbar" class="cust-bulk-toolbar" style="display:none"></div>` : ""}
     </section>
     <section class="card" ${state.masterPage !== "customers" ? 'style="display:none"' : ""} id="customers-section">
@@ -1511,6 +1489,7 @@ function renderMasterData(paymentTerms) {
         </div>
       ` : ""}
       <div class="list" id="item-list"></div>
+      <div id="item-pagination"></div>
     </section>
     </div>
   `;
@@ -1518,24 +1497,99 @@ function renderMasterData(paymentTerms) {
   const custMount = views.master.querySelector("#cust-list-mount");
   if (custMount) renderCustomerListSection(custMount, termOptions);
 
-  const itemList = qs("#item-list");
+  // ── Payment Terms list (paginated) ───────────────────────────────────────
+  const renderPaymentTermsList = () => {
+    const listEl = qs("#pt-list-body");
+    const pagEl  = qs("#pt-pagination");
+    if (!listEl || !pagEl) return;
+    const all = paymentTerms;
+    const ps = getMasterPageSize("paymentTerm");
+    const totalPages = Math.max(1, Math.ceil(all.length / (ps === Infinity ? Math.max(1, all.length) : ps)));
+    state.paymentTermListPage = Math.min(Math.max(1, state.paymentTermListPage || 1), totalPages);
+    const page = state.paymentTermListPage;
+    const start = ps === Infinity ? 0 : (page - 1) * ps;
+    const slice = ps === Infinity ? all : all.slice(start, start + ps);
+    listEl.innerHTML = slice.map((p) => {
+      const selected = (state.paymentTermSelectedIds || new Set()).has(p.id);
+      return `
+        <div class="row${selected ? " pt-row-selected" : ""}" data-pt-id="${p.id}">
+          ${isAdmin && !isPaymentTermApiLocked() ? `<label class="pt-check-wrap" style="display:inline-flex;align-items:center;margin-right:var(--sp-2);vertical-align:middle"><input type="checkbox" class="pt-check-row" data-id="${p.id}" ${selected ? "checked" : ""} /></label>` : ""}
+          <h4 style="display:inline">${escHtml(p.name)} (${escHtml(p.code)})</h4>
+          <div class="muted">Due ${p.dueDays} days</div>
+          <div class="chip ${p.isActive ? "chip-success" : "chip-danger"}">${p.isActive ? "Active" : "Inactive"}</div>
+          ${isAdmin ? renderCustomFieldsSummary(p.customFields) : ""}
+          ${isPaymentTermApiLocked() ? "" : `
+          <div class="inline-actions wrap">
+            <button class="payment-term-toggle" data-id="${p.id}" data-active="${p.isActive}">
+              ${p.isActive ? "Deactivate" : "Activate"}
+            </button>
+            <button class="payment-term-delete ghost" data-id="${p.id}">Delete</button>
+          </div>`}
+        </div>`;
+    }).join("");
+    pagEl.innerHTML = masterPaginationHtml({
+      total: all.length, page, totalPages, key: "paymentTerm", pageSize: ps, noun: "payment term"
+    });
+    pagEl.querySelector('[data-page-prev="paymentTerm"]')?.addEventListener("click", () => {
+      state.paymentTermListPage = Math.max(1, (state.paymentTermListPage || 1) - 1);
+      renderPaymentTermsList();
+    });
+    pagEl.querySelector('[data-page-next="paymentTerm"]')?.addEventListener("click", () => {
+      state.paymentTermListPage = Math.min(totalPages, (state.paymentTermListPage || 1) + 1);
+      renderPaymentTermsList();
+    });
+    pagEl.querySelector('[data-page-size-key="paymentTerm"]')?.addEventListener("change", (e) => {
+      const v = e.target.value;
+      setMasterPageSize("paymentTerm", v === "all" ? "all" : Number(v));
+      state.paymentTermListPage = 1;
+      renderPaymentTermsList();
+    });
+  };
+  renderPaymentTermsList();
+
+  // ── Items list (paginated) ──────────────────────────────────────────────
   const itemDefsActive = itemFieldDefinitions.filter((d) => d.isActive);
-  const filteredItems = state.cache.items.filter((it) => matchesCustomFieldFilters(it, itemDefsActive, state.itemCustomFieldFilters));
-  itemList.innerHTML = filteredItems
-    .map(
-      (item) => `
-    <div class="row">
-      <h4>${escHtml(item.name)} (${escHtml(item.itemCode)})</h4>
-      <div class="muted">Unit price ${asMoney(item.unitPrice)}${item.externalRef ? ` · Ref: ${escHtml(item.externalRef)}` : ""}</div>
-      ${renderCustomFieldsSummary(item.customFields)}
-      ${isItemApiLocked() ? "" : `
-      <div class="inline-actions wrap">
-        <button class="item-price" data-id="${item.id}" data-price="${item.unitPrice}">Update Price</button>
-        <button class="item-delete ghost" data-id="${item.id}">Delete</button>
-      </div>`}
-    </div>`
-    )
-    .join("");
+  const renderItemsList = () => {
+    const listEl = qs("#item-list");
+    const pagEl  = qs("#item-pagination");
+    if (!listEl || !pagEl) return;
+    const all = state.cache.items.filter((it) => matchesCustomFieldFilters(it, itemDefsActive, state.itemCustomFieldFilters));
+    const ps = getMasterPageSize("item");
+    const totalPages = Math.max(1, Math.ceil(all.length / (ps === Infinity ? Math.max(1, all.length) : ps)));
+    state.itemListPage = Math.min(Math.max(1, state.itemListPage || 1), totalPages);
+    const page = state.itemListPage;
+    const start = ps === Infinity ? 0 : (page - 1) * ps;
+    const slice = ps === Infinity ? all : all.slice(start, start + ps);
+    listEl.innerHTML = slice.map((item) => `
+      <div class="row">
+        <h4>${escHtml(item.name)} (${escHtml(item.itemCode)})</h4>
+        <div class="muted">Unit price ${asMoney(item.unitPrice)}${item.externalRef ? ` · Ref: ${escHtml(item.externalRef)}` : ""}</div>
+        ${renderCustomFieldsSummary(item.customFields)}
+        ${isItemApiLocked() ? "" : `
+        <div class="inline-actions wrap">
+          <button class="item-price" data-id="${item.id}" data-price="${item.unitPrice}">Update Price</button>
+          <button class="item-delete ghost" data-id="${item.id}">Delete</button>
+        </div>`}
+      </div>`).join("");
+    pagEl.innerHTML = masterPaginationHtml({
+      total: all.length, page, totalPages, key: "item", pageSize: ps, noun: "item"
+    });
+    pagEl.querySelector('[data-page-prev="item"]')?.addEventListener("click", () => {
+      state.itemListPage = Math.max(1, (state.itemListPage || 1) - 1);
+      renderItemsList();
+    });
+    pagEl.querySelector('[data-page-next="item"]')?.addEventListener("click", () => {
+      state.itemListPage = Math.min(totalPages, (state.itemListPage || 1) + 1);
+      renderItemsList();
+    });
+    pagEl.querySelector('[data-page-size-key="item"]')?.addEventListener("change", (e) => {
+      const v = e.target.value;
+      setMasterPageSize("item", v === "all" ? "all" : Number(v));
+      state.itemListPage = 1;
+      renderItemsList();
+    });
+  };
+  renderItemsList();
 
   views.master.querySelectorAll(".master-page-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -8310,7 +8364,58 @@ function renderSettings() {
 
 // ── Customer List helpers ───────────────────────────────────────────────────
 
-const CUST_PAGE_SIZE = 20;
+const MASTER_PAGE_SIZE_OPTIONS = [10, 20, 50, 100, "all"];
+const MASTER_PAGE_SIZE_DEFAULT = 20;
+function getMasterPageSize(key) {
+  const stateKey = `${key}PageSize`;
+  const storageKey = stateKey;
+  const raw = state[stateKey]
+    ?? (typeof localStorage !== "undefined" ? localStorage.getItem(storageKey) : null)
+    ?? MASTER_PAGE_SIZE_DEFAULT;
+  if (raw === "all" || raw === "All") return Infinity;
+  const n = Number(raw);
+  return MASTER_PAGE_SIZE_OPTIONS.includes(n) ? n : MASTER_PAGE_SIZE_DEFAULT;
+}
+function setMasterPageSize(key, v) {
+  state[`${key}PageSize`] = v;
+  try { localStorage.setItem(`${key}PageSize`, String(v)); } catch (_) {}
+}
+function masterPaginationHtml({ total, page, totalPages, key, pageSize, noun }) {
+  const currentRaw = state[`${key}PageSize`]
+    ?? (typeof localStorage !== "undefined" ? localStorage.getItem(`${key}PageSize`) : null)
+    ?? MASTER_PAGE_SIZE_DEFAULT;
+  const currentStr = (currentRaw === "all" || currentRaw === "All") ? "all" : String(currentRaw);
+  const picker = `
+    <label class="master-page-size-picker" style="display:inline-flex;align-items:center;gap:6px;font-size:0.8rem;color:var(--muted-color)">
+      Rows per page
+      <select data-page-size-key="${key}" class="ncm-input" style="padding:2px 6px;font-size:0.8rem;width:auto;min-width:64px">
+        ${MASTER_PAGE_SIZE_OPTIONS.map((opt) => {
+          const val = String(opt);
+          const label = opt === "all" ? "All" : String(opt);
+          const sel = val === currentStr ? "selected" : "";
+          return `<option value="${val}" ${sel}>${label}</option>`;
+        }).join("")}
+      </select>
+    </label>`;
+  if (pageSize !== Infinity && total > pageSize) {
+    return `<div class="cust-pagination">
+      <span class="cust-page-info">Page ${page} of ${totalPages} · ${total} ${noun}${total !== 1 ? "s" : ""}</span>
+      <div class="cust-page-btns" style="display:inline-flex;align-items:center;gap:12px">
+        ${picker}
+        <button class="cust-page-btn" data-page-prev="${key}" ${page <= 1 ? "disabled" : ""}>← Prev</button>
+        <button class="cust-page-btn" data-page-next="${key}" ${page >= totalPages ? "disabled" : ""}>Next →</button>
+      </div>
+    </div>`;
+  }
+  return `<div class="cust-pagination">
+    <span class="cust-page-info" style="font-size:0.8rem;color:var(--muted-color)">${total} ${noun}${total !== 1 ? "s" : ""}</span>
+    ${picker}
+  </div>`;
+}
+
+// Back-compat thin wrappers (customer list still calls these)
+function getCustPageSize() { return getMasterPageSize("customer"); }
+function setCustPageSize(v) { setMasterPageSize("customer", v); }
 
 function isCustomerApiLocked() {
   return !!(state.user?.masterApiLock?.manageCustomersByApi || state.cache.masterApiLock?.manageCustomersByApi);
@@ -8601,15 +8706,15 @@ function buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk
         </tbody>
       </table>`;
 
-  const paginationHtml = all.length > CUST_PAGE_SIZE
-    ? `<div class="cust-pagination">
-        <span class="cust-page-info">Page ${page} of ${totalPages} · ${all.length} customers</span>
-        <div class="cust-page-btns">
-          <button class="cust-page-btn" id="cust-prev" ${page <= 1 ? "disabled" : ""}>← Prev</button>
-          <button class="cust-page-btn" id="cust-next" ${page >= totalPages ? "disabled" : ""}>Next →</button>
-        </div>
-      </div>`
-    : `<div class="cust-page-info" style="font-size:0.8rem;color:var(--muted-color);padding-top:var(--sp-2)">${all.length} customer${all.length !== 1 ? "s" : ""}</div>`;
+  const pageSize = getCustPageSize();
+  const paginationHtml = masterPaginationHtml({
+    total: all.length,
+    page,
+    totalPages,
+    key: "customer",
+    pageSize,
+    noun: "customer"
+  });
 
   return `<div class="cust-table-wrap">${tableHtml}</div>${paginationHtml}`;
 }
@@ -8709,12 +8814,18 @@ function attachCustBodyListeners(container, totalPages, termOptions) {
 
   // Pagination
   const bodyEl = container.querySelector("#cust-body");
-  container.querySelector("#cust-prev")?.addEventListener("click", () => {
+  container.querySelector('[data-page-prev="customer"]')?.addEventListener("click", () => {
     state.customerListPage = Math.max(1, state.customerListPage - 1);
     refreshCustBody(bodyEl, termOptions);
   });
-  container.querySelector("#cust-next")?.addEventListener("click", () => {
+  container.querySelector('[data-page-next="customer"]')?.addEventListener("click", () => {
     state.customerListPage = Math.min(totalPages, state.customerListPage + 1);
+    refreshCustBody(bodyEl, termOptions);
+  });
+  container.querySelector('[data-page-size-key="customer"]')?.addEventListener("change", (e) => {
+    const v = e.target.value;
+    setMasterPageSize("customer", v === "all" ? "all" : Number(v));
+    state.customerListPage = 1;
     refreshCustBody(bodyEl, termOptions);
   });
 }
@@ -9017,11 +9128,12 @@ function openBulkEditCustomersModal() {
 
 function refreshCustBody(bodyEl, termOptions) {
   const all = filteredCustomers();
-  const totalPages = Math.max(1, Math.ceil(all.length / CUST_PAGE_SIZE));
+  const pageSize = getCustPageSize();
+  const totalPages = Math.max(1, Math.ceil(all.length / (pageSize === Infinity ? Math.max(1, all.length) : pageSize)));
   state.customerListPage = Math.min(state.customerListPage, totalPages);
   const page = state.customerListPage;
-  const start = (page - 1) * CUST_PAGE_SIZE;
-  const slice = all.slice(start, start + CUST_PAGE_SIZE);
+  const start = pageSize === Infinity ? 0 : (page - 1) * pageSize;
+  const slice = pageSize === Infinity ? all : all.slice(start, start + pageSize);
   const role = state.user?.role ?? "REP";
   const isAdmin = role === "ADMIN";
   const apiLocked = isCustomerApiLocked();
@@ -9034,11 +9146,12 @@ function refreshCustBody(bodyEl, termOptions) {
 
 function renderCustomerListSection(container, termOptions) {
   const all = filteredCustomers();
-  const totalPages = Math.max(1, Math.ceil(all.length / CUST_PAGE_SIZE));
+  const pageSize = getCustPageSize();
+  const totalPages = Math.max(1, Math.ceil(all.length / (pageSize === Infinity ? Math.max(1, all.length) : pageSize)));
   state.customerListPage = Math.min(state.customerListPage, totalPages);
   const page = state.customerListPage;
-  const start = (page - 1) * CUST_PAGE_SIZE;
-  const slice = all.slice(start, start + CUST_PAGE_SIZE);
+  const start = pageSize === Infinity ? 0 : (page - 1) * pageSize;
+  const slice = pageSize === Infinity ? all : all.slice(start, start + pageSize);
   const role = state.user?.role ?? "REP";
   const isAdmin = role === "ADMIN";
   const canSeeTeam = ["MANAGER", "SUPERVISOR"].includes(role);
