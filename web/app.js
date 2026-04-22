@@ -55,6 +55,39 @@ const authMessage = qs("#auth-message");
 const HOUR_OPTIONS = Array.from({ length: 24 }, (_, h) => `<option value="${h}">${String(h).padStart(2,"0")}:00</option>`).join("");
 const DAY_OF_WEEK = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 
+// Allowed CRM target fields per entity type. Must stay in sync with
+// customerMappedSchema / itemMappedSchema / paymentTermMappedSchema in
+// src/modules/integrations/connector-framework.ts.
+const CRM_TARGET_FIELDS = {
+  CUSTOMER: [
+    { value: "customerCode",    label: "Customer Code",         required: true },
+    { value: "name",            label: "Customer Name",         required: true },
+    { value: "customerType",    label: "Customer Type",         required: false },
+    { value: "taxId",           label: "Tax ID",                 required: false },
+    { value: "defaultTermCode", label: "Default Payment Term",  required: false },
+    { value: "ownerId",         label: "Owner User ID",         required: false },
+    { value: "siteLat",         label: "Site Latitude",          required: false },
+    { value: "siteLng",         label: "Site Longitude",         required: false },
+    { value: "externalRef",     label: "External Reference",    required: false }
+  ],
+  ITEM: [
+    { value: "itemCode",  label: "Item Code",  required: true },
+    { value: "name",      label: "Item Name",  required: true },
+    { value: "unitPrice", label: "Unit Price", required: true }
+  ],
+  PAYMENT_TERM: [
+    { value: "code",    label: "Term Code", required: true },
+    { value: "name",    label: "Term Name", required: true },
+    { value: "dueDays", label: "Due Days",  required: true }
+  ]
+};
+
+function crmTargetOptions(entityType, selected) {
+  const list = CRM_TARGET_FIELDS[entityType] || [];
+  const opts = list.map(f => `<option value="${f.value}"${selected === f.value ? " selected" : ""}>${escHtml(f.label)}${f.required ? " *" : ""}</option>`).join("");
+  return `<option value="">— select CRM field —</option>${opts}`;
+}
+
 // Apply branding (app name + colors) to the login page before authentication.
 function applyLoginBranding(b) {
   const appName = b.appName || "ThinkCRM";
@@ -4888,6 +4921,20 @@ function renderSettings() {
           </div>
           <form id="sync-mapping-form">
             <input type="hidden" name="sourceId" id="sync-mapping-source-id">
+            <input type="hidden" id="sync-mapping-locked-entity" value="">
+            <div id="sync-mapping-fetch-wrap" style="display:none;padding:var(--sp-2) var(--sp-3);background:var(--clr-surface-hover,#f5f5f7);border-radius:var(--radius);margin-bottom:var(--sp-3);font-size:0.85rem">
+              <button type="button" class="btn-primary small" id="sync-mapping-fetch-btn">🔍 Fetch sample fields from source</button>
+              <span class="muted" style="margin-left:var(--sp-2);font-size:0.82rem">Calls the endpoint and auto-fills source fields from the first record. Then just pick the matching CRM field for each row.</span>
+              <p id="sync-mapping-fetch-msg" class="muted small" style="margin:6px 0 0;min-height:1em"></p>
+            </div>
+            <div style="display:flex;gap:var(--sp-2);align-items:center;font-size:0.78rem;color:var(--muted);margin-bottom:var(--sp-2)">
+              <span style="width:130px" id="sync-mapping-col-entity">Entity</span>
+              <span style="width:180px">Source field (ERP)</span>
+              <span style="width:12px">→</span>
+              <span style="width:200px">CRM field</span>
+              <span style="width:160px">Transform</span>
+              <span>Required</span>
+            </div>
             <div id="sync-mapping-rows"></div>
             <div style="margin-top:var(--sp-2)">
               <button type="button" class="ghost small" id="sync-mapping-add-row">+ Add Mapping</button>
@@ -6143,11 +6190,22 @@ function renderSettings() {
     btn.addEventListener("click", () => {
       const sourceId = btn.dataset.sourceId;
       const source = (state.cache.syncSources || []).find(s => s.id === sourceId);
+      const isRest = source?.sourceType === "REST";
+      const cfg = (source?.configJson && typeof source.configJson === "object") ? source.configJson : {};
+      const lockedEntity = isRest && typeof cfg.entityType === "string" ? cfg.entityType : "";
       qs("#sync-mapping-editor").style.display = "block";
       qs("#sync-mapping-source-name").textContent = btn.dataset.sourceName;
       qs("#sync-mapping-source-id").value = sourceId;
-      const rows = (source?.mappings || []).map((m, i) => syncMappingRowHtml(i, m)).join("");
-      qs("#sync-mapping-rows").innerHTML = rows || syncMappingRowHtml(0);
+      qs("#sync-mapping-locked-entity").value = lockedEntity;
+      // Show "Fetch sample fields" button only for REST sources (other types don't have a live endpoint).
+      qs("#sync-mapping-fetch-wrap").style.display = isRest ? "" : "none";
+      qs("#sync-mapping-fetch-msg").textContent = "";
+      // Hide entity column when locked (single-entity REST source).
+      const entityCol = qs("#sync-mapping-col-entity");
+      if (entityCol) entityCol.style.display = lockedEntity ? "none" : "";
+      const effectiveLock = lockedEntity || undefined;
+      const rows = (source?.mappings || []).map((m, i) => syncMappingRowHtml(i, m, effectiveLock)).join("");
+      qs("#sync-mapping-rows").innerHTML = rows || syncMappingRowHtml(0, null, effectiveLock);
     });
   });
   qs("#sync-mapping-close")?.addEventListener("click", () => {
@@ -6156,7 +6214,70 @@ function renderSettings() {
   qs("#sync-mapping-add-row")?.addEventListener("click", () => {
     const container = qs("#sync-mapping-rows");
     const idx = container.querySelectorAll(".sync-mapping-row").length;
-    container.insertAdjacentHTML("beforeend", syncMappingRowHtml(idx));
+    const lockedEntity = qs("#sync-mapping-locked-entity")?.value || undefined;
+    container.insertAdjacentHTML("beforeend", syncMappingRowHtml(idx, null, lockedEntity));
+  });
+  // Dynamic CRM-field dropdown when entity changes (only when entity is not locked).
+  qs("#sync-mapping-rows")?.addEventListener("change", (e) => {
+    if (!(e.target instanceof HTMLSelectElement)) return;
+    if (!e.target.classList.contains("sync-mapping-entity")) return;
+    const row = e.target.closest(".sync-mapping-row");
+    const targetSel = row?.querySelector(".sync-mapping-target");
+    if (!targetSel) return;
+    const prev = targetSel.value;
+    targetSel.innerHTML = crmTargetOptions(e.target.value, prev);
+    targetSel.dataset.entity = e.target.value;
+  });
+  // Fetch sample fields — call test endpoint, populate source fields.
+  qs("#sync-mapping-fetch-btn")?.addEventListener("click", async () => {
+    const btnFetch = qs("#sync-mapping-fetch-btn");
+    const msgEl = qs("#sync-mapping-fetch-msg");
+    const sourceId = qs("#sync-mapping-source-id").value;
+    const lockedEntity = qs("#sync-mapping-locked-entity")?.value || undefined;
+    if (!sourceId) return;
+    const original = btnFetch.textContent;
+    btnFetch.disabled = true;
+    btnFetch.textContent = "Fetching…";
+    msgEl.textContent = "";
+    msgEl.style.color = "";
+    try {
+      const res = await api(`/integrations/master-data/sources/${sourceId}/test`, { method: "POST" });
+      if (!res.ok) throw new Error(res.message || "Test connection failed.");
+      const keys = Array.isArray(res.detail?.firstRecordKeys) ? res.detail.firstRecordKeys : [];
+      if (keys.length === 0) {
+        msgEl.textContent = "Connection OK but no records returned — cannot detect fields.";
+        msgEl.style.color = "var(--danger,#dc2626)";
+        return;
+      }
+      // Preserve existing target selections keyed by sourceField so users don't lose prior work.
+      const existing = new Map();
+      qs("#sync-mapping-rows").querySelectorAll(".sync-mapping-row").forEach(r => {
+        const sf = r.querySelector('[name="sourceField"]')?.value?.trim();
+        const tf = r.querySelector('[name="targetField"]')?.value;
+        const tr = r.querySelector('[name="transformRule"]')?.value;
+        const req = r.querySelector('[name="isRequired"]')?.checked;
+        if (sf) existing.set(sf, { targetField: tf, transformRule: tr, isRequired: req });
+      });
+      const rows = keys.map((k, i) => {
+        const prev = existing.get(k);
+        return syncMappingRowHtml(i, {
+          entityType: lockedEntity,
+          sourceField: k,
+          targetField: prev?.targetField || "",
+          transformRule: prev?.transformRule || "",
+          isRequired: prev?.isRequired || false
+        }, lockedEntity);
+      }).join("");
+      qs("#sync-mapping-rows").innerHTML = rows;
+      msgEl.textContent = `✓ Found ${keys.length} field(s). Now pick the matching CRM field for each row.`;
+      msgEl.style.color = "var(--accent-bright,#16a34a)";
+    } catch (err) {
+      msgEl.textContent = `✗ ${err.message || "Fetch failed."}`;
+      msgEl.style.color = "var(--danger,#dc2626)";
+    } finally {
+      btnFetch.disabled = false;
+      btnFetch.textContent = original;
+    }
   });
   qs("#sync-mapping-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -8581,19 +8702,25 @@ function openEditCustomerModal(cust, termOptions) {
 
 
 /** Render a single field mapping editor row. */
-function syncMappingRowHtml(idx, m) {
+function syncMappingRowHtml(idx, m, lockedEntity) {
   const d = m || {};
+  const entity = lockedEntity || d.entityType || "CUSTOMER";
+  const entityCell = lockedEntity
+    ? `<input type="hidden" name="entityType" value="${escHtml(lockedEntity)}">`
+    : `<select name="entityType" class="form-control sync-mapping-entity" style="width:130px">
+         <option value="CUSTOMER" ${entity === "CUSTOMER" ? "selected" : ""}>Customer</option>
+         <option value="ITEM" ${entity === "ITEM" ? "selected" : ""}>Item</option>
+         <option value="PAYMENT_TERM" ${entity === "PAYMENT_TERM" ? "selected" : ""}>Payment Term</option>
+       </select>`;
   return `
     <div class="sync-mapping-row" style="display:flex;gap:var(--sp-2);align-items:center;margin-bottom:var(--sp-2);flex-wrap:wrap">
-      <select name="entityType" class="form-control" style="width:120px">
-        <option value="CUSTOMER" ${d.entityType === "CUSTOMER" ? "selected" : ""}>Customer</option>
-        <option value="ITEM" ${d.entityType === "ITEM" ? "selected" : ""}>Item</option>
-        <option value="PAYMENT_TERM" ${d.entityType === "PAYMENT_TERM" ? "selected" : ""}>Payment Term</option>
-      </select>
-      <input type="text" name="sourceField" placeholder="ERP field (e.g. cust_code)" value="${escHtml(d.sourceField || "")}" class="form-control" style="width:150px">
+      ${entityCell}
+      <input type="text" name="sourceField" placeholder="Source field from ERP" value="${escHtml(d.sourceField || "")}" class="form-control" style="width:180px">
       <span>→</span>
-      <input type="text" name="targetField" placeholder="CRM field (e.g. customerCode)" value="${escHtml(d.targetField || "")}" class="form-control" style="width:150px">
-      <input type="text" name="transformRule" placeholder="Transform (trim/upper/lower/number)" value="${escHtml(d.transformRule || "")}" class="form-control" style="width:140px">
+      <select name="targetField" class="form-control sync-mapping-target" style="width:200px" data-entity="${entity}">
+        ${crmTargetOptions(entity, d.targetField || "")}
+      </select>
+      <input type="text" name="transformRule" placeholder="trim / upper / lower / number" value="${escHtml(d.transformRule || "")}" class="form-control" style="width:160px">
       <label style="display:flex;align-items:center;gap:4px;font-size:0.82rem"><input type="checkbox" name="isRequired" ${d.isRequired ? "checked" : ""}> Required</label>
       <button type="button" class="ghost small" onclick="this.closest('.sync-mapping-row').remove()">${icon('x', 12)}</button>
     </div>`;
