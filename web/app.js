@@ -738,6 +738,7 @@ const settingsPageRouteMap = {
   "roles":          "/settings/roles",
   "kpi-targets":    "/settings/kpi-targets",
   "integrations":   "/settings/integrations",
+  "data-sync":      "/settings/data-sync",
   "cron-jobs":      "/settings/scheduled-jobs",
   "custom-domain":  "/settings/custom-domain",
   "custom-fields":  "/settings/custom-fields"
