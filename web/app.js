@@ -4742,6 +4742,7 @@ function renderSettings() {
                 <strong>Request:</strong> ${escHtml(cfg.method || "GET")} <code>${escHtml(cfg.endpointUrl || "")}</code>
                 ${qp.length ? ` · <strong>Params:</strong> ${qp.map(([k, v]) => `<code>${escHtml(k)}=${escHtml(String(v))}</code>`).join(", ")}` : ""}
                 ${cfg.authHeaderName ? ` · <strong>Auth header:</strong> <code>${escHtml(cfg.authHeaderName)}</code>` : ""}
+                · <strong>Schedule:</strong> ${escHtml(describeSchedule(cfg.schedule))}
               </p>`;
             })() : ""}
             <div class="sync-source-edit-wrap" id="sync-source-edit-${src.id}" hidden style="margin-top:var(--sp-3);padding:var(--sp-3);border:1px solid var(--clr-border);border-radius:var(--radius)">
@@ -4792,6 +4793,7 @@ function renderSettings() {
                       <button type="button" class="ghost small" data-qp-add="${src.id}">+ Add parameter</button>
                       <p class="muted" style="font-size:0.75rem;margin:6px 0 0">Tip: type <code>{</code> in a value to insert date variables like <code>{{today}}</code>.</p>
                     </div>
+                    ${renderScheduleBlock("edit-" + src.id, cfg.schedule)}
                   `;
                 })() : ""}
                 <div class="form-actions">
@@ -4860,7 +4862,8 @@ function renderSettings() {
                 <button type="button" class="ghost small" data-qp-add="create">+ Add parameter</button>
                 <p class="muted" style="font-size:0.75rem;margin:6px 0 0">Tip: type <code>{</code> in a value to insert date variables like <code>{{today}}</code> or <code>{{today-7d:YYYYMMDD}}</code>.</p>
               </div>
-              <p class="muted" style="font-size:0.78rem;margin:0">Request sent: <code>&lt;method&gt; &lt;endpoint&gt;?&lt;params&gt;</code> with <code>Accept: application/json</code> + auth header. Pull runs nightly at 02:00 (tenant timezone) for every ENABLED REST source, plus whenever you click <strong>Pull now</strong>.</p>
+              ${renderScheduleBlock("create", null)}
+              <p class="muted" style="font-size:0.78rem;margin:0">Request sent: <code>&lt;method&gt; &lt;endpoint&gt;?&lt;params&gt;</code> with <code>Accept: application/json</code> + auth header. Scheduled pulls honour the schedule above (tenant timezone). <strong>Pull now</strong> always runs regardless.</p>
             </div>
             <div class="form-actions">
               <button type="submit" class="btn-primary small">Create Source</button>
@@ -5798,6 +5801,152 @@ function renderSettings() {
     hideTplPopup();
   });
 
+  const HOUR_OPTIONS = Array.from({ length: 24 }, (_, h) => `<option value="${h}">${String(h).padStart(2,"0")}:00</option>`).join("");
+  const DAY_OF_WEEK = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+
+  function renderScheduleBlock(scope, current) {
+    const s = current || { kind: "MANUAL" };
+    const kind = s.kind || "MANUAL";
+    const anchorHour = s.anchorHourLocal ?? 2;
+    const intervalHours = s.intervalHours ?? 4;
+    const dailyHours = Array.isArray(s.hoursLocal) && s.hoursLocal.length ? s.hoursLocal : [2];
+    const weeklyDow = s.dayOfWeek ?? 1;
+    const weeklyHour = s.hourLocal ?? 2;
+    const monthlyDom = s.dayOfMonth ?? 1;
+    const monthlyHour = s.hourLocal ?? 2;
+    const hourSel = (name, val) => `<select name="${name}" class="form-control" style="max-width:110px">${HOUR_OPTIONS.replace(`value="${val}"`, `value="${val}" selected`)}</select>`;
+    const dailyChips = dailyHours.map(h => `
+      <span class="sched-hour-chip" data-hour="${h}" style="display:inline-flex;align-items:center;gap:4px;padding:4px 8px;border:1px solid var(--clr-border);border-radius:999px;font-size:0.82rem;margin:0 6px 6px 0;background:var(--surface-2,#f3f4f6)">
+        ${String(h).padStart(2,"0")}:00
+        <button type="button" class="sched-hour-remove" style="background:none;border:none;cursor:pointer;color:var(--muted-color);font-size:1rem;line-height:1">&times;</button>
+      </span>`).join("");
+    return `
+      <fieldset class="sched-block" data-sched-scope="${scope}" style="border:1px solid var(--clr-border);border-radius:var(--radius);padding:var(--sp-3);margin-top:var(--sp-3)">
+        <legend style="padding:0 var(--sp-2);font-size:0.82rem;font-weight:600">Sync schedule</legend>
+        <div class="form-row">
+          <label class="form-label">How often
+            <select name="schedKind" class="form-control" data-sched-kind>
+              <option value="MANUAL"${kind==="MANUAL"?" selected":""}>Manual only</option>
+              <option value="INTERVAL"${kind==="INTERVAL"?" selected":""}>Every few hours</option>
+              <option value="DAILY"${kind==="DAILY"?" selected":""}>Daily (one or more times)</option>
+              <option value="WEEKLY"${kind==="WEEKLY"?" selected":""}>Weekly</option>
+              <option value="MONTHLY"${kind==="MONTHLY"?" selected":""}>Monthly</option>
+            </select>
+          </label>
+        </div>
+        <div data-sched-when="INTERVAL" style="${kind==="INTERVAL"?"":"display:none"}">
+          <div class="form-row" style="display:flex;gap:var(--sp-2);align-items:flex-end;flex-wrap:wrap">
+            <label class="form-label">Every
+              <select name="schedIntervalHours" class="form-control" style="max-width:90px">
+                ${[1,2,3,4,6,8,12].map(n => `<option value="${n}"${n===intervalHours?" selected":""}>${n}</option>`).join("")}
+              </select>
+            </label>
+            <span style="padding-bottom:10px">hours, starting at</span>
+            <label class="form-label">${hourSel("schedAnchorHour", anchorHour)}</label>
+          </div>
+        </div>
+        <div data-sched-when="DAILY" style="${kind==="DAILY"?"":"display:none"}">
+          <div class="form-row">
+            <label class="form-label">At these times</label>
+            <div class="sched-hours" data-sched-hours>${dailyChips}</div>
+            <div style="display:flex;gap:var(--sp-2);align-items:center;margin-top:6px">
+              <select class="form-control sched-hour-picker" style="max-width:110px">${HOUR_OPTIONS}</select>
+              <button type="button" class="ghost small sched-hour-add">+ Add time</button>
+            </div>
+          </div>
+        </div>
+        <div data-sched-when="WEEKLY" style="${kind==="WEEKLY"?"":"display:none"}">
+          <div class="form-row" style="display:flex;gap:var(--sp-2);align-items:flex-end;flex-wrap:wrap">
+            <label class="form-label">On
+              <select name="schedDayOfWeek" class="form-control" style="max-width:140px">
+                ${DAY_OF_WEEK.map((d,i) => `<option value="${i}"${i===weeklyDow?" selected":""}>${d}</option>`).join("")}
+              </select>
+            </label>
+            <span style="padding-bottom:10px">at</span>
+            <label class="form-label">${hourSel("schedWeeklyHour", weeklyHour)}</label>
+          </div>
+        </div>
+        <div data-sched-when="MONTHLY" style="${kind==="MONTHLY"?"":"display:none"}">
+          <div class="form-row" style="display:flex;gap:var(--sp-2);align-items:flex-end;flex-wrap:wrap">
+            <span style="padding-bottom:10px">On day</span>
+            <label class="form-label">
+              <select name="schedDayOfMonth" class="form-control" style="max-width:90px">
+                ${Array.from({length:28},(_,i)=>i+1).map(d => `<option value="${d}"${d===monthlyDom?" selected":""}>${d}</option>`).join("")}
+              </select>
+            </label>
+            <span style="padding-bottom:10px">at</span>
+            <label class="form-label">${hourSel("schedMonthlyHour", monthlyHour)}</label>
+          </div>
+        </div>
+        <p class="muted" style="font-size:0.75rem;margin:6px 0 0">Times are in your tenant timezone. "Manual only" means the source only runs when you click <strong>Pull now</strong>.</p>
+      </fieldset>`;
+  }
+
+  function wireScheduleBlock(block) {
+    if (!block) return;
+    const kindSelect = block.querySelector("[data-sched-kind]");
+    const toggle = () => {
+      const kind = kindSelect.value;
+      block.querySelectorAll("[data-sched-when]").forEach(el => {
+        el.style.display = el.dataset.schedWhen === kind ? "" : "none";
+      });
+    };
+    kindSelect.addEventListener("change", toggle);
+    const addBtn = block.querySelector(".sched-hour-add");
+    const hoursWrap = block.querySelector("[data-sched-hours]");
+    const picker = block.querySelector(".sched-hour-picker");
+    if (addBtn && hoursWrap && picker) {
+      addBtn.addEventListener("click", () => {
+        const h = parseInt(picker.value, 10);
+        if (Number.isNaN(h)) return;
+        if (hoursWrap.querySelector(`[data-hour="${h}"]`)) return;
+        const chip = document.createElement("span");
+        chip.className = "sched-hour-chip";
+        chip.dataset.hour = String(h);
+        chip.style.cssText = "display:inline-flex;align-items:center;gap:4px;padding:4px 8px;border:1px solid var(--clr-border);border-radius:999px;font-size:0.82rem;margin:0 6px 6px 0;background:var(--surface-2,#f3f4f6)";
+        chip.innerHTML = `${String(h).padStart(2,"0")}:00 <button type="button" class="sched-hour-remove" style="background:none;border:none;cursor:pointer;color:var(--muted-color);font-size:1rem;line-height:1">&times;</button>`;
+        hoursWrap.appendChild(chip);
+      });
+    }
+    block.addEventListener("click", (e) => {
+      if (e.target instanceof HTMLElement && e.target.classList.contains("sched-hour-remove")) {
+        e.target.closest(".sched-hour-chip")?.remove();
+      }
+    });
+  }
+
+  function readScheduleFromBlock(block) {
+    if (!block) return { kind: "MANUAL" };
+    const kind = block.querySelector("[data-sched-kind]")?.value || "MANUAL";
+    const num = (name) => parseInt(block.querySelector(`[name="${name}"]`)?.value ?? "0", 10) || 0;
+    switch (kind) {
+      case "INTERVAL":
+        return { kind, intervalHours: num("schedIntervalHours") || 4, anchorHourLocal: num("schedAnchorHour") };
+      case "DAILY": {
+        const hours = Array.from(block.querySelectorAll("[data-sched-hours] .sched-hour-chip"))
+          .map(c => parseInt(c.dataset.hour, 10))
+          .filter(h => Number.isFinite(h));
+        return { kind, hoursLocal: hours.length ? hours : [2] };
+      }
+      case "WEEKLY":
+        return { kind, dayOfWeek: num("schedDayOfWeek"), hourLocal: num("schedWeeklyHour") };
+      case "MONTHLY":
+        return { kind, dayOfMonth: num("schedDayOfMonth") || 1, hourLocal: num("schedMonthlyHour") };
+      default:
+        return { kind: "MANUAL" };
+    }
+  }
+
+  function describeSchedule(s) {
+    if (!s || s.kind === "MANUAL") return "Manual only";
+    const h = (n) => String(n).padStart(2,"0") + ":00";
+    if (s.kind === "INTERVAL") return `Every ${s.intervalHours}h from ${h(s.anchorHourLocal)}`;
+    if (s.kind === "DAILY") return `Daily at ${(s.hoursLocal||[]).map(h).join(", ")}`;
+    if (s.kind === "WEEKLY") return `${DAY_OF_WEEK[s.dayOfWeek] || "?"} at ${h(s.hourLocal)}`;
+    if (s.kind === "MONTHLY") return `Day ${s.dayOfMonth} at ${h(s.hourLocal)}`;
+    return "Manual only";
+  }
+
   function readQueryParamRows(container) {
     const out = {};
     if (!container) return out;
@@ -5824,6 +5973,7 @@ function renderSettings() {
       appendQueryParamRow(btn.parentElement?.querySelector(`[data-qp-rows="${btn.dataset.qpAdd}"]`));
     });
   });
+  views.settings.querySelectorAll(".sched-block").forEach(wireScheduleBlock);
   views.settings.addEventListener("click", (e) => {
     if (e.target instanceof HTMLElement && e.target.classList.contains("qp-remove")) {
       e.target.closest(".qp-row")?.remove();
@@ -5860,6 +6010,7 @@ function renderSettings() {
       if (val) configJson.authValue = val; // backend encrypts → authValueEnc
       const qp = readQueryParamRows(e.currentTarget.querySelector('[data-qp-rows="create"]'));
       if (Object.keys(qp).length) configJson.queryParams = qp;
+      configJson.schedule = readScheduleFromBlock(e.currentTarget.querySelector('.sched-block[data-sched-scope="create"]'));
     }
     try {
       await api("/integrations/master-data/sources", {
@@ -5932,6 +6083,7 @@ function renderSettings() {
         const authValue = String(fd.get("authValue") || "").trim();
         if (authValue) configJson.authValue = authValue; // backend encrypts, otherwise preserves existing
         configJson.queryParams = readQueryParamRows(form.querySelector(`[data-qp-rows="${form.dataset.sourceId}"]`));
+        configJson.schedule = readScheduleFromBlock(form.querySelector(`.sched-block[data-sched-scope="edit-${form.dataset.sourceId}"]`));
         body.configJson = configJson;
       }
       try {

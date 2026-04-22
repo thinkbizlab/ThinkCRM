@@ -19,7 +19,7 @@
     },
     {
       "path": "/api/v1/cron/sync-rest-pull",
-      "schedule": "0 19 * * *"
+      "schedule": "0 * * * *"
     }
   ]
 }

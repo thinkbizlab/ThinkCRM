@@ -21,6 +21,13 @@ import { executeConnectorRun, type ConnectorRunResult } from "../integrations/co
 type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS";
 const ALLOWED_METHODS: ReadonlySet<HttpMethod> = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]);
 
+export type SyncSchedule =
+  | { kind: "MANUAL" }
+  | { kind: "INTERVAL"; intervalHours: number; anchorHourLocal: number }
+  | { kind: "DAILY"; hoursLocal: number[] }
+  | { kind: "WEEKLY"; dayOfWeek: number; hourLocal: number }
+  | { kind: "MONTHLY"; dayOfMonth: number; hourLocal: number };
+
 type RestSourceConfig = {
   endpointUrl: string;
   entityType: EntityType;
@@ -29,7 +36,76 @@ type RestSourceConfig = {
   authValueEnc?: string;
   recordsJsonPath?: string;
   queryParams?: Record<string, string>;
+  schedule: SyncSchedule;
 };
+
+function parseSchedule(raw: unknown): SyncSchedule {
+  if (!raw || typeof raw !== "object") return { kind: "MANUAL" };
+  const o = raw as Record<string, unknown>;
+  const kind = typeof o.kind === "string" ? o.kind : "MANUAL";
+  const toHour = (v: unknown) => {
+    const n = typeof v === "number" ? v : parseInt(String(v), 10);
+    return Number.isFinite(n) && n >= 0 && n <= 23 ? n : 0;
+  };
+  switch (kind) {
+    case "INTERVAL": {
+      const raw = typeof o.intervalHours === "number" ? o.intervalHours : parseInt(String(o.intervalHours), 10);
+      const allowed = [1, 2, 3, 4, 6, 8, 12];
+      const intervalHours = allowed.includes(raw) ? raw : 4;
+      return { kind: "INTERVAL", intervalHours, anchorHourLocal: toHour(o.anchorHourLocal) };
+    }
+    case "DAILY": {
+      const arr = Array.isArray(o.hoursLocal) ? o.hoursLocal : [];
+      const hoursLocal = Array.from(new Set(arr.map(toHour))).sort((a, b) => a - b);
+      return { kind: "DAILY", hoursLocal: hoursLocal.length ? hoursLocal : [2] };
+    }
+    case "WEEKLY": {
+      const d = typeof o.dayOfWeek === "number" ? o.dayOfWeek : parseInt(String(o.dayOfWeek), 10);
+      const dayOfWeek = Number.isFinite(d) && d >= 0 && d <= 6 ? d : 1;
+      return { kind: "WEEKLY", dayOfWeek, hourLocal: toHour(o.hourLocal) };
+    }
+    case "MONTHLY": {
+      const d = typeof o.dayOfMonth === "number" ? o.dayOfMonth : parseInt(String(o.dayOfMonth), 10);
+      const dayOfMonth = Number.isFinite(d) && d >= 1 && d <= 28 ? d : 1;
+      return { kind: "MONTHLY", dayOfMonth, hourLocal: toHour(o.hourLocal) };
+    }
+    default:
+      return { kind: "MANUAL" };
+  }
+}
+
+/** Parts of an absolute moment *in a given IANA timezone*. */
+function localParts(now: Date, timezone: string): { hour: number; dow: number; dom: number; ymd: string } {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    hour: "2-digit", hour12: false,
+    weekday: "short", day: "2-digit", month: "2-digit", year: "numeric"
+  });
+  const parts = Object.fromEntries(fmt.formatToParts(now).map(p => [p.type, p.value]));
+  const hour = parseInt(parts.hour || "0", 10) % 24;
+  const dow = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(parts.weekday || "Sun");
+  const dom = parseInt(parts.day || "1", 10);
+  const ymd = `${parts.year}-${parts.month}-${parts.day}`;
+  return { hour, dow, dom, ymd };
+}
+
+/**
+ * Does this schedule fire on the current tick (hourly cron)?
+ * Called once per source per hour.
+ */
+export function shouldRunNow(schedule: SyncSchedule, now: Date, timezone: string): boolean {
+  if (schedule.kind === "MANUAL") return false;
+  const { hour, dow, dom } = localParts(now, timezone);
+  switch (schedule.kind) {
+    case "INTERVAL": {
+      const offset = ((hour - schedule.anchorHourLocal) % schedule.intervalHours + schedule.intervalHours) % schedule.intervalHours;
+      return offset === 0;
+    }
+    case "DAILY":  return schedule.hoursLocal.includes(hour);
+    case "WEEKLY": return dow === schedule.dayOfWeek && hour === schedule.hourLocal;
+    case "MONTHLY":return dom === schedule.dayOfMonth && hour === schedule.hourLocal;
+  }
+}
 
 function parseRestConfig(raw: unknown): RestSourceConfig {
   if (!raw || typeof raw !== "object") throw new Error("REST source configJson is missing.");
@@ -58,7 +134,8 @@ function parseRestConfig(raw: unknown): RestSourceConfig {
     authHeaderName: typeof obj.authHeaderName === "string" ? obj.authHeaderName : undefined,
     authValueEnc:   typeof obj.authValueEnc   === "string" ? obj.authValueEnc   : undefined,
     recordsJsonPath: typeof obj.recordsJsonPath === "string" ? obj.recordsJsonPath : undefined,
-    queryParams
+    queryParams,
+    schedule: parseSchedule(obj.schedule)
   };
 }
 
@@ -248,14 +325,31 @@ export async function executeRestPull(
  * Returns a summary string for the cron run log.
  */
 export async function pullAllRestSourcesForTenant(tenantId: string): Promise<string> {
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { timezone: true }
+  });
+  const timezone = tenant?.timezone || "Asia/Bangkok";
+  const now = new Date();
+
   const sources = await prisma.integrationSource.findMany({
     where: { tenantId, sourceType: SourceType.REST, status: "ENABLED" },
-    select: { id: true, sourceName: true }
+    select: { id: true, sourceName: true, configJson: true, lastSyncAt: true }
   });
   if (sources.length === 0) return "No enabled REST sources.";
 
+  const due = sources.filter(src => {
+    let schedule: SyncSchedule = { kind: "MANUAL" };
+    try { schedule = parseRestConfig(src.configJson).schedule; } catch { return false; }
+    if (!shouldRunNow(schedule, now, timezone)) return false;
+    if (src.lastSyncAt && now.getTime() - src.lastSyncAt.getTime() < 50 * 60 * 1000) return false;
+    return true;
+  });
+
+  if (due.length === 0) return `No sources due this hour (${sources.length} enabled).`;
+
   const lines: string[] = [];
-  for (const src of sources) {
+  for (const src of due) {
     try {
       const result = await executeRestPull(tenantId, src.id, "cron:syncRestPull");
       const s = result.summary;
