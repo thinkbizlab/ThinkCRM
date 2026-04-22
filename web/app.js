@@ -8864,7 +8864,25 @@ function attachCustBodyListeners(container, totalPages, termOptions) {
     state.customerListPage = Math.min(totalPages, state.customerListPage + 1);
     refreshCustBody(bodyEl, termOptions);
   });
-  // Page-size selector is wired via global delegation (installMasterPageSizeDelegation).
+  // Direct change handler on the page-size select (in addition to body
+  // delegation) so the list reliably refreshes even if delegation is
+  // bypassed by some other handler.
+  container.querySelectorAll('select[data-page-size-key="customer"]').forEach((sel) => {
+    sel.addEventListener("change", () => {
+      const v = sel.value === "all" ? "all" : Number(sel.value);
+      setMasterPageSize("customer", v);
+      state.customerListPage = 1;
+      setStatus("Loading…");
+      if (bodyEl) bodyEl.classList.add("master-list-loading");
+      requestAnimationFrame(() => {
+        try { refreshCustBody(bodyEl, termOptions); }
+        finally {
+          if (bodyEl) bodyEl.classList.remove("master-list-loading");
+          setStatus("");
+        }
+      });
+    });
+  });
 }
 
 function updateCustBulkToolbar() {
