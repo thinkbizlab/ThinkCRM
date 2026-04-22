@@ -62,6 +62,21 @@ const authMessage = qs("#auth-message");
 const HOUR_OPTIONS = Array.from({ length: 24 }, (_, h) => `<option value="${h}">${String(h).padStart(2,"0")}:00</option>`).join("");
 const DAY_OF_WEEK = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 
+let xlsxReady = null;
+function ensureXLSX() {
+  if (window.XLSX) return Promise.resolve(window.XLSX);
+  if (!xlsxReady) {
+    xlsxReady = new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = "/xlsx.min.js";
+      s.onload = () => resolve(window.XLSX);
+      s.onerror = () => { xlsxReady = null; reject(new Error("Failed to load xlsx.min.js")); };
+      document.head.appendChild(s);
+    });
+  }
+  return xlsxReady;
+}
+
 // Allowed CRM target fields per entity type. Must stay in sync with
 // customerMappedSchema / itemMappedSchema / paymentTermMappedSchema in
 // src/modules/integrations/connector-framework.ts.
@@ -1297,7 +1312,7 @@ function getActiveCustomFieldColumns(entity) {
   return defs.filter((d) => d.isActive).map((d) => d.fieldKey);
 }
 
-function downloadMasterDataTemplate(entity) {
+async function downloadMasterDataTemplate(entity) {
   const spec = MASTER_DATA_IMPORT_SPECS[entity];
   if (!spec) return;
   const cfCols = getActiveCustomFieldColumns(entity);
@@ -1308,6 +1323,7 @@ function downloadMasterDataTemplate(entity) {
     for (const k of cfCols) if (!(k in out)) out[k] = "";
     return out;
   });
+  const XLSX = await ensureXLSX();
   const ws = XLSX.utils.json_to_sheet(rows, { header: allColumns });
   ws["!cols"] = allColumns.map(() => ({ wch: 20 }));
   const wb = XLSX.utils.book_new();
@@ -1361,6 +1377,7 @@ function openMasterDataImportModal(entity) {
     if (!file) { submitBtn.disabled = true; parsedRows = null; return; }
     try {
       const buf = await file.arrayBuffer();
+      const XLSX = await ensureXLSX();
       const wb = XLSX.read(buf, { type: "array" });
       const sheetName = wb.SheetNames[0];
       if (!sheetName) throw new Error("Excel file has no sheets.");
@@ -7240,13 +7257,14 @@ function renderSettings() {
     const resultsDiv = overlay.querySelector(".import-results");
     const templateBtn = overlay.querySelector(".import-template-btn");
 
-    templateBtn?.addEventListener("click", () => {
+    templateBtn?.addEventListener("click", async () => {
       const sample = [
         { email: "rep@example.com",        fullName: "John Doe",   role: "REP",        teamName: "Bangkok North" },
         { email: "supervisor@example.com", fullName: "Alice Sup",  role: "SUPERVISOR", teamName: "Bangkok North" },
         { email: "manager@example.com",    fullName: "Jane Mgr",   role: "MANAGER",    teamName: "" },
         { email: "director@example.com",   fullName: "Bob Dir",    role: "DIRECTOR",   teamName: "" }
       ];
+      const XLSX = await ensureXLSX();
       const ws = XLSX.utils.json_to_sheet(sample, { header: ["email", "fullName", "role", "teamName"] });
       ws["!cols"] = [{ wch: 28 }, { wch: 22 }, { wch: 12 }, { wch: 22 }];
       const wb = XLSX.utils.book_new();
@@ -7259,6 +7277,7 @@ function renderSettings() {
       if (!file) { submitBtn.disabled = true; parsedUsers = null; return; }
       try {
         const buf = await file.arrayBuffer();
+        const XLSX = await ensureXLSX();
         const wb = XLSX.read(buf, { type: "array" });
         const sheetName = wb.SheetNames[0];
         if (!sheetName) throw new Error("Excel file has no sheets.");
@@ -7563,7 +7582,7 @@ function renderSettings() {
     });
   }
 
-  qs("#kpi-template-btn")?.addEventListener("click", () => {
+  qs("#kpi-template-btn")?.addEventListener("click", async () => {
     const reps = Array.isArray(state.cache.salesReps) ? state.cache.salesReps : [];
     const targets = Array.isArray(state.cache.kpiTargets) ? state.cache.kpiTargets : [];
     const currentMonth = new Date().toISOString().slice(0, 7);
@@ -7596,6 +7615,7 @@ function renderSettings() {
       rows.push({ email: "rep@example.com", fullName: "Example Rep", targetMonth: currentMonth, visitTargetCount: 20, newDealValueTarget: 500000, revenueTarget: 300000 });
     }
     const header = ["email", "fullName", "targetMonth", "visitTargetCount", "newDealValueTarget", "revenueTarget"];
+    const XLSX = await ensureXLSX();
     const ws = XLSX.utils.json_to_sheet(rows, { header });
     ws["!cols"] = [{ wch: 28 }, { wch: 22 }, { wch: 12 }, { wch: 14 }, { wch: 20 }, { wch: 16 }];
     const wb = XLSX.utils.book_new();
@@ -7644,6 +7664,7 @@ function renderSettings() {
       if (!file) { submitBtn.disabled = true; parsedRows = null; return; }
       try {
         const buf = await file.arrayBuffer();
+        const XLSX = await ensureXLSX();
         const wb = XLSX.read(buf, { type: "array" });
         const sheetName = wb.SheetNames[0];
         if (!sheetName) throw new Error("Excel file has no sheets.");
@@ -10452,7 +10473,7 @@ function describeCron(expr, tz) {
   return `${expr} (${tzLabel})`;
 }
 
-function exportRows(baseName, rows, format) {
+async function exportRows(baseName, rows, format) {
   if (!rows.length) { setStatus("Nothing to export.", true); return; }
   if (format === "csv") {
     const headers = Object.keys(rows[0]);
@@ -10464,6 +10485,7 @@ function exportRows(baseName, rows, format) {
     document.body.appendChild(a); a.click();
     setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 200);
   } else {
+    const XLSX = await ensureXLSX();
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, baseName.slice(0, 31));

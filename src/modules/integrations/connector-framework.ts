@@ -355,6 +355,23 @@ async function resolvePaymentTermId(
   return fallback.id;
 }
 
+async function resolveOwnerId(tenantId: string, raw: string | undefined): Promise<string | undefined> {
+  if (!raw) return undefined;
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  const byId = await prisma.user.findFirst({
+    where: { tenantId, id: trimmed },
+    select: { id: true }
+  });
+  if (byId) return byId.id;
+  const byEmail = await prisma.user.findFirst({
+    where: { tenantId, email: trimmed.toLowerCase() },
+    select: { id: true }
+  });
+  if (byEmail) return byEmail.id;
+  return undefined;
+}
+
 async function upsertEntity(
   tenantId: string,
   entityType: EntityType,
@@ -363,6 +380,7 @@ async function upsertEntity(
   if (entityType === EntityType.CUSTOMER) {
     const payload = customerMappedSchema.parse(mapped);
     const defaultTermId = await resolvePaymentTermId(tenantId, payload);
+    const resolvedOwnerId = await resolveOwnerId(tenantId, payload.ownerId);
     let validatedCf: Prisma.InputJsonValue | undefined;
     if (payload.customFields && Object.keys(payload.customFields).length > 0) {
       const cfDefs = await prisma.customFieldDefinition.findMany({
@@ -402,7 +420,7 @@ async function upsertEntity(
             name: payload.name,
             customerType: payload.customerType ?? undefined,
             taxId: payload.taxId ?? undefined,
-            ownerId: payload.ownerId ?? undefined,
+            ownerId: resolvedOwnerId,
             siteLat: payload.siteLat ?? undefined,
             siteLng: payload.siteLng ?? undefined,
             defaultTermId,
@@ -424,7 +442,7 @@ async function upsertEntity(
         name: payload.name,
         customerType: payload.customerType ?? undefined,
         taxId: payload.taxId ?? undefined,
-        ownerId: payload.ownerId ?? undefined,
+        ownerId: resolvedOwnerId,
         siteLat: payload.siteLat ?? undefined,
         siteLng: payload.siteLng ?? undefined,
         externalRef: payload.externalRef ?? undefined,
@@ -437,7 +455,7 @@ async function upsertEntity(
         name: payload.name,
         customerType: payload.customerType ?? undefined,
         taxId: payload.taxId ?? undefined,
-        ownerId: payload.ownerId ?? undefined,
+        ownerId: resolvedOwnerId,
         siteLat: payload.siteLat ?? undefined,
         siteLng: payload.siteLng ?? undefined,
         externalRef: payload.externalRef ?? undefined,
