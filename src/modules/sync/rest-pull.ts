@@ -18,9 +18,13 @@ import { prisma } from "../../lib/prisma.js";
 import { decryptField } from "../../lib/secrets.js";
 import { executeConnectorRun, type ConnectorRunResult } from "../integrations/connector-framework.js";
 
+type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS";
+const ALLOWED_METHODS: ReadonlySet<HttpMethod> = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]);
+
 type RestSourceConfig = {
   endpointUrl: string;
   entityType: EntityType;
+  method: HttpMethod;
   authHeaderName?: string;
   authValueEnc?: string;
   recordsJsonPath?: string;
@@ -35,6 +39,8 @@ function parseRestConfig(raw: unknown): RestSourceConfig {
   if (!endpointUrl) throw new Error("REST source endpointUrl is not configured.");
   if (!/^https?:\/\//i.test(endpointUrl)) throw new Error("REST source endpointUrl must start with http:// or https://");
   if (!(entityType in EntityType)) throw new Error(`REST source entityType "${entityType}" is invalid.`);
+  const methodRaw = typeof obj.method === "string" ? obj.method.toUpperCase() : "GET";
+  const method: HttpMethod = ALLOWED_METHODS.has(methodRaw as HttpMethod) ? (methodRaw as HttpMethod) : "GET";
   let queryParams: Record<string, string> | undefined;
   if (obj.queryParams && typeof obj.queryParams === "object" && !Array.isArray(obj.queryParams)) {
     queryParams = {};
@@ -48,6 +54,7 @@ function parseRestConfig(raw: unknown): RestSourceConfig {
   return {
     endpointUrl,
     entityType: entityType as EntityType,
+    method,
     authHeaderName: typeof obj.authHeaderName === "string" ? obj.authHeaderName : undefined,
     authValueEnc:   typeof obj.authValueEnc   === "string" ? obj.authValueEnc   : undefined,
     recordsJsonPath: typeof obj.recordsJsonPath === "string" ? obj.recordsJsonPath : undefined,
@@ -128,7 +135,7 @@ export type RestTestResult = {
   status: number;
   statusText: string;
   url: string;
-  method: "GET";
+  method: HttpMethod;
   sentHeaderNames: string[];
   sampleRecordCount: number;
   firstRecordKeys: string[];
@@ -154,8 +161,9 @@ export async function testRestConnection(
   const cfg = parseRestConfig(source.configJson);
   const { url, headers } = buildRequest(cfg);
   const sentHeaderNames = Object.keys(headers);
+  const method = cfg.method;
   try {
-    const res = await fetch(url, { method: "GET", headers });
+    const res = await fetch(url, { method, headers });
     const text = await res.text();
     let body: unknown;
     let prettyBody = text;
@@ -167,17 +175,17 @@ export async function testRestConnection(
     }
     const responseBody = truncatePreview(prettyBody);
     if (!res.ok) {
-      return { ok: false, status: res.status, statusText: res.statusText, url, method: "GET", sentHeaderNames, sampleRecordCount: 0, firstRecordKeys: [], responseBody, error: typeof body === "string" ? body.slice(0, 500) : `HTTP ${res.status}` };
+      return { ok: false, status: res.status, statusText: res.statusText, url, method, sentHeaderNames, sampleRecordCount: 0, firstRecordKeys: [], responseBody, error: typeof body === "string" ? body.slice(0, 500) : `HTTP ${res.status}` };
     }
     let records: Record<string, unknown>[] = [];
     try { records = extractRecords(body, cfg.recordsJsonPath); } catch (e) {
-      return { ok: false, status: res.status, statusText: res.statusText, url, method: "GET", sentHeaderNames, sampleRecordCount: 0, firstRecordKeys: [], responseBody, error: e instanceof Error ? e.message : "Could not extract records." };
+      return { ok: false, status: res.status, statusText: res.statusText, url, method, sentHeaderNames, sampleRecordCount: 0, firstRecordKeys: [], responseBody, error: e instanceof Error ? e.message : "Could not extract records." };
     }
     const firstRecordKeys = records[0] ? Object.keys(records[0]) : [];
-    return { ok: true, status: res.status, statusText: res.statusText, url, method: "GET", sentHeaderNames, sampleRecordCount: records.length, firstRecordKeys, responseBody };
+    return { ok: true, status: res.status, statusText: res.statusText, url, method, sentHeaderNames, sampleRecordCount: records.length, firstRecordKeys, responseBody };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, status: 0, statusText: "Network error", url, method: "GET", sentHeaderNames, sampleRecordCount: 0, firstRecordKeys: [], responseBody: "", error: msg };
+    return { ok: false, status: 0, statusText: "Network error", url, method, sentHeaderNames, sampleRecordCount: 0, firstRecordKeys: [], responseBody: "", error: msg };
   }
 }
 
@@ -212,7 +220,7 @@ export async function executeRestPull(
   const cfg = parseRestConfig(source.configJson);
   const { url, headers } = buildRequest(cfg);
 
-  const res = await fetch(url, { method: "GET", headers });
+  const res = await fetch(url, { method: cfg.method, headers });
   if (!res.ok) {
     throw new Error(`REST endpoint returned ${res.status} ${res.statusText}`);
   }

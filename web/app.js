@@ -4739,7 +4739,7 @@ function renderSettings() {
               const cfg = src.configJson || {};
               const qp = cfg.queryParams && typeof cfg.queryParams === "object" ? Object.entries(cfg.queryParams) : [];
               return `<p class="muted" style="font-size:0.78rem;margin-top:var(--sp-2)">
-                <strong>Request:</strong> GET <code>${escHtml(cfg.endpointUrl || "")}</code>
+                <strong>Request:</strong> ${escHtml(cfg.method || "GET")} <code>${escHtml(cfg.endpointUrl || "")}</code>
                 ${qp.length ? ` · <strong>Params:</strong> ${qp.map(([k, v]) => `<code>${escHtml(k)}=${escHtml(String(v))}</code>`).join(", ")}` : ""}
                 ${cfg.authHeaderName ? ` · <strong>Auth header:</strong> <code>${escHtml(cfg.authHeaderName)}</code>` : ""}
               </p>`;
@@ -4760,6 +4760,9 @@ function renderSettings() {
                           <button type="button" class="ghost small qp-remove">&times;</button>
                         </div>`).join("")
                     : "";
+                  const curMethod = (cfg.method || "GET").toUpperCase();
+                  const methodOptions = ["GET","POST","PUT","PATCH","DELETE","HEAD","OPTIONS"]
+                    .map(m => `<option value="${m}"${curMethod === m ? " selected" : ""}>${m}</option>`).join("");
                   return `
                     <div class="form-row">
                       <label class="form-label">Entity to pull
@@ -4770,7 +4773,10 @@ function renderSettings() {
                         </select>
                       </label>
                     </div>
-                    <div class="form-row">
+                    <div class="form-row" style="display:grid;grid-template-columns:120px 1fr;gap:var(--sp-2)">
+                      <label class="form-label">Method
+                        <select name="method" class="form-control">${methodOptions}</select>
+                      </label>
                       <label class="form-label">Endpoint URL <input type="url" name="endpointUrl" value="${escHtml(cfg.endpointUrl || "")}" required class="form-control"></label>
                     </div>
                     <div class="form-row">
@@ -4827,7 +4833,18 @@ function renderSettings() {
                   </select>
                 </label>
               </div>
-              <div class="form-row">
+              <div class="form-row" style="display:grid;grid-template-columns:120px 1fr;gap:var(--sp-2)">
+                <label class="form-label">Method
+                  <select name="method" class="form-control">
+                    <option value="GET" selected>GET</option>
+                    <option value="POST">POST</option>
+                    <option value="PUT">PUT</option>
+                    <option value="PATCH">PATCH</option>
+                    <option value="DELETE">DELETE</option>
+                    <option value="HEAD">HEAD</option>
+                    <option value="OPTIONS">OPTIONS</option>
+                  </select>
+                </label>
                 <label class="form-label">Endpoint URL <input type="url" name="endpointUrl" placeholder="https://erp.example.com/api/customers" class="form-control"></label>
               </div>
               <div class="form-row">
@@ -4843,7 +4860,7 @@ function renderSettings() {
                 <button type="button" class="ghost small" data-qp-add="create">+ Add parameter</button>
                 <p class="muted" style="font-size:0.75rem;margin:6px 0 0">Tip: type <code>{</code> in a value to insert date variables like <code>{{today}}</code> or <code>{{today-7d:YYYYMMDD}}</code>.</p>
               </div>
-              <p class="muted" style="font-size:0.78rem;margin:0">Request sent: <code>GET &lt;endpoint&gt;?&lt;params&gt;</code> with <code>Accept: application/json</code> + auth header. Pull runs nightly at 02:00 (tenant timezone) for every ENABLED REST source, plus whenever you click <strong>Pull now</strong>.</p>
+              <p class="muted" style="font-size:0.78rem;margin:0">Request sent: <code>&lt;method&gt; &lt;endpoint&gt;?&lt;params&gt;</code> with <code>Accept: application/json</code> + auth header. Pull runs nightly at 02:00 (tenant timezone) for every ENABLED REST source, plus whenever you click <strong>Pull now</strong>.</p>
             </div>
             <div class="form-actions">
               <button type="submit" class="btn-primary small">Create Source</button>
@@ -5834,6 +5851,7 @@ function renderSettings() {
       if (!url) { setStatus("Endpoint URL is required for REST sources."); return; }
       configJson.endpointUrl = url;
       configJson.entityType = String(fd.get("entityType") || "CUSTOMER");
+      configJson.method = String(fd.get("method") || "GET").toUpperCase();
       const path = String(fd.get("recordsJsonPath") || "").trim();
       if (path) configJson.recordsJsonPath = path;
       const hdr = String(fd.get("authHeaderName") || "").trim();
@@ -5906,6 +5924,7 @@ function renderSettings() {
       if (sourceType === "REST") {
         const configJson = {
           entityType:      String(fd.get("entityType") || "CUSTOMER"),
+          method:          String(fd.get("method") || "GET").toUpperCase(),
           endpointUrl:     String(fd.get("endpointUrl") || "").trim(),
           recordsJsonPath: String(fd.get("recordsJsonPath") || "").trim() || undefined,
           authHeaderName:  String(fd.get("authHeaderName") || "").trim() || undefined
