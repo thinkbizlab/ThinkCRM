@@ -1496,6 +1496,8 @@ function renderMasterData(paymentTerms) {
   `;
 
   const custMount = views.master.querySelector("#cust-list-mount");
+  if (!state.cache.masterRenderers) state.cache.masterRenderers = {};
+  state.cache.masterRenderers.customerTermOptions = termOptions;
   if (custMount) renderCustomerListSection(custMount, termOptions);
 
   // ── Payment Terms list (paginated) ───────────────────────────────────────
@@ -1541,6 +1543,8 @@ function renderMasterData(paymentTerms) {
     });
     // Page-size selector handled by global delegation.
   };
+  if (!state.cache.masterRenderers) state.cache.masterRenderers = {};
+  state.cache.masterRenderers.paymentTerm = renderPaymentTermsList;
   renderPaymentTermsList();
 
   // ── Items list (paginated) ──────────────────────────────────────────────
@@ -1580,6 +1584,8 @@ function renderMasterData(paymentTerms) {
     });
     // Page-size selector handled by global delegation.
   };
+  if (!state.cache.masterRenderers) state.cache.masterRenderers = {};
+  state.cache.masterRenderers.item = renderItemsList;
   renderItemsList();
 
   views.master.querySelectorAll(".master-page-btn").forEach((btn) => {
@@ -8414,22 +8420,42 @@ function installMasterPageSizeDelegation() {
   if (document.body.dataset.pageSizeDelegated === "1") return;
   document.body.dataset.pageSizeDelegated = "1";
   document.body.addEventListener("change", (e) => {
-    const sel = e.target.closest?.('select[data-page-size-key]');
+    const sel = e.target && e.target.matches?.('select[data-page-size-key]')
+      ? e.target
+      : e.target?.closest?.('select[data-page-size-key]');
     if (!sel) return;
     const key = sel.dataset.pageSizeKey;
-    const v = sel.value;
-    setMasterPageSize(key, v === "all" ? "all" : Number(v));
-    if (key === "customer") {
-      state.customerListPage = 1;
-      const bodyEl = document.querySelector("#cust-body");
-      if (bodyEl) refreshCustBody(bodyEl, state.cache.paymentTerms || []);
-    } else if (key === "item") {
-      state.itemListPage = 1;
-      renderMasterData(state.cache.paymentTerms);
-    } else if (key === "paymentTerm") {
-      state.paymentTermListPage = 1;
-      renderMasterData(state.cache.paymentTerms);
-    }
+    const rawV = sel.value;
+    const v = rawV === "all" ? "all" : Number(rawV);
+    setMasterPageSize(key, v);
+    // Visual loading feedback — brief flash while the list re-renders.
+    const listSel = key === "customer" ? "#cust-body"
+      : key === "item" ? "#item-list"
+      : key === "paymentTerm" ? "#pt-list-body" : null;
+    const listEl = listSel ? document.querySelector(listSel) : null;
+    if (listEl) listEl.classList.add("master-list-loading");
+    setStatus("Loading…");
+    // Defer re-render so the loading class paints before work.
+    requestAnimationFrame(() => {
+      try {
+        if (key === "customer") {
+          state.customerListPage = 1;
+          const bodyEl = document.querySelector("#cust-body");
+          const termOptions = state.cache.masterRenderers?.customerTermOptions || "";
+          if (bodyEl) refreshCustBody(bodyEl, termOptions);
+        } else if (key === "item") {
+          state.itemListPage = 1;
+          state.cache.masterRenderers?.item?.();
+        } else if (key === "paymentTerm") {
+          state.paymentTermListPage = 1;
+          state.cache.masterRenderers?.paymentTerm?.();
+        }
+      } finally {
+        const el = listSel ? document.querySelector(listSel) : null;
+        if (el) el.classList.remove("master-list-loading");
+        setStatus("");
+      }
+    });
   });
 }
 

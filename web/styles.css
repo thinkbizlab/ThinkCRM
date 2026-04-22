@@ -3688,6 +3688,45 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 .cust-check-col { width: 36px; text-align: center; }
 .cust-row-selected { background: var(--surface-soft, rgba(0,0,0,0.03)); }
 
+/* Master list loading flash (shows while list re-renders after page-size change) */
+.master-list-loading {
+  position: relative;
+  opacity: 0.45;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+.master-list-loading::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  display: block;
+  background:
+    radial-gradient(circle at center,
+      rgba(255, 255, 255, 0.85) 0,
+      rgba(255, 255, 255, 0.55) 40%,
+      transparent 70%);
+  background-size: 24px 24px;
+  background-repeat: no-repeat;
+  background-position: center 16px;
+}
+.master-list-loading::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 12px;
+  width: 20px;
+  height: 20px;
+  margin-left: -10px;
+  border: 2px solid var(--border);
+  border-top-color: var(--text);
+  border-radius: 50%;
+  animation: master-list-spin 0.7s linear infinite;
+  z-index: 2;
+}
+@keyframes master-list-spin {
+  to { transform: rotate(360deg); }
+}
+
 /* Pagination */
 .cust-pagination {
   display: flex;
