@@ -18,6 +18,7 @@ model Tenant {
   manageCustomersByApi  Boolean                  @default(false)
   manageItemsByApi      Boolean                  @default(false)
   managePaymentTermsByApi Boolean                 @default(false)
+  manageCustomerGroupsByApi Boolean               @default(false)
   stripeCustomerId      String?
   createdAt             DateTime                 @default(now())
   updatedAt             DateTime                 @updatedAt
@@ -28,6 +29,7 @@ model Tenant {
   storageQuotas         TenantStorageQuota[]
   storageUsageDaily     TenantStorageUsageDaily[]
   paymentTerms          PaymentTerm[]
+  customerGroups        CustomerGroup[]
   customers             Customer[]
   items                 Item[]
   deals                 Deal[]
@@ -80,6 +82,7 @@ model User {
   notifPrefs          Json?
   avatarUrl           String?
   isDemo              Boolean               @default(false)
+  lastSeenAt          DateTime?
   externalAccounts    UserExternalAccount[]
   createdAt           DateTime              @default(now())
   updatedAt           DateTime              @updatedAt
@@ -107,6 +110,7 @@ model User {
 
   @@unique([tenantId, email])
   @@index([tenantId, isActive, role])
+  @@index([tenantId, lastSeenAt])
 }
 
 model UserDelegation {
@@ -341,6 +345,23 @@ model PaymentTerm {
   @@unique([tenantId, code])
 }
 
+model CustomerGroup {
+  id           String     @id @default(cuid())
+  tenantId     String
+  code         String
+  name         String
+  description  String?
+  isActive     Boolean    @default(true)
+  customFields Json?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  tenant       Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customers    Customer[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId])
+}
+
 model Customer {
   id                String             @id @default(cuid())
   tenantId          String
@@ -351,6 +372,7 @@ model Customer {
   customerType      CustomerType       @default(COMPANY)
   taxId             String?
   defaultTermId     String
+  customerGroupId   String?
   siteLat           Float?
   siteLng           Float?
   customFields      Json?
@@ -361,6 +383,7 @@ model Customer {
   updatedAt         DateTime           @updatedAt
   tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   paymentTerm       PaymentTerm        @relation(fields: [defaultTermId], references: [id], onDelete: Restrict)
+  customerGroup     CustomerGroup?     @relation(fields: [customerGroupId], references: [id], onDelete: SetNull)
   owner             User?              @relation("CustomerOwner", fields: [ownerId], references: [id], onDelete: SetNull)
   createdBy         User?              @relation("CustomerCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   addresses         CustomerAddress[]
@@ -372,6 +395,7 @@ model Customer {
   @@unique([tenantId, customerCode])
   @@unique([tenantId, taxId])
   @@unique([tenantId, externalRef])
+  @@index([tenantId, customerGroupId])
 }
 
 enum CustomerDuplicateSignal {
@@ -950,6 +974,7 @@ enum EntityType {
   CUSTOMER
   ITEM
   PAYMENT_TERM
+  CUSTOMER_GROUP
   DEAL
   VISIT
   QUOTATION

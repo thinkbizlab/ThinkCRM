@@ -4,7 +4,8 @@ import { escHtml, prettyLabel } from "./utils.js";
 const customFieldEntityApiMap = {
   "payment-terms": "payment-term",
   customers: "customer",
-  items: "item"
+  items: "item",
+  "customer-groups": "customer-group"
 };
 
 const OPTION_BASED_TYPES = new Set(["SELECT", "MULTISELECT"]);

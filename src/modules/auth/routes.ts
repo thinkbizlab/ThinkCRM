@@ -1067,7 +1067,8 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         select: {
           manageCustomersByApi: true,
           manageItemsByApi: true,
-          managePaymentTermsByApi: true
+          managePaymentTermsByApi: true,
+          manageCustomerGroupsByApi: true
         }
       })
     ]);
@@ -1085,8 +1086,14 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       masterApiLock: tenant ? {
         manageCustomersByApi: tenant.manageCustomersByApi,
         manageItemsByApi: tenant.manageItemsByApi,
-        managePaymentTermsByApi: tenant.managePaymentTermsByApi
-      } : { manageCustomersByApi: false, manageItemsByApi: false, managePaymentTermsByApi: false }
+        managePaymentTermsByApi: tenant.managePaymentTermsByApi,
+        manageCustomerGroupsByApi: tenant.manageCustomerGroupsByApi
+      } : {
+        manageCustomersByApi: false,
+        manageItemsByApi: false,
+        managePaymentTermsByApi: false,
+        manageCustomerGroupsByApi: false
+      }
     };
   });
 
@@ -1490,7 +1497,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       tenantId: user.tenantId,
       role: user.role,
       email: user.email
-    }, { expiresIn: "15m" });
+    }, { expiresIn: "1h" });
 
     return { accessToken, refreshToken: newRefreshToken, tokenType: "Bearer" };
   });
@@ -1506,6 +1513,20 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       data: { revokedAt: new Date() }
     });
     return { ok: true };
+  });
+
+  // ── Presence heartbeat ─────────────────────────────────────────────────────
+  // Bumps User.lastSeenAt for the authenticated user. Clients ping ~every 60s
+  // while the tab is visible; "online" is defined as lastSeenAt > now-3min.
+  app.post("/auth/heartbeat", async (request, reply) => {
+    requireAuth(request);
+    const userId = requireUserId(request);
+    await prisma.user.update({
+      where: { id: userId },
+      data: { lastSeenAt: new Date() },
+      select: { id: true },
+    });
+    return reply.status(204).send();
   });
 
   // ── Device registration (push tokens) ─────────────────────────────────────────

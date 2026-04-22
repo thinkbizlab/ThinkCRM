@@ -44,7 +44,7 @@ export function clearTokens() {
 // Returns the new access token on success, or null if refresh failed
 // (token missing, expired, revoked, or the server is unreachable).
 // Single-flight: concurrent callers share the same refresh request.
-async function refreshAccessToken() {
+export async function refreshAccessToken() {
   if (inflightRefresh) return inflightRefresh;
   const rt = getRefreshToken();
   if (!rt) return null;
