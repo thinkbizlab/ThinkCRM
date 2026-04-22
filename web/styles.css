@@ -3653,6 +3653,20 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   font-size: 0.9rem;
 }
 
+.cust-disabled-pill {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 8px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.5;
+  color: #b91c1c;
+  background: #fee2e2;
+  border: 1px solid #fecaca;
+  border-radius: 999px;
+  vertical-align: middle;
+}
+
 /* Bulk toolbar */
 .cust-bulk-toolbar {
   position: sticky;

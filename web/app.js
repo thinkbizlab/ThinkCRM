@@ -1396,12 +1396,17 @@ function renderMasterData(paymentTerms) {
       <button class="ghost export-btn" data-export="${id}" data-format="xlsx" style="font-size:0.8rem;border-right:none;border-radius:var(--r) 0 0 var(--r);padding-right:var(--sp-2)">↓ Excel</button>
       <button class="ghost export-chevron" data-export="${id}" style="font-size:0.8rem;border-radius:0 var(--r) var(--r) 0;padding:0 var(--sp-2)" aria-label="More export formats">▾</button>
     </div>` : "";
-  const importBtns = (id) => canManageMaster ? `
+  const entityLocked = (id) =>
+    (id === "customers" && isCustomerApiLocked()) ||
+    (id === "items" && isItemApiLocked()) ||
+    (id === "payment-terms" && isPaymentTermApiLocked());
+  const importBtns = (id) => (canManageMaster && !entityLocked(id)) ? `
     <div style="display:inline-flex;gap:var(--sp-1);margin-left:var(--sp-2)">
       <button class="ghost small md-template-btn" data-entity="${id}" style="font-size:0.8rem">⬇ Template</button>
       <button class="ghost small md-import-btn"   data-entity="${id}" style="font-size:0.8rem">Import</button>
       <button class="ghost small md-history-btn"  data-entity="${id}" style="font-size:0.8rem">History</button>
-    </div>` : "";
+    </div>` : (canManageMaster && entityLocked(id)) ? `
+    <span class="muted small" style="margin-left:var(--sp-2)" title="Manage by API is ON — UI actions disabled in Settings.">🔒 API-managed (read-only)</span>` : "";
 
   views.master.innerHTML = `
     <div class="master-outer">
@@ -1417,19 +1422,20 @@ function renderMasterData(paymentTerms) {
         ${importBtns("payment-terms")}
         ${exportBtn("payment-terms")}
       </div>
+      ${isPaymentTermApiLocked() ? "" : `
       <form id="payment-term-form" class="mini-form">
         <input name="code" placeholder="Code (e.g. NET45)" required />
         <input name="name" placeholder="Name" required />
         <input name="dueDays" type="number" min="0" placeholder="Due days" required />
         ${isAdmin ? renderCustomFieldInputs(paymentTermFieldDefinitions) : ""}
         <button type="submit">Create Payment Term</button>
-      </form>
+      </form>`}
       ${isAdmin ? `
       <p class="muted small" style="margin-top:var(--sp-3)">
         ${paymentTermFieldDefinitions.filter((d) => d.isActive).length} active custom field(s) · <a href="/settings/custom-fields" data-settings-link="custom-fields">Manage custom fields</a>
       </p>
       ` : ""}
-      ${isAdmin && paymentTerms.length > 0 ? `
+      ${isAdmin && !isPaymentTermApiLocked() && paymentTerms.length > 0 ? `
       <div class="pt-select-all-bar" style="display:flex;align-items:center;gap:var(--sp-2);margin:var(--sp-3) 0 var(--sp-2)">
         <label style="display:inline-flex;align-items:center;gap:var(--sp-1);font-size:0.85rem">
           <input type="checkbox" id="pt-check-all" />
@@ -1443,17 +1449,18 @@ function renderMasterData(paymentTerms) {
               const selected = (state.paymentTermSelectedIds || new Set()).has(p.id);
               return `
           <div class="row${selected ? " pt-row-selected" : ""}" data-pt-id="${p.id}">
-            ${isAdmin ? `<label class="pt-check-wrap" style="display:inline-flex;align-items:center;margin-right:var(--sp-2);vertical-align:middle"><input type="checkbox" class="pt-check-row" data-id="${p.id}" ${selected ? "checked" : ""} /></label>` : ""}
+            ${isAdmin && !isPaymentTermApiLocked() ? `<label class="pt-check-wrap" style="display:inline-flex;align-items:center;margin-right:var(--sp-2);vertical-align:middle"><input type="checkbox" class="pt-check-row" data-id="${p.id}" ${selected ? "checked" : ""} /></label>` : ""}
             <h4 style="display:inline">${escHtml(p.name)} (${escHtml(p.code)})</h4>
             <div class="muted">Due ${p.dueDays} days</div>
             <div class="chip ${p.isActive ? "chip-success" : "chip-danger"}">${p.isActive ? "Active" : "Inactive"}</div>
             ${isAdmin ? renderCustomFieldsSummary(p.customFields) : ""}
+            ${isPaymentTermApiLocked() ? "" : `
             <div class="inline-actions wrap">
               <button class="payment-term-toggle" data-id="${p.id}" data-active="${p.isActive}">
                 ${p.isActive ? "Deactivate" : "Activate"}
               </button>
               <button class="payment-term-delete ghost" data-id="${p.id}">Delete</button>
-            </div>
+            </div>`}
           </div>`;
             }
           )
@@ -1475,6 +1482,7 @@ function renderMasterData(paymentTerms) {
         ${importBtns("items")}
         ${exportBtn("items")}
       </div>
+      ${isItemApiLocked() ? "" : `
       <form id="item-form" class="mini-form">
         <input name="itemCode" placeholder="Item code" required />
         <input name="name" placeholder="Item name" required />
@@ -1482,7 +1490,7 @@ function renderMasterData(paymentTerms) {
         <input name="externalRef" placeholder="External ref (legacy system ID)" maxlength="100" />
         ${renderCustomFieldInputs(itemFieldDefinitions)}
         <button type="submit">Create Item</button>
-      </form>
+      </form>`}
       ${isAdmin ? `
       <p class="muted small" style="margin-top:var(--sp-3)">
         ${itemFieldDefinitions.filter((d) => d.isActive).length} active custom field(s) · <a href="/settings/custom-fields" data-settings-link="custom-fields">Manage custom fields</a>
@@ -1520,10 +1528,11 @@ function renderMasterData(paymentTerms) {
       <h4>${escHtml(item.name)} (${escHtml(item.itemCode)})</h4>
       <div class="muted">Unit price ${asMoney(item.unitPrice)}${item.externalRef ? ` · Ref: ${escHtml(item.externalRef)}` : ""}</div>
       ${renderCustomFieldsSummary(item.customFields)}
+      ${isItemApiLocked() ? "" : `
       <div class="inline-actions wrap">
         <button class="item-price" data-id="${item.id}" data-price="${item.unitPrice}">Update Price</button>
         <button class="item-delete ghost" data-id="${item.id}">Delete</button>
-      </div>
+      </div>`}
     </div>`
     )
     .join("");
@@ -3538,6 +3547,7 @@ function renderSettings() {
   const activePresetSlug = detectPresetSlug({ ...brandingTokens, primaryColor: branding.primaryColor, secondaryColor: branding.secondaryColor });
   const tax = state.cache.taxConfig || { vatEnabled: true, vatRatePercent: 7 };
   const visitCfg = state.cache.visitConfig || { checkInMaxDistanceM: 1000, minVisitDurationMinutes: 15 };
+  const masterLock = state.cache.masterApiLock || { manageCustomersByApi: false, manageItemsByApi: false, managePaymentTermsByApi: false };
   const tenantThemeMode = branding.themeMode || "LIGHT";
   const integrationCredentials = state.cache.integrationCredentials || [];
   const teams = state.cache.teams || [];
@@ -3939,6 +3949,27 @@ function renderSettings() {
             <input class="form-input" name="vatRatePercent" type="number" min="0" step="0.01" value="${tax.vatRatePercent}" required />
           </label>
           <button type="submit">Save Tax Config</button>
+        </form>
+      ` : `<div class="muted">Admin access required.</div>`)}
+
+      ${csec("Master Data — Manage by API", isAdmin ? `
+        <form id="master-api-lock-form" class="settings-form">
+          <p style="margin:0 0 var(--sp-3);font-size:0.83rem;color:var(--muted-color)">
+            When a toggle is ON, the corresponding master entity can only be changed through the sync API (X-Api-Key). UI actions (create / edit / delete / import) on that entity are disabled tenant-wide. Use this when an ERP is the authoritative source.
+          </p>
+          <label class="settings-checkbox-label">
+            <input name="manageCustomersByApi" type="checkbox" ${masterLock.manageCustomersByApi ? "checked" : ""} />
+            Manage <strong>Customer</strong> by API only
+          </label>
+          <label class="settings-checkbox-label">
+            <input name="manageItemsByApi" type="checkbox" ${masterLock.manageItemsByApi ? "checked" : ""} />
+            Manage <strong>Item</strong> by API only
+          </label>
+          <label class="settings-checkbox-label">
+            <input name="managePaymentTermsByApi" type="checkbox" ${masterLock.managePaymentTermsByApi ? "checked" : ""} />
+            Manage <strong>Payment Term</strong> by API only
+          </label>
+          <button type="submit">Save Master Data Lock</button>
         </form>
       ` : `<div class="muted">Admin access required.</div>`)}
 
@@ -7248,6 +7279,28 @@ function renderSettings() {
     }
   });
 
+  qs("#master-api-lock-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const fd = new FormData(event.currentTarget);
+    try {
+      await api(`/tenants/${tenantId}/master-api-lock`, {
+        method: "PUT",
+        body: {
+          manageCustomersByApi:   !!fd.get("manageCustomersByApi"),
+          manageItemsByApi:       !!fd.get("manageItemsByApi"),
+          managePaymentTermsByApi: !!fd.get("managePaymentTermsByApi")
+        }
+      });
+      setStatus("Master data lock saved.");
+      await loadSettings();
+      // Refresh session so other pages hide their mutation buttons immediately
+      try { state.user = await api("/auth/me"); } catch (_) {}
+      await loadMaster();
+    } catch (error) {
+      setStatus(error.message, true);
+    }
+  });
+
   qs("#visit-config-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const fd = new FormData(event.currentTarget);
@@ -8259,6 +8312,16 @@ function renderSettings() {
 
 const CUST_PAGE_SIZE = 20;
 
+function isCustomerApiLocked() {
+  return !!(state.user?.masterApiLock?.manageCustomersByApi || state.cache.masterApiLock?.manageCustomersByApi);
+}
+function isItemApiLocked() {
+  return !!(state.user?.masterApiLock?.manageItemsByApi || state.cache.masterApiLock?.manageItemsByApi);
+}
+function isPaymentTermApiLocked() {
+  return !!(state.user?.masterApiLock?.managePaymentTermsByApi || state.cache.masterApiLock?.managePaymentTermsByApi);
+}
+
 function filteredCustomers() {
   const q = (state.customerListQuery || "").toLowerCase().trim();
   const defs = getCustomFieldDefinitions("customers");
@@ -8491,7 +8554,7 @@ function openContactsPopup(contacts) {
   overlay.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
 }
 
-function buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk, canReassign) {
+function buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk, canReassign, apiLocked = false) {
   const selected = state.customerSelectedIds || new Set();
   const pageIds = slice.map((c) => c.id);
   const allOnPageSelected = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
@@ -8522,16 +8585,16 @@ function buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk
               ${canBulk ? `<td class="cust-check-col"><input type="checkbox" class="cust-check-row" data-id="${c.id}" ${isChecked ? "checked" : ""} /></td>` : ""}
               <td>${start + i + 1}</td>
               <td><button class="cust-code-btn" data-id="${c.id}" data-code="${escHtml(c.customerCode)}">${escHtml(c.customerCode)}</button></td>
-              <td><button class="cust-name-btn" data-id="${c.id}" data-code="${escHtml(c.customerCode)}">${escHtml(c.name)}</button></td>
+              <td><button class="cust-name-btn" data-id="${c.id}" data-code="${escHtml(c.customerCode)}">${escHtml(c.name)}</button>${c.disabled ? ' <span class="cust-disabled-pill" title="Disabled — cannot be used for new deals/visits/quotations">Disabled</span>' : ""}</td>
               <td>${ownerName ? escHtml(ownerName) : '<span class="muted small">—</span>'}</td>
               <td>${c.contacts?.length
                 ? `<button class="cust-badge-contact cust-contacts-btn" data-id="${c.id}" data-contacts='${escHtml(JSON.stringify(c.contacts))}' title="View contacts"><svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>${c.contacts.length}</button>`
                 : '<span class="muted small">—</span>'}</td>
               <td><div class="cust-actions-cell">
                 <button class="cust-action-btn cust-360-btn" data-id="${c.id}" data-code="${escHtml(c.customerCode)}">360°</button>
-                ${canReassign ? `<button class="cust-action-btn cust-reassign-btn" data-id="${c.id}" data-name="${escHtml(c.name)}" title="Reassign owner">Reassign</button>` : ""}
-                <button class="cust-action-btn cust-edit-btn" data-id="${c.id}" data-customer='${escHtml(JSON.stringify({ id: c.id, customerCode: c.customerCode, name: c.name, customerType: c.customerType, taxId: c.taxId || "", defaultTermId: c.paymentTerm?.id || "", externalRef: c.externalRef || "" }))}'>Edit</button>
-                ${isAdmin ? `<button class="cust-action-btn cust-delete-btn danger" data-id="${c.id}" data-name="${escHtml(c.name)}">Delete</button>` : ""}
+                ${!apiLocked && canReassign ? `<button class="cust-action-btn cust-reassign-btn" data-id="${c.id}" data-name="${escHtml(c.name)}" title="Reassign owner">Reassign</button>` : ""}
+                ${!apiLocked ? `<button class="cust-action-btn cust-edit-btn" data-id="${c.id}" data-customer='${escHtml(JSON.stringify({ id: c.id, customerCode: c.customerCode, name: c.name, customerType: c.customerType, taxId: c.taxId || "", defaultTermId: c.paymentTerm?.id || "", externalRef: c.externalRef || "", disabled: !!c.disabled }))}'>Edit</button>` : ""}
+                ${!apiLocked && isAdmin ? `<button class="cust-action-btn cust-delete-btn danger" data-id="${c.id}" data-name="${escHtml(c.name)}">Delete</button>` : ""}
               </div></td>
             </tr>`;
           }).join("")}
@@ -8961,9 +9024,10 @@ function refreshCustBody(bodyEl, termOptions) {
   const slice = all.slice(start, start + CUST_PAGE_SIZE);
   const role = state.user?.role ?? "REP";
   const isAdmin = role === "ADMIN";
-  const canBulk = ["ADMIN", "DIRECTOR", "MANAGER", "SUPERVISOR"].includes(role);
+  const apiLocked = isCustomerApiLocked();
+  const canBulk = !apiLocked && ["ADMIN", "DIRECTOR", "MANAGER", "SUPERVISOR"].includes(role);
   const canReassign = canBulk;
-  bodyEl.innerHTML = buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk, canReassign);
+  bodyEl.innerHTML = buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk, canReassign, apiLocked);
   attachCustBodyListeners(bodyEl.closest(".cust-list-wrap")?.parentElement ?? bodyEl, totalPages, termOptions);
   updateCustBulkToolbar();
 }
@@ -8979,7 +9043,8 @@ function renderCustomerListSection(container, termOptions) {
   const isAdmin = role === "ADMIN";
   const canSeeTeam = ["MANAGER", "SUPERVISOR"].includes(role);
   const canSeeAll  = ["ADMIN", "DIRECTOR"].includes(role);
-  const canBulk    = ["ADMIN", "DIRECTOR", "MANAGER", "SUPERVISOR"].includes(role);
+  const apiLocked  = isCustomerApiLocked();
+  const canBulk    = !apiLocked && ["ADMIN", "DIRECTOR", "MANAGER", "SUPERVISOR"].includes(role);
   const canReassign = canBulk;
 
   const customerDefs = getCustomFieldDefinitions("customers").filter((d) => d.isActive);
@@ -9001,11 +9066,12 @@ function renderCustomerListSection(container, termOptions) {
         ${showCfFilters ? `
           <button class="ghost small" id="cust-filter-toggle">${state.masterFiltersOpen ? "Hide" : "Show"} filters${activeCfFilterCount ? ` (${activeCfFilterCount})` : ""}</button>
         ` : ""}
-        ${isAdmin ? `<button class="ghost small" id="cust-find-dupes-btn" title="Scan for duplicate customers in this tenant">Find duplicates</button>` : ""}
+        ${isAdmin && !apiLocked ? `<button class="ghost small" id="cust-find-dupes-btn" title="Scan for duplicate customers in this tenant">Find duplicates</button>` : ""}
+        ${apiLocked ? `<span class="muted small" title="Manage by API is ON for Customer — UI changes are disabled in Settings.">🔒 API-managed (read-only)</span>` : `
         <button class="cust-create-btn" id="cust-open-modal">
           <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           New Customer
-        </button>
+        </button>`}
       </div>
       ${showCfFilters && state.masterFiltersOpen ? `
         <form id="cust-cf-filter-form" class="cf-filter-panel" style="padding:var(--sp-3);background:var(--surface-soft);border:1px solid var(--border);border-radius:var(--r-md);margin-bottom:var(--sp-3)">
@@ -9016,7 +9082,7 @@ function renderCustomerListSection(container, termOptions) {
           </div>
         </form>
       ` : ""}
-      <div id="cust-body">${buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk, canReassign)}</div>
+      <div id="cust-body">${buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk, canReassign, apiLocked)}</div>
       ${canBulk ? `<div id="cust-bulk-toolbar" class="cust-bulk-toolbar" style="display:none"></div>` : ""}
     </div>
   `;
@@ -9799,6 +9865,15 @@ function openEditCustomerModal(cust, termOptions) {
             ${termOpts}
           </select>
         </div>
+        <div class="ncm-row">
+          <label class="ncm-label" for="ecm-disabled">Status</label>
+          <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
+            <input type="checkbox" id="ecm-disabled" name="disabled" ${cust.disabled ? "checked" : ""} />
+            <span id="ecm-disabled-label" style="font-size:0.85rem">
+              ${cust.disabled ? '<span style="color:var(--danger);font-weight:600">Disabled</span> — cannot be used for new deals / visits / quotations' : '<span style="color:var(--success,#16a34a);font-weight:600">Enabled</span> — available for new deals / visits / quotations'}
+            </span>
+          </label>
+        </div>
         <div class="ncm-footer">
           <button type="button" class="ncm-cancel-btn" id="ecm-cancel">Cancel</button>
           <button type="submit" class="ncm-submit-btn" id="ecm-submit">Save Changes</button>
@@ -9821,6 +9896,15 @@ function openEditCustomerModal(cust, termOptions) {
     taxHint.style.display = (taxInput.value && taxInput.value.length !== 13) ? "" : "none";
   });
 
+  // Disabled toggle: live label update
+  const disabledInput = overlay.querySelector("#ecm-disabled");
+  const disabledLabel = overlay.querySelector("#ecm-disabled-label");
+  disabledInput.addEventListener("change", () => {
+    disabledLabel.innerHTML = disabledInput.checked
+      ? '<span style="color:var(--danger);font-weight:600">Disabled</span> — cannot be used for new deals / visits / quotations'
+      : '<span style="color:var(--success,#16a34a);font-weight:600">Enabled</span> — available for new deals / visits / quotations';
+  });
+
   const form = overlay.querySelector("#edit-cust-form");
   const submitBtn = overlay.querySelector("#ecm-submit");
   form.addEventListener("submit", async (e) => {
@@ -9840,6 +9924,7 @@ function openEditCustomerModal(cust, termOptions) {
       taxId:         taxId || undefined,
       defaultTermId: String(formData.get("defaultTermId") ?? "") || undefined,
       externalRef:   externalRefEdit || undefined,
+      disabled:      !!formData.get("disabled"),
     };
     if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "Saving…"; }
     try {
@@ -10024,7 +10109,7 @@ async function loadSettings() {
   // branding, taxConfig, visitConfig, and integrationCredentials require MANAGER+
   // — skip them for REP/SUPERVISOR so the Promise.all doesn't fail with 403
   const isAtLeastManager = isManager;
-  const [branding, taxConfig, visitConfig, kpiTargets, salesReps, integrationCredentials, teams, tenantSummary] = await Promise.all([
+  const [branding, taxConfig, visitConfig, kpiTargets, salesReps, integrationCredentials, teams, tenantSummary, masterApiLock] = await Promise.all([
     api(`/tenants/${tenantId}/branding`),
     isAtLeastManager ? api(`/tenants/${tenantId}/tax-config`) : Promise.resolve(state.cache.taxConfig),
     isAtLeastManager ? api(`/tenants/${tenantId}/visit-config`) : Promise.resolve(state.cache.visitConfig),
@@ -10032,7 +10117,8 @@ async function loadSettings() {
     state.user?.role !== "REP" ? api("/users/visible-reps") : Promise.resolve([]),
     isAtLeastManager ? api(`/tenants/${tenantId}/integrations/credentials`) : Promise.resolve(state.cache.integrationCredentials ?? []),
     api("/teams"),
-    isAdmin ? api(`/tenants/${tenantId}/summary`) : Promise.resolve(null)
+    isAdmin ? api(`/tenants/${tenantId}/summary`) : Promise.resolve(null),
+    isManager ? api(`/tenants/${tenantId}/master-api-lock`) : Promise.resolve(state.cache.masterApiLock)
   ]);
   state.cache.branding = branding;
   state.cache.taxConfig = taxConfig;
@@ -10041,6 +10127,7 @@ async function loadSettings() {
   state.cache.salesReps = salesReps;
   state.cache.integrationCredentials = integrationCredentials;
   state.cache.teams = teams;
+  state.cache.masterApiLock = masterApiLock || { manageCustomersByApi: false, manageItemsByApi: false, managePaymentTermsByApi: false };
   state.cache.allUsers = tenantSummary?.users || [];
   state.cache.tenantInfo = tenantSummary ? { id: tenantSummary.id, name: tenantSummary.name, slug: tenantSummary.slug, timezone: tenantSummary.timezone ?? "Asia/Bangkok" } : null;
   if (isAdmin) await loadDelegations();

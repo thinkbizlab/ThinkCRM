@@ -362,10 +362,15 @@ async function assertCustomerBelongsToTenant(
 ) {
   const customer = await prisma.customer.findFirst({
     where: { id: customerId, tenantId },
-    select: { id: true }
+    select: { id: true, disabled: true, name: true, customerCode: true }
   });
   if (!customer) {
     throw app.httpErrors.badRequest("customerId is not valid for this tenant.");
+  }
+  if (customer.disabled) {
+    throw app.httpErrors.badRequest(
+      `Customer "${customer.name}" (${customer.customerCode}) is disabled and cannot be used for new deals.`
+    );
   }
 }
 

@@ -1043,7 +1043,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     requireAuth(request);
     const tenantId = requireTenantId(request);
     const userId = requireUserId(request);
-    const [user, subscription] = await Promise.all([
+    const [user, subscription, tenant] = await Promise.all([
       prisma.user.findFirst({
         where: { id: userId, tenantId },
         select: {
@@ -1061,6 +1061,14 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       prisma.subscription.findFirst({
         where: { tenantId },
         select: { status: true, trialEndsAt: true, seatCount: true }
+      }),
+      prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: {
+          manageCustomersByApi: true,
+          manageItemsByApi: true,
+          managePaymentTermsByApi: true
+        }
       })
     ]);
     if (!user) {
@@ -1073,7 +1081,12 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         status: subscription.status,
         trialEndsAt: subscription.trialEndsAt,
         seatCount: subscription.seatCount
-      } : null
+      } : null,
+      masterApiLock: tenant ? {
+        manageCustomersByApi: tenant.manageCustomersByApi,
+        manageItemsByApi: tenant.manageItemsByApi,
+        managePaymentTermsByApi: tenant.managePaymentTermsByApi
+      } : { manageCustomersByApi: false, manageItemsByApi: false, managePaymentTermsByApi: false }
     };
   });
 

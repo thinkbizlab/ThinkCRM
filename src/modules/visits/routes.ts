@@ -258,10 +258,15 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
     return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const customer = await tx.customer.findFirst({
         where: { id: input.customerId, tenantId: input.tenantId },
-        select: { id: true }
+        select: { id: true, disabled: true, name: true, customerCode: true }
       });
       if (!customer) {
         throw app.httpErrors.notFound("Customer not found in tenant.");
+      }
+      if (customer.disabled) {
+        throw app.httpErrors.badRequest(
+          `Customer "${customer.name}" (${customer.customerCode}) is disabled and cannot be used for new visits.`
+        );
       }
 
       if (input.dealId) {

@@ -15,6 +15,9 @@ model Tenant {
   timezone              String                   @default("Asia/Bangkok")
   isActive              Boolean                  @default(true)
   deactivatedAt         DateTime?
+  manageCustomersByApi  Boolean                  @default(false)
+  manageItemsByApi      Boolean                  @default(false)
+  managePaymentTermsByApi Boolean                 @default(false)
   stripeCustomerId      String?
   createdAt             DateTime                 @default(now())
   updatedAt             DateTime                 @updatedAt
@@ -351,6 +354,7 @@ model Customer {
   siteLat           Float?
   siteLng           Float?
   customFields      Json?
+  disabled          Boolean            @default(false)
   isDemo            Boolean            @default(false)
   createdByUserId   String?
   createdAt         DateTime           @default(now())

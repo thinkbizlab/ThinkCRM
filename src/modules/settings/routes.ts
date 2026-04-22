@@ -1130,6 +1130,43 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     });
   });
 
+  app.get("/tenants/:id/master-api-lock", async (request) => {
+    const params = request.params as { id: string };
+    requireRoleAtLeast(request, UserRole.MANAGER);
+    assertTenantPathAccess(request, params.id);
+    const t = await prisma.tenant.findUnique({
+      where: { id: params.id },
+      select: {
+        manageCustomersByApi: true,
+        manageItemsByApi: true,
+        managePaymentTermsByApi: true
+      }
+    });
+    if (!t) throw app.httpErrors.notFound("Tenant not found.");
+    return t;
+  });
+
+  app.put("/tenants/:id/master-api-lock", async (request) => {
+    const params = request.params as { id: string };
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    assertTenantPathAccess(request, params.id);
+    const parsed = z.object({
+      manageCustomersByApi: z.boolean(),
+      manageItemsByApi: z.boolean(),
+      managePaymentTermsByApi: z.boolean()
+    }).safeParse(request.body);
+    if (!parsed.success) throw app.httpErrors.badRequest(zodMsg(parsed.error));
+    return prisma.tenant.update({
+      where: { id: params.id },
+      data: parsed.data,
+      select: {
+        manageCustomersByApi: true,
+        manageItemsByApi: true,
+        managePaymentTermsByApi: true
+      }
+    });
+  });
+
   app.post("/users/:id/integrations/ms365/connect", async (request, reply) => {
     const params = request.params as { id: string };
     await requireSelfOrManagerAccess(request, params.id);

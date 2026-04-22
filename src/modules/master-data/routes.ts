@@ -80,7 +80,8 @@ const customerSchema = z.object({
   customFields: customFieldValuesSchema.optional()
 });
 const customerUpdateSchema = customerSchema.omit({ customerCode: true }).partial().extend({
-  defaultTermId: z.string().min(1).optional()
+  defaultTermId: z.string().min(1).optional(),
+  disabled: z.boolean().optional()
 });
 
 const itemSchema = z.object({
@@ -162,6 +163,35 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       orderBy: [{ displayOrder: "asc" }, { createdAt: "asc" }]
     });
   });
+
+  // When a tenant enables "Manage X by API", all web-session mutations on the
+  // matching master-data entity are rejected. Sync API-key routes (/sync/*)
+  // go through a separate auth layer and are unaffected.
+  async function assertMasterWritable(
+    tenantId: string,
+    entity: "customer" | "item" | "paymentTerm"
+  ) {
+    const t = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: {
+        manageCustomersByApi: true,
+        manageItemsByApi: true,
+        managePaymentTermsByApi: true
+      }
+    });
+    if (!t) return;
+    const locked =
+      (entity === "customer" && t.manageCustomersByApi) ||
+      (entity === "item" && t.manageItemsByApi) ||
+      (entity === "paymentTerm" && t.managePaymentTermsByApi);
+    if (locked) {
+      const label =
+        entity === "customer" ? "Customer" : entity === "item" ? "Item" : "Payment Term";
+      throw app.httpErrors.forbidden(
+        `${label} master is managed via API for this tenant. UI changes are disabled.`
+      );
+    }
+  }
 
   app.post("/custom-fields/:entityType", async (request, reply) => {
     requireRoleAtLeast(request, UserRole.ADMIN);
@@ -254,6 +284,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
   app.post("/payment-terms", async (request, reply) => {
     requireRoleAtLeast(request, UserRole.MANAGER);
     const tenantId = requireTenantId(request);
+    await assertMasterWritable(tenantId, "paymentTerm");
     const parsed = paymentTermSchema.safeParse(request.body);
     if (!parsed.success) {
       throw app.httpErrors.badRequest(zodMsg(parsed.error));
@@ -277,6 +308,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
   app.patch("/payment-terms/:id", async (request) => {
     requireRoleAtLeast(request, UserRole.MANAGER);
     const tenantId = requireTenantId(request);
+    await assertMasterWritable(tenantId, "paymentTerm");
     const params = request.params as { id: string };
     const parsed = paymentTermUpdateSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -358,6 +390,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/customers", async (request, reply) => {
     const tenantId = requireTenantId(request);
+    await assertMasterWritable(tenantId, "customer");
     const changedById = requireUserId(request);
     const visibleUserIds = await listVisibleUserIds(request);
     const parsed = customerSchema.safeParse(request.body);
@@ -423,6 +456,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
 
   app.patch("/customers/:id", async (request) => {
     const tenantId = requireTenantId(request);
+    await assertMasterWritable(tenantId, "customer");
     const changedById = requireUserId(request);
     const visibleUserIds = await listVisibleUserIds(request);
     const visibleUserIdList = [...visibleUserIds];
@@ -479,6 +513,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
           taxId: parsed.data.taxId,
           defaultTermId: parsed.data.defaultTermId,
           ownerId: parsed.data.ownerId,
+          disabled: parsed.data.disabled,
           customFields
         }
       });
@@ -498,6 +533,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
 
   app.delete("/customers/:id", async (request, reply) => {
     const tenantId = requireTenantId(request);
+    await assertMasterWritable(tenantId, "customer");
     const changedById = requireUserId(request);
     const visibleUserIdList = [...(await listVisibleUserIds(request))];
     const params = request.params as { id: string };
@@ -531,6 +567,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
   app.post("/customers/bulk-reassign-owner", async (request) => {
     requireRoleAtLeast(request, UserRole.SUPERVISOR);
     const tenantId = requireTenantId(request);
+    await assertMasterWritable(tenantId, "customer");
     const changedById = requireUserId(request);
     const visibleUserIds = await listVisibleUserIds(request);
     const visibleUserIdList = [...visibleUserIds];
@@ -579,6 +616,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
   app.post("/customers/bulk-delete", async (request) => {
     requireRoleAtLeast(request, UserRole.ADMIN);
     const tenantId = requireTenantId(request);
+    await assertMasterWritable(tenantId, "customer");
     const changedById = requireUserId(request);
     const visibleUserIdList = [...(await listVisibleUserIds(request))];
     const parsed = bulkIdsSchema.safeParse(request.body);
@@ -683,6 +721,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
   app.post("/customers/:keeperId/merge", async (request) => {
     requireRoleAtLeast(request, UserRole.ADMIN);
     const tenantId = requireTenantId(request);
+    await assertMasterWritable(tenantId, "customer");
     const changedById = requireUserId(request);
     const params = request.params as { keeperId: string };
     const query = request.query as { dryRun?: string };
@@ -713,6 +752,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/customers/:id/addresses", async (request, reply) => {
     const tenantId = requireTenantId(request);
+    await assertMasterWritable(tenantId, "customer");
     const changedById = requireUserId(request);
     const visibleUserIdList = [...(await listVisibleUserIds(request))];
     const params = request.params as { id: string };
@@ -765,6 +805,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/customers/:id/contacts", async (request, reply) => {
     const tenantId = requireTenantId(request);
+    await assertMasterWritable(tenantId, "customer");
     const changedById = requireUserId(request);
     const visibleUserIdList = [...(await listVisibleUserIds(request))];
     const params = request.params as { id: string };
@@ -825,6 +866,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
   app.post("/items", async (request, reply) => {
     requireRoleAtLeast(request, UserRole.MANAGER);
     const tenantId = requireTenantId(request);
+    await assertMasterWritable(tenantId, "item");
     const changedById = requireUserId(request);
     const parsed = itemSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -861,6 +903,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
   app.patch("/items/:id", async (request) => {
     requireRoleAtLeast(request, UserRole.MANAGER);
     const tenantId = requireTenantId(request);
+    await assertMasterWritable(tenantId, "item");
     const changedById = requireUserId(request);
     const params = request.params as { id: string };
     const parsed = itemUpdateSchema.safeParse(request.body);
@@ -910,6 +953,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
   app.delete("/items/:id", async (request, reply) => {
     requireRoleAtLeast(request, UserRole.MANAGER);
     const tenantId = requireTenantId(request);
+    await assertMasterWritable(tenantId, "item");
     const changedById = requireUserId(request);
     const params = request.params as { id: string };
     const existing = await prisma.item.findFirst({
@@ -936,6 +980,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
   app.delete("/payment-terms/:id", async (request, reply) => {
     requireRoleAtLeast(request, UserRole.MANAGER);
     const tenantId = requireTenantId(request);
+    await assertMasterWritable(tenantId, "paymentTerm");
     const params = request.params as { id: string };
     const existing = await prisma.paymentTerm.findFirst({
       where: { id: params.id, tenantId }
@@ -959,6 +1004,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
   app.post("/payment-terms/bulk-delete", async (request) => {
     requireRoleAtLeast(request, UserRole.ADMIN);
     const tenantId = requireTenantId(request);
+    await assertMasterWritable(tenantId, "paymentTerm");
     const parsed = bulkIdsSchema.safeParse(request.body);
     if (!parsed.success) {
       throw app.httpErrors.badRequest(zodMsg(parsed.error));
@@ -1121,6 +1167,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
   app.post("/payment-terms/import", async (request) => {
     requireRoleAtLeast(request, UserRole.MANAGER);
     const tenantId = requireTenantId(request);
+    await assertMasterWritable(tenantId, "paymentTerm");
     const rawRows = readRows(request.body);
     if (!rawRows.length) throw app.httpErrors.badRequest("Expected { rows: [...] } with at least one row.");
     if (rawRows.length > 1000) throw app.httpErrors.badRequest("Maximum 1000 rows per import.");
@@ -1180,6 +1227,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
   app.post("/items/import", async (request) => {
     requireRoleAtLeast(request, UserRole.MANAGER);
     const tenantId = requireTenantId(request);
+    await assertMasterWritable(tenantId, "item");
     const rawRows = readRows(request.body);
     if (!rawRows.length) throw app.httpErrors.badRequest("Expected { rows: [...] } with at least one row.");
     if (rawRows.length > 1000) throw app.httpErrors.badRequest("Maximum 1000 rows per import.");
@@ -1251,6 +1299,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
   app.post("/customers/import", async (request) => {
     requireRoleAtLeast(request, UserRole.MANAGER);
     const tenantId = requireTenantId(request);
+    await assertMasterWritable(tenantId, "customer");
     const ownerId = requireUserId(request);
     const rawRows = readRows(request.body);
     if (!rawRows.length) throw app.httpErrors.badRequest("Expected { rows: [...] } with at least one row.");
