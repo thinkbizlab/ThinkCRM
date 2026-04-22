@@ -56,6 +56,7 @@ model Tenant {
   stripeWebhookDeliveries StripeWebhookDelivery[]
   syncApiKeys            SyncApiKey[]
   syncExternalRefs       SyncExternalRef[]
+  transformTemplates     TransformTemplate[]
 }
 
 model User {
@@ -363,6 +364,7 @@ model Customer {
 
   @@unique([tenantId, customerCode])
   @@unique([tenantId, taxId])
+  @@unique([tenantId, externalRef])
 }
 
 model CustomerAddress {
@@ -416,6 +418,7 @@ model Item {
   quoteItems   QuotationItem[]
 
   @@unique([tenantId, itemCode])
+  @@unique([tenantId, externalRef])
 }
 
 model CustomFieldDefinition {
@@ -656,6 +659,20 @@ model IntegrationFieldMapping {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   source        IntegrationSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+}
+
+model TransformTemplate {
+  id          String   @id @default(cuid())
+  tenantId    String
+  name        String
+  description String?
+  steps       String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
 }
 
 model IntegrationSyncJob {

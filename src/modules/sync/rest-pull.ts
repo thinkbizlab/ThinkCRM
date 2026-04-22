@@ -216,6 +216,7 @@ export type RestTestResult = {
   sentHeaderNames: string[];
   sampleRecordCount: number;
   firstRecordKeys: string[];
+  firstRecord?: Record<string, unknown>;
   responseBody: string;
   error?: string;
 };
@@ -259,7 +260,8 @@ export async function testRestConnection(
       return { ok: false, status: res.status, statusText: res.statusText, url, method, sentHeaderNames, sampleRecordCount: 0, firstRecordKeys: [], responseBody, error: e instanceof Error ? e.message : "Could not extract records." };
     }
     const firstRecordKeys = records[0] ? Object.keys(records[0]) : [];
-    return { ok: true, status: res.status, statusText: res.statusText, url, method, sentHeaderNames, sampleRecordCount: records.length, firstRecordKeys, responseBody };
+    const firstRecord = records[0];
+    return { ok: true, status: res.status, statusText: res.statusText, url, method, sentHeaderNames, sampleRecordCount: records.length, firstRecordKeys, firstRecord, responseBody };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, status: 0, statusText: "Network error", url, method, sentHeaderNames, sampleRecordCount: 0, firstRecordKeys: [], responseBody: "", error: msg };

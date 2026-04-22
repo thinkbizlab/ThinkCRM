@@ -40,6 +40,7 @@ const itemMappedSchema = z.object({
   itemCode: z.string().min(1),
   name: z.string().min(1),
   unitPrice: z.number().nonnegative(),
+  externalRef: z.string().trim().max(100).optional(),
   customFields: z.record(z.string(), z.unknown()).optional()
 });
 
@@ -114,46 +115,151 @@ function toRunStatus(summary: ConnectorSummary): JobStatus {
   return summary.status === "failed" ? JobStatus.FAILED : JobStatus.SUCCESS;
 }
 
-function applyTransformRule(value: unknown, transformRule?: string | null): unknown {
-  if (!transformRule) {
-    return value;
+type TransformStep = { rule: string; args?: Record<string, unknown> };
+
+const MAX_TRANSFORM_DEPTH = 3;
+
+function parseTransformRule(raw: string | null | undefined): TransformStep[] {
+  if (!raw) return [];
+  const trimmed = raw.trim();
+  if (!trimmed) return [];
+  if (!trimmed.startsWith("[") && !trimmed.startsWith("{")) {
+    return [{ rule: trimmed.toLowerCase() }];
   }
-  const normalized = transformRule.trim().toLowerCase();
-  if (normalized === "trim" && typeof value === "string") {
-    return value.trim();
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (Array.isArray(parsed)) {
+      return parsed.filter((s): s is TransformStep => !!s && typeof s.rule === "string");
+    }
+  } catch {
+    /* fall through */
   }
-  if (normalized === "upper" && typeof value === "string") {
-    return value.toUpperCase();
+  return [];
+}
+
+function applyTransformChain(value: unknown, raw: string | null | undefined, depth = 0): unknown {
+  if (depth > MAX_TRANSFORM_DEPTH) return value;
+  let out = value;
+  for (const step of parseTransformRule(raw)) {
+    out = applyStep(out, step, depth);
   }
-  if (normalized === "lower" && typeof value === "string") {
-    return value.toLowerCase();
+  return out;
+}
+
+function safeRegex(source: string, flags: string): RegExp | null {
+  if (!source || source.length > 500) return null;
+  try {
+    return new RegExp(source, flags);
+  } catch {
+    return null;
   }
-  if (normalized === "number") {
-    if (typeof value === "number") {
+}
+
+function evalCondition(value: unknown, cond: Record<string, unknown> | undefined): boolean {
+  if (!cond || typeof cond !== "object") return false;
+  const op = typeof cond.op === "string" ? cond.op : "";
+  const target = cond.value;
+  switch (op) {
+    case "equals":      return String(value ?? "") === String(target ?? "");
+    case "not_equals":  return String(value ?? "") !== String(target ?? "");
+    case "empty":       return value === null || value === undefined || value === "";
+    case "not_empty":   return !(value === null || value === undefined || value === "");
+    case "contains":    return typeof value === "string" && value.includes(String(target ?? ""));
+    case "matches": {
+      const re = safeRegex(String(target ?? ""), "");
+      return !!re && typeof value === "string" && re.test(value);
+    }
+    default: return false;
+  }
+}
+
+function applyStep(value: unknown, step: TransformStep, depth = 0): unknown {
+  switch (step.rule) {
+    case "trim":        return typeof value === "string" ? value.trim() : value;
+    case "trim_inner":  return typeof value === "string" ? value.replace(/\s+/g, " ") : value;
+    case "upper":       return typeof value === "string" ? value.toUpperCase() : value;
+    case "lower":       return typeof value === "string" ? value.toLowerCase() : value;
+    case "title":       return typeof value === "string"
+                          ? value.replace(/\w\S*/g, (w) => (w[0] ?? "").toUpperCase() + w.slice(1).toLowerCase())
+                          : value;
+    case "digits_only": return typeof value === "string" ? value.replace(/\D+/g, "") : value;
+    case "alnum_only":  return typeof value === "string" ? value.replace(/[^A-Za-z0-9]+/g, "") : value;
+    case "number": {
+      if (typeof value === "number") return value;
+      if (typeof value === "string" && value.trim().length > 0) {
+        const n = Number(value);
+        return Number.isNaN(n) ? value : n;
+      }
       return value;
     }
-    if (typeof value === "string" && value.trim().length > 0) {
-      const numeric = Number(value);
-      if (!Number.isNaN(numeric)) {
-        return numeric;
-      }
+    case "integer": {
+      const n = typeof value === "number" ? value : Number(value);
+      return Number.isFinite(n) ? Math.floor(n) : value;
     }
-  }
-  if (normalized === "boolean") {
-    if (typeof value === "boolean") {
+    case "boolean": {
+      if (typeof value === "boolean") return value;
+      if (typeof value === "string") {
+        const s = value.trim().toLowerCase();
+        if (["true", "1", "yes", "y"].includes(s)) return true;
+        if (["false", "0", "no", "n"].includes(s)) return false;
+      }
       return value;
     }
-    if (typeof value === "string") {
-      const lowered = value.trim().toLowerCase();
-      if (["true", "1", "yes", "y"].includes(lowered)) {
-        return true;
-      }
-      if (["false", "0", "no", "n"].includes(lowered)) {
-        return false;
-      }
+    case "pad_left": {
+      const len = Number(step.args?.len) || 0;
+      const ch = typeof step.args?.char === "string" && step.args.char.length > 0
+        ? String(step.args.char)
+        : "0";
+      return String(value ?? "").padStart(len, ch);
     }
+    case "replace": {
+      const from = String(step.args?.from ?? "");
+      const to = String(step.args?.to ?? "");
+      if (!from) return value;
+      return typeof value === "string" ? value.split(from).join(to) : value;
+    }
+    case "prefix": return String(step.args?.text ?? "") + String(value ?? "");
+    case "suffix": return String(value ?? "") + String(step.args?.text ?? "");
+    case "default": {
+      const isEmpty = value === null || value === undefined || value === "";
+      return isEmpty ? String(step.args?.value ?? "") : value;
+    }
+    case "null_if": {
+      const sentinel = String(step.args?.value ?? "");
+      return typeof value === "string" && value === sentinel ? null : value;
+    }
+    case "match": {
+      const re = safeRegex(String(step.args?.pattern ?? ""), String(step.args?.flags ?? ""));
+      if (!re) return value;
+      if (typeof value !== "string") return value;
+      return re.test(value) ? value : "";
+    }
+    case "extract": {
+      const re = safeRegex(String(step.args?.pattern ?? ""), String(step.args?.flags ?? ""));
+      if (!re) return value;
+      if (typeof value !== "string") return value;
+      const m = re.exec(value);
+      if (!m) return "";
+      const group = Number(step.args?.group);
+      const idx = Number.isFinite(group) && group >= 0 ? group : 1;
+      return m[idx] ?? "";
+    }
+    case "if": {
+      if (depth >= MAX_TRANSFORM_DEPTH) return value;
+      const args = (step.args ?? {}) as Record<string, unknown>;
+      const cond = args.cond as Record<string, unknown> | undefined;
+      const branch = evalCondition(value, cond) ? args.then : args.else;
+      if (!Array.isArray(branch)) return value;
+      let out = value;
+      for (const s of branch) {
+        if (s && typeof (s as TransformStep).rule === "string") {
+          out = applyStep(out, s as TransformStep, depth + 1);
+        }
+      }
+      return out;
+    }
+    default: return value;
   }
-  return value;
 }
 
 function readPath(input: ConnectorRecord, path: string): unknown {
@@ -187,17 +293,21 @@ export function buildMappedRecord(
       }
       continue;
     }
-    mapped[mapping.targetField] = applyTransformRule(raw, mapping.transformRule);
+    mapped[mapping.targetField] = applyTransformChain(raw, mapping.transformRule);
   }
   return { mapped, issues };
 }
 
 function dedupeKey(entityType: EntityType, mapped: Record<string, unknown>): string | null {
   if (entityType === EntityType.CUSTOMER) {
+    const ext = mapped.externalRef;
+    if (typeof ext === "string" && ext.length > 0) return `ext:${ext}`;
     const key = mapped.customerCode;
     return typeof key === "string" ? key : null;
   }
   if (entityType === EntityType.ITEM) {
+    const ext = mapped.externalRef;
+    if (typeof ext === "string" && ext.length > 0) return `ext:${ext}`;
     const key = mapped.itemCode;
     return typeof key === "string" ? key : null;
   }
@@ -279,6 +389,30 @@ async function upsertEntity(
       }
     }
 
+    if (payload.externalRef) {
+      const existing = await prisma.customer.findFirst({
+        where: { tenantId, externalRef: payload.externalRef },
+        select: { id: true }
+      });
+      if (existing) {
+        await prisma.customer.update({
+          where: { id: existing.id },
+          data: {
+            customerCode: payload.customerCode,
+            name: payload.name,
+            customerType: payload.customerType ?? undefined,
+            taxId: payload.taxId ?? undefined,
+            ownerId: payload.ownerId ?? undefined,
+            siteLat: payload.siteLat ?? undefined,
+            siteLng: payload.siteLng ?? undefined,
+            defaultTermId,
+            customFields: validatedCf ?? undefined
+          }
+        });
+        return;
+      }
+    }
+
     await prisma.customer.upsert({
       where: {
         tenantId_customerCode: {
@@ -324,6 +458,25 @@ async function upsertEntity(
       });
       validatedCf = validateCustomFields(connectorAppShim, cfDefs, payload.customFields as Record<string, unknown>);
     }
+    if (payload.externalRef) {
+      const existing = await prisma.item.findFirst({
+        where: { tenantId, externalRef: payload.externalRef },
+        select: { id: true }
+      });
+      if (existing) {
+        await prisma.item.update({
+          where: { id: existing.id },
+          data: {
+            itemCode: payload.itemCode,
+            name: payload.name,
+            unitPrice: payload.unitPrice,
+            customFields: validatedCf ?? undefined
+          }
+        });
+        return;
+      }
+    }
+
     await prisma.item.upsert({
       where: {
         tenantId_itemCode: {
@@ -334,6 +487,7 @@ async function upsertEntity(
       update: {
         name: payload.name,
         unitPrice: payload.unitPrice,
+        externalRef: payload.externalRef ?? undefined,
         customFields: validatedCf ?? undefined
       },
       create: {
@@ -341,6 +495,7 @@ async function upsertEntity(
         itemCode: payload.itemCode,
         name: payload.name,
         unitPrice: payload.unitPrice,
+        externalRef: payload.externalRef ?? undefined,
         customFields: validatedCf ?? undefined
       }
     });

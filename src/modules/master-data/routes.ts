@@ -326,7 +326,8 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       include: {
         addresses: true,
         contacts: true,
-        paymentTerm: true
+        paymentTerm: true,
+        owner: { select: { id: true, fullName: true } }
       },
       orderBy: { createdAt: "desc" }
     });

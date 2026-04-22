@@ -8,7 +8,7 @@ import {
   fmtDateTime
 } from "./modules/utils.js";
 import { state, THEME_OVERRIDE_KEY } from "./modules/state.js";
-import { api } from "./modules/api.js";
+import { api, storeTokens, clearTokens, getRefreshToken } from "./modules/api.js";
 import {
   qs,
   authScreen, appScreen, statusBar, pageTitle,
@@ -71,9 +71,10 @@ const CRM_TARGET_FIELDS = {
     { value: "externalRef",     label: "External Reference",    required: false }
   ],
   ITEM: [
-    { value: "itemCode",  label: "Item Code",  required: true },
-    { value: "name",      label: "Item Name",  required: true },
-    { value: "unitPrice", label: "Unit Price", required: true }
+    { value: "itemCode",    label: "Item Code",           required: true },
+    { value: "name",        label: "Item Name",           required: true },
+    { value: "unitPrice",   label: "Unit Price",          required: true },
+    { value: "externalRef", label: "External Reference",  required: false }
   ],
   PAYMENT_TERM: [
     { value: "code",    label: "Term Code", required: true },
@@ -86,6 +87,239 @@ function crmTargetOptions(entityType, selected) {
   const list = CRM_TARGET_FIELDS[entityType] || [];
   const opts = list.map(f => `<option value="${f.value}"${selected === f.value ? " selected" : ""}>${escHtml(f.label)}${f.required ? " *" : ""}</option>`).join("");
   return `<option value="">— select CRM field —</option>${opts}`;
+}
+
+// Transform step catalog — must stay in sync with applyStep() in
+// src/modules/integrations/connector-framework.ts.
+const TRANSFORM_RULES = [
+  { rule: "trim",        label: "Trim whitespace",       group: "Text",     args: [] },
+  { rule: "trim_inner",  label: "Collapse inner spaces", group: "Text",     args: [] },
+  { rule: "upper",       label: "UPPERCASE",             group: "Text",     args: [] },
+  { rule: "lower",       label: "lowercase",             group: "Text",     args: [] },
+  { rule: "title",       label: "Title Case",            group: "Text",     args: [] },
+  { rule: "digits_only", label: "Digits only",           group: "Sanitize", args: [] },
+  { rule: "alnum_only",  label: "Alphanumeric only",     group: "Sanitize", args: [] },
+  { rule: "number",      label: "To number",             group: "Coerce",   args: [] },
+  { rule: "integer",     label: "To integer",            group: "Coerce",   args: [] },
+  { rule: "boolean",     label: "To boolean",            group: "Coerce",   args: [] },
+  { rule: "pad_left",    label: "Pad left (zero-pad)",   group: "Format",   args: [
+    { name: "len",  type: "number", label: "Length",    default: "5", width: "56px" },
+    { name: "char", type: "text",   label: "Pad char",  default: "0", width: "48px" }
+  ]},
+  { rule: "replace",     label: "Replace",               group: "Format",   args: [
+    { name: "from", type: "text", label: "Find",    default: "", width: "80px" },
+    { name: "to",   type: "text", label: "Replace", default: "", width: "80px" }
+  ]},
+  { rule: "prefix",      label: "Add prefix",            group: "Format",   args: [
+    { name: "text", type: "text", label: "Prefix", default: "", width: "90px" }
+  ]},
+  { rule: "suffix",      label: "Add suffix",            group: "Format",   args: [
+    { name: "text", type: "text", label: "Suffix", default: "", width: "90px" }
+  ]},
+  { rule: "default",     label: "Default if empty",      group: "Nullish",  args: [
+    { name: "value", type: "text", label: "Use value", default: "", width: "90px" }
+  ]},
+  { rule: "null_if",     label: "Treat as null if",      group: "Nullish",  args: [
+    { name: "value", type: "text", label: "Sentinel",  default: "N/A", width: "70px" }
+  ]},
+  { rule: "match",       label: "Match regex",           group: "Regex",    args: [
+    { name: "pattern", type: "text", label: "Pattern", default: "", width: "130px", mono: true },
+    { name: "flags",   type: "text", label: "Flags",   default: "",  width: "50px" }
+  ]},
+  { rule: "extract",     label: "Extract capture group", group: "Regex",    args: [
+    { name: "pattern", type: "text",   label: "Pattern", default: "", width: "130px", mono: true },
+    { name: "group",   type: "number", label: "Group",   default: "1", width: "44px" },
+    { name: "flags",   type: "text",   label: "Flags",   default: "",  width: "50px" }
+  ]}
+];
+
+const TRANSFORM_RULE_MAP = TRANSFORM_RULES.reduce((acc, r) => { acc[r.rule] = r; return acc; }, {});
+
+function parseTransformRule(raw) {
+  if (!raw) return [];
+  const t = String(raw).trim();
+  if (!t) return [];
+  if (t[0] !== "[" && t[0] !== "{") return [{ rule: t.toLowerCase() }];
+  try {
+    const p = JSON.parse(t);
+    return Array.isArray(p) ? p.filter(s => s && typeof s.rule === "string") : [];
+  } catch { return []; }
+}
+
+function serializeTransformSteps(steps) {
+  const clean = (steps || []).filter(s => s && s.rule);
+  return clean.length === 0 ? "" : JSON.stringify(clean);
+}
+
+function summarizeTransform(raw) {
+  const steps = parseTransformRule(raw);
+  if (steps.length === 0) return "—";
+  return steps.map(s => {
+    const def = TRANSFORM_RULE_MAP[s.rule];
+    const label = def ? def.label : s.rule;
+    const argStr = s.args && typeof s.args === "object"
+      ? Object.values(s.args).filter(v => v !== "" && v !== null && v !== undefined).map(String).join(":")
+      : "";
+    return argStr ? `${label}(${argStr})` : label;
+  }).join(" → ");
+}
+
+function transformRuleSelectHtml(selectedRule) {
+  const groups = {};
+  for (const r of TRANSFORM_RULES) {
+    (groups[r.group] ||= []).push(r);
+  }
+  const parts = Object.entries(groups).map(([grp, list]) => {
+    const opts = list.map(r => `<option value="${r.rule}"${r.rule === selectedRule ? " selected" : ""}>${escHtml(r.label)}</option>`).join("");
+    return `<optgroup label="${escHtml(grp)}">${opts}</optgroup>`;
+  }).join("");
+  // If selectedRule is unknown (legacy row with typo), surface it so user can fix.
+  const known = !!TRANSFORM_RULE_MAP[selectedRule];
+  const unknownOpt = (!known && selectedRule)
+    ? `<option value="${escHtml(selectedRule)}" selected>unknown: ${escHtml(selectedRule)}</option>`
+    : "";
+  return `${unknownOpt}${parts}`;
+}
+
+function transformStepPillHtml(step, rowIdx, stepIdx) {
+  const def = TRANSFORM_RULE_MAP[step.rule];
+  const args = step.args || {};
+  const argHtml = def ? def.args.map(a => {
+    const val = args[a.name] !== undefined ? args[a.name] : a.default;
+    const mono = a.mono ? "font-family:var(--font-mono,monospace);" : "";
+    return `<input type="${a.type}" data-arg="${a.name}" value="${escHtml(String(val))}" title="${escHtml(a.label)}" placeholder="${escHtml(a.label)}" class="form-control" style="width:${a.width};${mono}padding:2px 6px;font-size:0.8rem">`;
+  }).join("") : "";
+  const unknown = !def;
+  return `<span class="tf-step" draggable="true" data-row-idx="${rowIdx}" data-step-idx="${stepIdx}" style="display:inline-flex;align-items:center;gap:4px;background:${unknown ? "#fee2e2" : "var(--clr-elev,#f4f4f5)"};border:1px solid ${unknown ? "#fca5a5" : "var(--clr-border,#e4e4e7)"};border-radius:6px;padding:3px 6px;cursor:move">
+    <span class="tf-drag" title="Drag to reorder" style="cursor:grab;opacity:0.4;font-size:0.7rem">⋮⋮</span>
+    <select class="tf-rule form-control" style="padding:2px 4px;font-size:0.8rem;max-width:160px">${transformRuleSelectHtml(step.rule)}</select>
+    ${argHtml}
+    <button type="button" class="tf-remove" title="Remove step" aria-label="Remove" style="background:transparent;border:0;color:#71717a;cursor:pointer;font-size:0.9rem;line-height:1;padding:0 2px">×</button>
+  </span>`;
+}
+
+function renderTransformStepsInto(container, steps) {
+  const rowIdx = container.dataset.rowIdx ?? "0";
+  container.innerHTML = (steps || [])
+    .map((s, i) => transformStepPillHtml(s, rowIdx, i))
+    .join("");
+  // Refresh stored model so we can read + re-render after arg edits.
+  container._steps = (steps || []).map(s => ({ rule: s.rule, args: { ...(s.args || {}) } }));
+  refreshTransformPreview(container);
+}
+
+function readTransformStepsFromContainer(container) {
+  // Prefer the in-memory model when pill DOM still matches it; otherwise walk the DOM.
+  const pills = Array.from(container.querySelectorAll(".tf-step"));
+  return pills.map(pill => {
+    const rule = pill.querySelector(".tf-rule")?.value || "";
+    const args = {};
+    pill.querySelectorAll("input[data-arg]").forEach(inp => {
+      const k = inp.dataset.arg;
+      const v = inp.value;
+      if (k && v !== "") args[k] = inp.type === "number" ? Number(v) : v;
+    });
+    return Object.keys(args).length ? { rule, args } : { rule };
+  });
+}
+
+function refreshTransformPreview(container) {
+  const previewEl = container.nextElementSibling && container.nextElementSibling.classList?.contains("tf-preview")
+    ? container.nextElementSibling
+    : null;
+  if (!previewEl) return;
+  const sample = previewEl.dataset.sample;
+  if (sample === undefined || sample === "") {
+    previewEl.style.display = "none";
+    return;
+  }
+  const steps = readTransformStepsFromContainer(container);
+  if (steps.length === 0) {
+    previewEl.style.display = "none";
+    return;
+  }
+  let v = sample;
+  try {
+    for (const s of steps) v = applyStepClient(v, s);
+  } catch {
+    v = "<error>";
+  }
+  previewEl.style.display = "";
+  previewEl.textContent = `"${sample}" → ${v === null ? "null" : `"${v}"`}`;
+}
+
+// Client-side port of backend applyStep(), for live preview only.
+function applyStepClient(value, step) {
+  const args = step.args || {};
+  switch (step.rule) {
+    case "trim":        return typeof value === "string" ? value.trim() : value;
+    case "trim_inner":  return typeof value === "string" ? value.replace(/\s+/g, " ") : value;
+    case "upper":       return typeof value === "string" ? value.toUpperCase() : value;
+    case "lower":       return typeof value === "string" ? value.toLowerCase() : value;
+    case "title":       return typeof value === "string"
+                          ? value.replace(/\w\S*/g, w => (w[0] || "").toUpperCase() + w.slice(1).toLowerCase())
+                          : value;
+    case "digits_only": return typeof value === "string" ? value.replace(/\D+/g, "") : value;
+    case "alnum_only":  return typeof value === "string" ? value.replace(/[^A-Za-z0-9]+/g, "") : value;
+    case "number": {
+      if (typeof value === "number") return value;
+      if (typeof value === "string" && value.trim()) { const n = Number(value); return isNaN(n) ? value : n; }
+      return value;
+    }
+    case "integer": {
+      const n = typeof value === "number" ? value : Number(value);
+      return Number.isFinite(n) ? Math.floor(n) : value;
+    }
+    case "boolean": {
+      if (typeof value === "boolean") return value;
+      if (typeof value === "string") {
+        const s = value.trim().toLowerCase();
+        if (["true","1","yes","y"].includes(s)) return true;
+        if (["false","0","no","n"].includes(s)) return false;
+      }
+      return value;
+    }
+    case "pad_left": {
+      const len = Number(args.len) || 0;
+      const ch = typeof args.char === "string" && args.char.length > 0 ? String(args.char) : "0";
+      return String(value ?? "").padStart(len, ch);
+    }
+    case "replace": {
+      const from = String(args.from ?? "");
+      const to = String(args.to ?? "");
+      if (!from) return value;
+      return typeof value === "string" ? value.split(from).join(to) : value;
+    }
+    case "prefix": return String(args.text ?? "") + String(value ?? "");
+    case "suffix": return String(value ?? "") + String(args.text ?? "");
+    case "default": {
+      const isEmpty = value === null || value === undefined || value === "";
+      return isEmpty ? String(args.value ?? "") : value;
+    }
+    case "null_if": {
+      const sentinel = String(args.value ?? "");
+      return typeof value === "string" && value === sentinel ? null : value;
+    }
+    case "match": {
+      try {
+        const re = new RegExp(String(args.pattern ?? ""), String(args.flags ?? ""));
+        if (typeof value !== "string") return value;
+        return re.test(value) ? value : "";
+      } catch { return value; }
+    }
+    case "extract": {
+      try {
+        const re = new RegExp(String(args.pattern ?? ""), String(args.flags ?? ""));
+        if (typeof value !== "string") return value;
+        const m = re.exec(value);
+        if (!m) return "";
+        const g = Number(args.group);
+        const idx = Number.isFinite(g) && g >= 0 ? g : 1;
+        return m[idx] ?? "";
+      } catch { return value; }
+    }
+    default: return value;
+  }
 }
 
 // Apply branding (app name + colors) to the login page before authentication.
@@ -272,10 +506,9 @@ async function loginWithPasskey() {
       return;
     }
 
-    state.token = result.accessToken;
+    storeTokens({ accessToken: result.accessToken, refreshToken: result.refreshToken });
     state.user = result.user;
     state.calendarFilters.ownerIds = [result.user.id];
-    localStorage.setItem("thinkcrm_token", state.token);
     showApp();
     showTrialBanner(result.user.subscription);
     if (window._checkSuperAdmin) window._checkSuperAdmin();
@@ -302,6 +535,7 @@ async function loginWithPasskey() {
     await loadDemoDataStatus();
     renderDemoDataBanner();
     loadOnboardingWizard();
+    startIdleWatch();
   } catch (err) {
     if (err.name === "NotAllowedError") {
       authMessage.textContent = "Passkey sign-in was cancelled.";
@@ -322,11 +556,10 @@ qs("#oauth-passkey-btn")?.addEventListener("click", loginWithPasskey);
     onError: (msg) => { authMessage.textContent = msg; }
   });
   if (!result) return;
-  const { token, user } = result;
-  state.token = token;
+  const { token, refreshToken, user } = result;
+  storeTokens({ accessToken: token, refreshToken });
   state.user  = user;
   state.calendarFilters.ownerIds = [user.id];
-  localStorage.setItem("thinkcrm_token", token);
   showApp();
   showTrialBanner(user.subscription);
   updateUserMeta();
@@ -4768,7 +5001,7 @@ function renderSettings() {
                     <td><code>${escHtml(m.sourceField)}</code></td>
                     <td>→</td>
                     <td><code>${escHtml(m.targetField)}</code></td>
-                    <td>${m.transformRule ? `<code>${escHtml(m.transformRule)}</code>` : "—"}</td>
+                    <td>${escHtml(summarizeTransform(m.transformRule))}</td>
                     <td>${m.isRequired ? "Yes" : ""}</td>
                   </tr>`).join("")}
                 </tbody>
@@ -4846,6 +5079,14 @@ function renderSettings() {
                 <span class="sync-test-result-summary" style="display:block;margin-bottom:var(--sp-1)"></span>
                 <textarea class="form-control sync-test-result-body" readonly rows="8" style="font-family:var(--font-mono,monospace);font-size:0.78rem;white-space:pre" placeholder="Response body will appear here after Test Connection"></textarea>
               </label>
+            </div>
+            <div class="sync-pull-result" id="sync-pull-result-${src.id}" hidden style="margin-top:var(--sp-3);padding:var(--sp-3);border-radius:var(--radius);border:1px solid var(--clr-border)">
+              <div class="sync-pull-result-header" style="display:flex;align-items:center;gap:var(--sp-2);font-weight:600;margin-bottom:var(--sp-2)"></div>
+              <div class="sync-pull-result-stats" style="display:flex;flex-wrap:wrap;gap:var(--sp-3);font-size:0.85rem;margin-bottom:var(--sp-2)"></div>
+              <details class="sync-pull-result-errors" hidden>
+                <summary style="cursor:pointer;font-size:0.82rem;color:var(--danger,#dc2626)">View errors</summary>
+                <pre class="sync-pull-result-errors-body" style="font-family:var(--font-mono,monospace);font-size:0.78rem;white-space:pre-wrap;margin-top:var(--sp-2);max-height:200px;overflow:auto;background:var(--surface-soft,#f8f8f8);padding:var(--sp-2);border-radius:var(--radius)"></pre>
+              </details>
             </div>
             ${src.lastSyncAt ? `<p class="muted" style="font-size:0.78rem;margin-top:var(--sp-2)">Last sync: ${new Date(src.lastSyncAt).toLocaleString()}</p>` : ""}
           </div>
@@ -4932,7 +5173,7 @@ function renderSettings() {
               <span style="width:180px">Source field (ERP)</span>
               <span style="width:12px">→</span>
               <span style="width:200px">CRM field</span>
-              <span style="width:160px">Transform</span>
+              <span style="min-width:260px;flex:1">Transforms</span>
               <span>Required</span>
             </div>
             <div id="sync-mapping-rows"></div>
@@ -6079,13 +6320,58 @@ function renderSettings() {
       btn.disabled = true;
       const originalLabel = btn.textContent;
       btn.textContent = "Pulling…";
+      const renderResult = (ok, title, color, bg, statsHtml, errors) => {
+        const box = qs(`#sync-pull-result-${sourceId}`);
+        if (!box) return;
+        const header = box.querySelector(".sync-pull-result-header");
+        const stats = box.querySelector(".sync-pull-result-stats");
+        const errWrap = box.querySelector(".sync-pull-result-errors");
+        const errBody = box.querySelector(".sync-pull-result-errors-body");
+        if (!header || !stats) return;
+        box.hidden = false;
+        box.style.background = bg;
+        box.style.borderColor = color;
+        header.style.color = color;
+        header.innerHTML = `<span style="font-size:1.1rem">${ok ? "✓" : "✗"}</span><span>${title}</span>`;
+        stats.innerHTML = statsHtml;
+        if (errWrap && errBody) {
+          if (errors && errors.length) {
+            errWrap.hidden = false;
+            errBody.textContent = errors.slice(0, 50).map((e, i) => `${i + 1}. ${typeof e === "string" ? e : JSON.stringify(e)}`).join("\n");
+          } else {
+            errWrap.hidden = true;
+            errBody.textContent = "";
+          }
+        }
+        box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      };
       try {
         const result = await api(`/integrations/master-data/sources/${sourceId}/pull`, { method: "POST" });
-        setStatus(`${sourceName}: ${result.status} — ${result.success_count}/${result.processed_count} records ok, ${result.failure_count} failed.`);
+        const ok = result.status !== "failed" && (result.failure_count || 0) === 0;
+        const partial = (result.failure_count || 0) > 0 && (result.success_count || 0) > 0;
+        const color = ok ? "var(--accent-bright,#16a34a)" : (partial ? "#d97706" : "var(--danger,#dc2626)");
+        const bg = ok ? "rgba(22,163,74,0.08)" : (partial ? "rgba(217,119,6,0.08)" : "rgba(220,38,38,0.08)");
+        const title = ok ? `Pull completed — ${sourceName}` : (partial ? `Pull completed with errors — ${sourceName}` : `Pull failed — ${sourceName}`);
+        const statsHtml = [
+          `<span><strong>${result.processed_count ?? 0}</strong> processed</span>`,
+          `<span style="color:var(--accent-bright,#16a34a)"><strong>${result.success_count ?? 0}</strong> succeeded</span>`,
+          `<span style="color:var(--danger,#dc2626)"><strong>${result.failure_count ?? 0}</strong> failed</span>`,
+          result.duration_ms != null ? `<span class="muted">${(result.duration_ms / 1000).toFixed(1)}s</span>` : "",
+          result.jobId ? `<span class="muted">Job ${String(result.jobId).slice(0, 8)}</span>` : ""
+        ].filter(Boolean).join("");
         await loadSyncData();
         renderSettings();
+        renderResult(ok, title, color, bg, statsHtml, result.errors);
+        const toastMsg = ok
+          ? `Pull completed: ${result.success_count ?? 0}/${result.processed_count ?? 0} records synced from ${sourceName}.`
+          : partial
+          ? `Pull partial: ${result.success_count ?? 0} succeeded, ${result.failure_count ?? 0} failed on ${sourceName}.`
+          : `Pull failed on ${sourceName}.`;
+        setStatus(toastMsg, !ok && !partial);
       } catch (err) {
-        setStatus(err.message || "Pull failed.");
+        const msg = err.message || "Pull failed.";
+        renderResult(false, `Pull failed — ${sourceName}`, "var(--danger,#dc2626)", "rgba(220,38,38,0.08)", `<span>${escHtml(msg)}</span>`, null);
+        setStatus(`Pull failed on ${sourceName}: ${msg}`, true);
         btn.disabled = false;
         btn.textContent = originalLabel;
       }
@@ -6206,6 +6492,7 @@ function renderSettings() {
       const effectiveLock = lockedEntity || undefined;
       const rows = (source?.mappings || []).map((m, i) => syncMappingRowHtml(i, m, effectiveLock)).join("");
       qs("#sync-mapping-rows").innerHTML = rows || syncMappingRowHtml(0, null, effectiveLock);
+      hydrateTransformStepRows(qs("#sync-mapping-rows"));
     });
   });
   qs("#sync-mapping-close")?.addEventListener("click", () => {
@@ -6216,6 +6503,7 @@ function renderSettings() {
     const idx = container.querySelectorAll(".sync-mapping-row").length;
     const lockedEntity = qs("#sync-mapping-locked-entity")?.value || undefined;
     container.insertAdjacentHTML("beforeend", syncMappingRowHtml(idx, null, lockedEntity));
+    hydrateTransformStepRows(container.querySelector(".sync-mapping-row:last-child"));
   });
   // Dynamic CRM-field dropdown when entity changes (only when entity is not locked).
   qs("#sync-mapping-rows")?.addEventListener("change", (e) => {
@@ -6249,12 +6537,17 @@ function renderSettings() {
         msgEl.style.color = "var(--danger,#dc2626)";
         return;
       }
-      // Preserve existing target selections keyed by sourceField so users don't lose prior work.
+      // Cache first record for the transform-step live preview.
+      if (res.detail?.firstRecord && typeof res.detail.firstRecord === "object") {
+        window.__tfSampleRecord = res.detail.firstRecord;
+      }
+      // Preserve existing target selections + transform chains keyed by sourceField.
       const existing = new Map();
       qs("#sync-mapping-rows").querySelectorAll(".sync-mapping-row").forEach(r => {
         const sf = r.querySelector('[name="sourceField"]')?.value?.trim();
         const tf = r.querySelector('[name="targetField"]')?.value;
-        const tr = r.querySelector('[name="transformRule"]')?.value;
+        const tfContainer = r.querySelector(".tf-steps");
+        const tr = tfContainer ? serializeTransformSteps(readTransformStepsFromContainer(tfContainer)) : "";
         const req = r.querySelector('[name="isRequired"]')?.checked;
         if (sf) existing.set(sf, { targetField: tf, transformRule: tr, isRequired: req });
       });
@@ -6269,6 +6562,7 @@ function renderSettings() {
         }, lockedEntity);
       }).join("");
       qs("#sync-mapping-rows").innerHTML = rows;
+      hydrateTransformStepRows(qs("#sync-mapping-rows"));
       msgEl.textContent = `✓ Found ${keys.length} field(s). Now pick the matching CRM field for each row.`;
       msgEl.style.color = "var(--accent-bright,#16a34a)";
     } catch (err) {
@@ -6279,6 +6573,140 @@ function renderSettings() {
       btnFetch.textContent = original;
     }
   });
+  // Transform-step builder: delegated clicks, changes, and drag-reorder on all rows.
+  const mappingRowsRoot = qs("#sync-mapping-rows");
+  if (mappingRowsRoot && !mappingRowsRoot.dataset.tfWired) {
+    mappingRowsRoot.dataset.tfWired = "1";
+    mappingRowsRoot.addEventListener("click", (ev) => {
+      const t = ev.target;
+      if (!(t instanceof HTMLElement)) return;
+      // Add step
+      if (t.classList.contains("tf-add-step")) {
+        const row = t.closest(".sync-mapping-row");
+        const container = row?.querySelector(".tf-steps");
+        if (!container) return;
+        const steps = readTransformStepsFromContainer(container);
+        steps.push({ rule: "trim" });
+        renderTransformStepsInto(container, steps);
+        return;
+      }
+      // Remove step
+      if (t.classList.contains("tf-remove")) {
+        const pill = t.closest(".tf-step");
+        const container = pill?.parentElement;
+        if (!container) return;
+        const steps = readTransformStepsFromContainer(container)
+          .filter((_, i) => i !== Number(pill.dataset.stepIdx));
+        renderTransformStepsInto(container, steps);
+        return;
+      }
+      // Save chain as template
+      if (t.classList.contains("tf-save-template")) {
+        const row = t.closest(".sync-mapping-row");
+        const container = row?.querySelector(".tf-steps");
+        if (!container) return;
+        const steps = readTransformStepsFromContainer(container);
+        if (steps.length === 0) { setStatus("Add at least one step before saving.", true); return; }
+        const name = window.prompt("Template name:");
+        if (!name) return;
+        const description = window.prompt("Optional description (leave blank for none):") || "";
+        api("/integrations/transform-templates", {
+          method: "POST",
+          body: { name: name.trim(), description: description.trim() || undefined, steps: serializeTransformSteps(steps) }
+        }).then(() => {
+          setStatus(`Template "${name}" saved.`);
+        }).catch(err => setStatus(err.message || "Failed to save template.", true));
+        return;
+      }
+      // Load template
+      if (t.classList.contains("tf-load-template")) {
+        const row = t.closest(".sync-mapping-row");
+        const container = row?.querySelector(".tf-steps");
+        if (!container) return;
+        api("/integrations/transform-templates").then((list) => {
+          const names = (list || []).map((tpl, i) => `${i + 1}. ${tpl.name}`).join("\n");
+          if (!names) { setStatus("No templates saved yet. Build a chain and click 💾 to save one.", true); return; }
+          const pick = window.prompt(`Pick a template:\n${names}\n\nType the number:`);
+          if (!pick) return;
+          const idx = Number(pick) - 1;
+          const tpl = list[idx];
+          if (!tpl) { setStatus("Invalid choice.", true); return; }
+          renderTransformStepsInto(container, parseTransformRule(tpl.steps));
+        }).catch(err => setStatus(err.message || "Failed to load templates.", true));
+        return;
+      }
+    });
+    // Rule or arg change → re-render pill (to swap arg inputs) and refresh preview.
+    mappingRowsRoot.addEventListener("change", (ev) => {
+      const t = ev.target;
+      if (!(t instanceof HTMLElement)) return;
+      if (t.classList.contains("tf-rule")) {
+        const pill = t.closest(".tf-step");
+        const container = pill?.parentElement;
+        if (!container) return;
+        const steps = readTransformStepsFromContainer(container);
+        renderTransformStepsInto(container, steps);
+      }
+    });
+    mappingRowsRoot.addEventListener("input", (ev) => {
+      const t = ev.target;
+      if (!(t instanceof HTMLElement)) return;
+      if (t.tagName === "INPUT" && t.dataset.arg !== undefined) {
+        const container = t.closest(".tf-steps");
+        if (container) refreshTransformPreview(container);
+      }
+      // If user edits sourceField, update preview sample for that row.
+      if (t.tagName === "INPUT" && t.getAttribute("name") === "sourceField") {
+        const row = t.closest(".sync-mapping-row");
+        const container = row?.querySelector(".tf-steps");
+        const preview = container?.nextElementSibling?.classList?.contains("tf-preview")
+          ? container.nextElementSibling : null;
+        if (container && preview) {
+          const val = window.__tfSampleRecord?.[t.value.trim()];
+          preview.dataset.sample = (val === undefined || val === null) ? "" : String(val);
+          refreshTransformPreview(container);
+        }
+      }
+    });
+    // Drag-to-reorder steps.
+    let dragSrc = null;
+    mappingRowsRoot.addEventListener("dragstart", (ev) => {
+      const pill = ev.target.closest?.(".tf-step");
+      if (!pill) return;
+      dragSrc = pill;
+      ev.dataTransfer.effectAllowed = "move";
+      ev.dataTransfer.setData("text/plain", pill.dataset.stepIdx || "");
+      pill.style.opacity = "0.5";
+    });
+    mappingRowsRoot.addEventListener("dragend", (ev) => {
+      const pill = ev.target.closest?.(".tf-step");
+      if (pill) pill.style.opacity = "";
+      dragSrc = null;
+    });
+    mappingRowsRoot.addEventListener("dragover", (ev) => {
+      if (!dragSrc) return;
+      const pill = ev.target.closest?.(".tf-step");
+      if (pill && pill.parentElement === dragSrc.parentElement && pill !== dragSrc) {
+        ev.preventDefault();
+        ev.dataTransfer.dropEffect = "move";
+      }
+    });
+    mappingRowsRoot.addEventListener("drop", (ev) => {
+      if (!dragSrc) return;
+      const pill = ev.target.closest?.(".tf-step");
+      const container = dragSrc.parentElement;
+      if (!pill || !container || pill === dragSrc || pill.parentElement !== container) return;
+      ev.preventDefault();
+      const steps = readTransformStepsFromContainer(container);
+      const from = Number(dragSrc.dataset.stepIdx);
+      const to = Number(pill.dataset.stepIdx);
+      if (from < 0 || to < 0 || from >= steps.length || to >= steps.length) return;
+      const [moved] = steps.splice(from, 1);
+      steps.splice(to, 0, moved);
+      renderTransformStepsInto(container, steps);
+    });
+  }
+
   qs("#sync-mapping-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const sourceId = qs("#sync-mapping-source-id").value;
@@ -6288,7 +6716,10 @@ function renderSettings() {
       const et = row.querySelector("[name=entityType]")?.value;
       const sf = row.querySelector("[name=sourceField]")?.value?.trim();
       const tf = row.querySelector("[name=targetField]")?.value?.trim();
-      const tr = row.querySelector("[name=transformRule]")?.value?.trim() || undefined;
+      const tfContainer = row.querySelector(".tf-steps");
+      const steps = tfContainer ? readTransformStepsFromContainer(tfContainer) : [];
+      const serialized = serializeTransformSteps(steps);
+      const tr = serialized || undefined;
       const req = row.querySelector("[name=isRequired]")?.checked || false;
       if (et && sf && tf) mappings.push({ entityType: et, sourceField: sf, targetField: tf, transformRule: tr, isRequired: req });
     });
@@ -6314,26 +6745,28 @@ function renderSettings() {
         ).join("");
         const overlay = document.createElement("div");
         overlay.className = "popup-overlay";
+        // Inline styles — don't rely on .popup-overlay being defined, in case CSS bailed.
+        overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:9999;padding:16px";
         overlay.innerHTML = `
-          <div class="popup-box popup-box--wide" role="dialog" aria-modal="true">
-            <div class="popup-header">
-              <p class="popup-title">Sync Job Detail</p>
-              <button class="popup-close-btn" aria-label="Close">${icon('x', 14)}</button>
+          <div class="popup-box popup-box--wide" role="dialog" aria-modal="true" style="background:var(--clr-surface,#fff);border-radius:var(--radius,8px);max-width:800px;width:100%;max-height:90vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
+            <div class="popup-header" style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--clr-border,#e4e4e7)">
+              <p class="popup-title" style="margin:0;font-weight:600">Sync Job Detail</p>
+              <button class="popup-close-btn" aria-label="Close" style="background:transparent;border:0;cursor:pointer;padding:4px">${icon('x', 14)}</button>
             </div>
-            <div style="padding:var(--sp-3)">
+            <div style="padding:var(--sp-3,16px)">
               <p><strong>Status:</strong> ${escHtml(job.status)} &nbsp; <strong>Source:</strong> ${escHtml(job.source?.sourceName ?? "—")} &nbsp; <strong>Type:</strong> ${escHtml(job.runType)}</p>
               <p><strong>Started:</strong> ${new Date(job.startedAt).toLocaleString()} ${job.finishedAt ? " — <strong>Finished:</strong> " + new Date(job.finishedAt).toLocaleString() : ""}</p>
               ${errHtml ? `
-                <h5 style="margin-top:var(--sp-3)">Errors</h5>
+                <h5 style="margin-top:var(--sp-3,16px)">Errors</h5>
                 <table class="data-table" style="font-size:0.82rem">
                   <thead><tr><th>Row</th><th>Code</th><th>Message</th></tr></thead>
                   <tbody>${errHtml}</tbody>
                 </table>
-              ` : '<p class="muted" style="margin-top:var(--sp-3)">No errors.</p>'}
+              ` : '<p class="muted" style="margin-top:var(--sp-3,16px)">No errors.</p>'}
             </div>
           </div>`;
         document.body.appendChild(overlay);
-        overlay.querySelector(".popup-close-btn").addEventListener("click", () => overlay.remove());
+        overlay.querySelector(".popup-close-btn")?.addEventListener("click", () => overlay.remove());
         overlay.addEventListener("click", (ev) => { if (ev.target === overlay) overlay.remove(); });
       } catch (err) { setStatus(err.message); }
     });
@@ -7858,6 +8291,102 @@ function openConfirmPopup({ title, message, confirmLabel = "Confirm", danger = f
   });
 }
 
+// ── Idle-timeout watcher ─────────────────────────────────────────────────────
+// Shows a confirm-session modal with countdown after prolonged inactivity; if
+// the user doesn't respond before the countdown finishes, they're signed out.
+const IDLE_TIMEOUT_MS = 15 * 60 * 1000;     // 15 min of no activity
+const IDLE_COUNTDOWN_SECONDS = 60;          // then 60s to confirm
+const IDLE_ACTIVITY_EVENTS = ["mousedown", "keydown", "touchstart", "scroll"];
+let _idleTimerId = null;
+let _idleCountdownInterval = null;
+let _idleOverlayEl = null;
+let _idleActivityHandler = null;
+
+function stopIdleWatch() {
+  if (_idleTimerId) { clearTimeout(_idleTimerId); _idleTimerId = null; }
+  if (_idleCountdownInterval) { clearInterval(_idleCountdownInterval); _idleCountdownInterval = null; }
+  if (_idleActivityHandler) {
+    IDLE_ACTIVITY_EVENTS.forEach((ev) => window.removeEventListener(ev, _idleActivityHandler, true));
+    _idleActivityHandler = null;
+  }
+  if (_idleOverlayEl) { _idleOverlayEl.remove(); _idleOverlayEl = null; }
+}
+
+function startIdleWatch() {
+  stopIdleWatch();
+  const resetTimer = () => {
+    if (_idleOverlayEl) return; // modal is up, don't auto-reset
+    if (_idleTimerId) clearTimeout(_idleTimerId);
+    _idleTimerId = setTimeout(openIdleConfirmPopup, IDLE_TIMEOUT_MS);
+  };
+  _idleActivityHandler = resetTimer;
+  IDLE_ACTIVITY_EVENTS.forEach((ev) => window.addEventListener(ev, _idleActivityHandler, true));
+  resetTimer();
+}
+
+function idleSignOut() {
+  stopIdleWatch();
+  const rt = getRefreshToken();
+  if (rt) {
+    try {
+      fetch("/api/v1/auth/logout", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}) },
+        body: JSON.stringify({ refreshToken: rt }),
+        keepalive: true
+      }).catch(() => {});
+    } catch { /* ignore */ }
+  }
+  state.user = null;
+  state.cache.notifPrefs = undefined;
+  state.cache.cronJobs = undefined;
+  _notifPrefsCache = null;
+  clearTokens();
+  showAuth();
+  if (authMessage) authMessage.textContent = "Signed out due to inactivity. Please sign in again.";
+}
+
+function openIdleConfirmPopup() {
+  if (_idleOverlayEl) return;
+  const overlay = document.createElement("div");
+  overlay.className = "popup-overlay";
+  overlay.innerHTML = `
+    <div class="popup-box" role="alertdialog" aria-modal="true" aria-labelledby="idle-title">
+      <p class="popup-title" id="idle-title">Are you still there?</p>
+      <p class="popup-msg">For your security, you'll be signed out in <strong class="idle-countdown">${IDLE_COUNTDOWN_SECONDS}</strong> seconds due to inactivity.</p>
+      <div class="popup-actions">
+        <button class="popup-cancel-btn idle-logout-btn">Sign out</button>
+        <button class="popup-confirm-btn idle-stay-btn">Stay signed in</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  requestAnimationFrame(() => overlay.classList.add("popup-visible"));
+  _idleOverlayEl = overlay;
+
+  const countdownEl = overlay.querySelector(".idle-countdown");
+  let remaining = IDLE_COUNTDOWN_SECONDS;
+  _idleCountdownInterval = setInterval(() => {
+    remaining -= 1;
+    if (countdownEl) countdownEl.textContent = String(remaining);
+    if (remaining <= 0) { idleSignOut(); }
+  }, 1000);
+
+  const stay = () => {
+    if (_idleCountdownInterval) { clearInterval(_idleCountdownInterval); _idleCountdownInterval = null; }
+    overlay.classList.remove("popup-visible");
+    overlay.addEventListener("transitionend", () => overlay.remove(), { once: true });
+    _idleOverlayEl = null;
+    // Ping server to refresh session, then resume watching
+    if (state.token) { api("/auth/me").catch(() => {}); }
+    if (_idleTimerId) clearTimeout(_idleTimerId);
+    _idleTimerId = setTimeout(openIdleConfirmPopup, IDLE_TIMEOUT_MS);
+  };
+
+  overlay.querySelector(".idle-stay-btn").addEventListener("click", stay);
+  overlay.querySelector(".idle-logout-btn").addEventListener("click", idleSignOut);
+  overlay.querySelector(".idle-stay-btn").focus();
+}
+
 function openContactsPopup(contacts) {
   const overlay = document.createElement("div");
   overlay.className = "popup-overlay";
@@ -7909,16 +8438,22 @@ function buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin) {
             <th>#</th>
             <th>Code</th>
             <th>Name</th>
+            <th>Owner</th>
             <th>Contacts</th>
             <th>Actions</th>
           </tr>
         </thead>
         <tbody>
-          ${slice.map((c, i) => `
+          ${slice.map((c, i) => {
+            const ownerName = c.owner?.fullName
+              || state.cache.allUsers?.find(u => u.id === c.ownerId)?.fullName
+              || (c.ownerId === state.user?.id ? state.user?.fullName : null);
+            return `
             <tr class="cust-row" data-id="${c.id}">
               <td>${start + i + 1}</td>
               <td><button class="cust-code-btn" data-id="${c.id}" data-code="${escHtml(c.customerCode)}">${escHtml(c.customerCode)}</button></td>
               <td><button class="cust-name-btn" data-id="${c.id}" data-code="${escHtml(c.customerCode)}">${escHtml(c.name)}</button></td>
+              <td>${ownerName ? escHtml(ownerName) : '<span class="muted small">—</span>'}</td>
               <td>${c.contacts?.length
                 ? `<button class="cust-badge-contact cust-contacts-btn" data-id="${c.id}" data-contacts='${escHtml(JSON.stringify(c.contacts))}' title="View contacts"><svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>${c.contacts.length}</button>`
                 : '<span class="muted small">—</span>'}</td>
@@ -7927,7 +8462,8 @@ function buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin) {
                 <button class="cust-action-btn cust-edit-btn" data-id="${c.id}" data-customer='${escHtml(JSON.stringify({ id: c.id, customerCode: c.customerCode, name: c.name, customerType: c.customerType, taxId: c.taxId || "", defaultTermId: c.paymentTerm?.id || "", externalRef: c.externalRef || "" }))}'>Edit</button>
                 ${isAdmin ? `<button class="cust-action-btn cust-delete-btn danger" data-id="${c.id}" data-name="${escHtml(c.name)}">Delete</button>` : ""}
               </div></td>
-            </tr>`).join("")}
+            </tr>`;
+          }).join("")}
         </tbody>
       </table>`;
 
@@ -8713,17 +9249,51 @@ function syncMappingRowHtml(idx, m, lockedEntity) {
          <option value="PAYMENT_TERM" ${entity === "PAYMENT_TERM" ? "selected" : ""}>Payment Term</option>
        </select>`;
   return `
-    <div class="sync-mapping-row" style="display:flex;gap:var(--sp-2);align-items:center;margin-bottom:var(--sp-2);flex-wrap:wrap">
+    <div class="sync-mapping-row" data-row-idx="${idx}" style="display:flex;gap:var(--sp-2);align-items:flex-start;margin-bottom:var(--sp-2);flex-wrap:wrap">
       ${entityCell}
       <input type="text" name="sourceField" placeholder="Source field from ERP" value="${escHtml(d.sourceField || "")}" class="form-control" style="width:180px">
-      <span>→</span>
+      <span style="padding-top:6px">→</span>
       <select name="targetField" class="form-control sync-mapping-target" style="width:200px" data-entity="${entity}">
         ${crmTargetOptions(entity, d.targetField || "")}
       </select>
-      <input type="text" name="transformRule" placeholder="trim / upper / lower / number" value="${escHtml(d.transformRule || "")}" class="form-control" style="width:160px">
-      <label style="display:flex;align-items:center;gap:4px;font-size:0.82rem"><input type="checkbox" name="isRequired" ${d.isRequired ? "checked" : ""}> Required</label>
-      <button type="button" class="ghost small" onclick="this.closest('.sync-mapping-row').remove()">${icon('x', 12)}</button>
+      <div style="display:flex;flex-direction:column;gap:2px;min-width:260px;flex:1">
+        <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+          <div class="tf-steps" data-row-idx="${idx}" data-initial="${escHtml(d.transformRule || "")}" style="display:flex;flex-wrap:wrap;gap:4px;align-items:center;min-width:180px"></div>
+          <button type="button" class="ghost small tf-add-step" title="Add transform step">+ step</button>
+          <button type="button" class="ghost small tf-load-template" title="Load from template">▸ template</button>
+          <button type="button" class="ghost small tf-save-template" title="Save this chain as a template">💾</button>
+        </div>
+        <div class="tf-preview muted" data-sample="" style="display:none;font-size:0.75rem;margin-top:2px;font-family:var(--font-mono,monospace);color:#6b7280"></div>
+      </div>
+      <label style="display:flex;align-items:center;gap:4px;font-size:0.82rem;padding-top:4px"><input type="checkbox" name="isRequired" ${d.isRequired ? "checked" : ""}> Required</label>
+      <button type="button" class="ghost small" onclick="this.closest('.sync-mapping-row').remove()" style="margin-top:2px">${icon('x', 12)}</button>
     </div>`;
+}
+
+// Hydrate every `.tf-steps` container under the given root: reads data-initial,
+// parses, and renders pills. Call after any innerHTML assignment that inserts
+// mapping rows.
+function hydrateTransformStepRows(root) {
+  if (!root) return;
+  root.querySelectorAll(".tf-steps").forEach(c => {
+    const initial = c.getAttribute("data-initial") || "";
+    const steps = parseTransformRule(initial);
+    renderTransformStepsInto(c, steps);
+    // Seed sample from cached first-record for this row's sourceField, if any.
+    const row = c.closest(".sync-mapping-row");
+    if (row) {
+      const sf = row.querySelector('input[name="sourceField"]')?.value || "";
+      const cache = window.__tfSampleRecord || null;
+      if (cache && sf) {
+        const preview = c.nextElementSibling?.classList?.contains("tf-preview") ? c.nextElementSibling : null;
+        const val = cache[sf];
+        if (preview && val !== undefined && val !== null && val !== "") {
+          preview.dataset.sample = String(val);
+          refreshTransformPreview(c);
+        }
+      }
+    }
+  });
 }
 
 /** Translate a cron expression into a human-readable string showing the timezone. */
@@ -8897,10 +9467,9 @@ loginForm.addEventListener("submit", async (event) => {
       if (pendingEmail) pendingEmail.textContent = result.email || payload.email;
       return;
     }
-    state.token = result.accessToken;
+    storeTokens({ accessToken: result.accessToken, refreshToken: result.refreshToken });
     state.user = result.user;
     state.calendarFilters.ownerIds = [result.user.id];
-    localStorage.setItem("thinkcrm_token", state.token);
     showApp();
     showTrialBanner(result.user.subscription);
     if (window._checkSuperAdmin) window._checkSuperAdmin();
@@ -8927,6 +9496,7 @@ loginForm.addEventListener("submit", async (event) => {
     hideAppLoading();
     await loadDemoDataStatus();
     renderDemoDataBanner();
+    startIdleWatch();
   } catch (error) {
     hideAppLoading();
     authMessage.textContent = error.message;
@@ -9631,12 +10201,21 @@ document.addEventListener("click", (e) => {
 
 qs("#logout-btn").addEventListener("click", () => {
   closeUserDropdown();
-  state.token = "";
+  stopIdleWatch();
+  const rt = getRefreshToken();
+  if (rt) {
+    fetch("/api/v1/auth/logout", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}) },
+      body: JSON.stringify({ refreshToken: rt }),
+      keepalive: true
+    }).catch(() => {});
+  }
   state.user = null;
   state.cache.notifPrefs = undefined;
   state.cache.cronJobs = undefined;
   _notifPrefsCache = null;
-  localStorage.removeItem("thinkcrm_token");
+  clearTokens();
   showAuth();
   authMessage.textContent = "";
 });
@@ -9974,9 +10553,9 @@ async function bootstrap() {
     hideAppLoading();
     await loadDemoDataStatus();
     renderDemoDataBanner();
+    startIdleWatch();
   } catch {
-    localStorage.removeItem("thinkcrm_token");
-    state.token = "";
+    clearTokens();
     hideAppLoading();
   }
 }

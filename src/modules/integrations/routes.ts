@@ -28,7 +28,7 @@ const mappingSchema = z.object({
       entityType: z.enum(["CUSTOMER", "ITEM", "PAYMENT_TERM", "DEAL", "VISIT"]),
       sourceField: z.string(),
       targetField: z.string(),
-      transformRule: z.string().optional(),
+      transformRule: z.string().max(2000).optional(),
       isRequired: z.boolean().default(false)
     })
   )
@@ -53,6 +53,12 @@ const syncRunSchema = z.object({
   idempotency_key: z.string().min(1),
   requested_by: z.string().min(1),
   records: z.array(z.record(z.string(), z.unknown())).min(1)
+});
+
+const transformTemplateSchema = z.object({
+  name: z.string().trim().min(1).max(100),
+  description: z.string().trim().max(500).optional(),
+  steps: z.string().max(2000)
 });
 
 const webhookRunSchema = z.object({
@@ -242,7 +248,8 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
             method: test.method,
             sentHeaderNames: test.sentHeaderNames,
             sampleRecordCount: test.sampleRecordCount,
-            firstRecordKeys: test.firstRecordKeys
+            firstRecordKeys: test.firstRecordKeys,
+            firstRecord: test.firstRecord
           }
         };
       } catch (err) {
@@ -466,6 +473,73 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.notFound("Job not found.");
     }
     return job;
+  });
+
+  app.get("/integrations/transform-templates", async (request) => {
+    requireRoleAtLeast(request, UserRole.MANAGER);
+    const tenantId = requireTenantId(request);
+    return prisma.transformTemplate.findMany({
+      where: { tenantId },
+      orderBy: { name: "asc" }
+    });
+  });
+
+  app.post("/integrations/transform-templates", async (request, reply) => {
+    requireRoleAtLeast(request, UserRole.MANAGER);
+    const tenantId = requireTenantId(request);
+    const parsed = transformTemplateSchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
+    }
+    const created = await prisma.transformTemplate.create({
+      data: {
+        tenantId,
+        name: parsed.data.name,
+        description: parsed.data.description ?? null,
+        steps: parsed.data.steps
+      }
+    });
+    return reply.code(201).send(created);
+  });
+
+  app.put("/integrations/transform-templates/:id", async (request) => {
+    requireRoleAtLeast(request, UserRole.MANAGER);
+    const tenantId = requireTenantId(request);
+    const params = request.params as { id: string };
+    const parsed = transformTemplateSchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
+    }
+    const existing = await prisma.transformTemplate.findFirst({
+      where: { id: params.id, tenantId },
+      select: { id: true }
+    });
+    if (!existing) {
+      throw app.httpErrors.notFound("Template not found.");
+    }
+    return prisma.transformTemplate.update({
+      where: { id: existing.id },
+      data: {
+        name: parsed.data.name,
+        description: parsed.data.description ?? null,
+        steps: parsed.data.steps
+      }
+    });
+  });
+
+  app.delete("/integrations/transform-templates/:id", async (request, reply) => {
+    requireRoleAtLeast(request, UserRole.MANAGER);
+    const tenantId = requireTenantId(request);
+    const params = request.params as { id: string };
+    const existing = await prisma.transformTemplate.findFirst({
+      where: { id: params.id, tenantId },
+      select: { id: true }
+    });
+    if (!existing) {
+      throw app.httpErrors.notFound("Template not found.");
+    }
+    await prisma.transformTemplate.delete({ where: { id: existing.id } });
+    return reply.code(204).send();
   });
 
   app.get("/integrations/logs", async (request) => {

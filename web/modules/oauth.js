@@ -66,14 +66,14 @@ export async function consumeOAuthCallback({ onError } = {}) {
       body: JSON.stringify({ code: oauthCode })
     });
     if (!exchangeRes.ok) throw new Error("Login succeeded but the session code was invalid. Please try again.");
-    const { token } = await exchangeRes.json();
+    const { token, refreshToken } = await exchangeRes.json();
 
     const meRes = await fetch("/api/v1/auth/me", {
       headers: { Authorization: `Bearer ${token}` }
     });
     if (!meRes.ok) throw new Error("Login succeeded but could not load your profile. Please try again.");
     const user = await meRes.json();
-    return { token, user };
+    return { token, refreshToken, user };
   } catch (e) {
     onError?.(e.message);
     return null;
