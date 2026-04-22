@@ -225,6 +225,7 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
     let result: {
       ok: boolean;
       message: string;
+      responseBody?: string;
       detail?: Record<string, unknown>;
     };
     if (source.sourceType === "REST") {
@@ -235,6 +236,7 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
           message: test.ok
             ? `Reached endpoint: ${test.status} ${test.statusText} — ${test.sampleRecordCount} record(s) found.`
             : `Failed: ${test.error ?? `${test.status} ${test.statusText}`}`,
+          responseBody: test.responseBody,
           detail: {
             url: test.url,
             method: test.method,

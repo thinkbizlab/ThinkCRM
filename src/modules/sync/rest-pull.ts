@@ -81,8 +81,15 @@ export type RestTestResult = {
   sentHeaderNames: string[];
   sampleRecordCount: number;
   firstRecordKeys: string[];
+  responseBody: string;
   error?: string;
 };
+
+const MAX_RESPONSE_PREVIEW = 4000;
+function truncatePreview(input: string): string {
+  if (input.length <= MAX_RESPONSE_PREVIEW) return input;
+  return input.slice(0, MAX_RESPONSE_PREVIEW) + `\n…(truncated, ${input.length - MAX_RESPONSE_PREVIEW} more chars)`;
+}
 
 export async function testRestConnection(
   tenantId: string,
@@ -100,19 +107,26 @@ export async function testRestConnection(
     const res = await fetch(url, { method: "GET", headers });
     const text = await res.text();
     let body: unknown;
-    try { body = JSON.parse(text); } catch { body = text; }
+    let prettyBody = text;
+    try {
+      body = JSON.parse(text);
+      prettyBody = JSON.stringify(body, null, 2);
+    } catch {
+      body = text;
+    }
+    const responseBody = truncatePreview(prettyBody);
     if (!res.ok) {
-      return { ok: false, status: res.status, statusText: res.statusText, url, method: "GET", sentHeaderNames, sampleRecordCount: 0, firstRecordKeys: [], error: typeof body === "string" ? body.slice(0, 500) : `HTTP ${res.status}` };
+      return { ok: false, status: res.status, statusText: res.statusText, url, method: "GET", sentHeaderNames, sampleRecordCount: 0, firstRecordKeys: [], responseBody, error: typeof body === "string" ? body.slice(0, 500) : `HTTP ${res.status}` };
     }
     let records: Record<string, unknown>[] = [];
     try { records = extractRecords(body, cfg.recordsJsonPath); } catch (e) {
-      return { ok: false, status: res.status, statusText: res.statusText, url, method: "GET", sentHeaderNames, sampleRecordCount: 0, firstRecordKeys: [], error: e instanceof Error ? e.message : "Could not extract records." };
+      return { ok: false, status: res.status, statusText: res.statusText, url, method: "GET", sentHeaderNames, sampleRecordCount: 0, firstRecordKeys: [], responseBody, error: e instanceof Error ? e.message : "Could not extract records." };
     }
     const firstRecordKeys = records[0] ? Object.keys(records[0]) : [];
-    return { ok: true, status: res.status, statusText: res.statusText, url, method: "GET", sentHeaderNames, sampleRecordCount: records.length, firstRecordKeys };
+    return { ok: true, status: res.status, statusText: res.statusText, url, method: "GET", sentHeaderNames, sampleRecordCount: records.length, firstRecordKeys, responseBody };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, status: 0, statusText: "Network error", url, method: "GET", sentHeaderNames, sampleRecordCount: 0, firstRecordKeys: [], error: msg };
+    return { ok: false, status: 0, statusText: "Network error", url, method: "GET", sentHeaderNames, sampleRecordCount: 0, firstRecordKeys: [], responseBody: "", error: msg };
   }
 }
 

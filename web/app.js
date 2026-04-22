@@ -4792,6 +4792,12 @@ function renderSettings() {
                 </div>
               </form>
             </div>
+            <div class="sync-test-result" id="sync-test-result-${src.id}" hidden style="margin-top:var(--sp-3)">
+              <label class="form-label" style="font-size:0.82rem">
+                <span class="sync-test-result-summary" style="display:block;margin-bottom:var(--sp-1)"></span>
+                <textarea class="form-control sync-test-result-body" readonly rows="8" style="font-family:var(--font-mono,monospace);font-size:0.78rem;white-space:pre" placeholder="Response body will appear here after Test Connection"></textarea>
+              </label>
+            </div>
             ${src.lastSyncAt ? `<p class="muted" style="font-size:0.78rem;margin-top:var(--sp-2)">Last sync: ${new Date(src.lastSyncAt).toLocaleString()}</p>` : ""}
           </div>
         `).join("")}
@@ -5839,15 +5845,31 @@ function renderSettings() {
       btn.disabled = true;
       const original = btn.textContent;
       btn.textContent = "Testing…";
+      const resultBox = qs(`#sync-test-result-${sourceId}`);
+      const summaryEl = resultBox?.querySelector(".sync-test-result-summary");
+      const bodyEl    = resultBox?.querySelector(".sync-test-result-body");
       try {
         const res = await api(`/integrations/master-data/sources/${sourceId}/test`, { method: "POST" });
         const parts = [`${sourceName}: ${res.message}`];
-        if (res.detail?.url)              parts.push(`URL: ${res.detail.url}`);
+        if (res.detail?.url)                     parts.push(`URL: ${res.detail.url}`);
         if (res.detail?.sentHeaderNames?.length) parts.push(`Headers: ${res.detail.sentHeaderNames.join(", ")}`);
         if (res.detail?.firstRecordKeys?.length) parts.push(`Fields: ${res.detail.firstRecordKeys.slice(0, 8).join(", ")}`);
-        setStatus(parts.join(" · "));
+        const summary = parts.join(" · ");
+        setStatus(summary);
+        if (resultBox && summaryEl && bodyEl) {
+          resultBox.hidden = false;
+          summaryEl.textContent = res.ok ? `✓ ${res.message}` : `✗ ${res.message}`;
+          summaryEl.style.color = res.ok ? "var(--accent-bright,#16a34a)" : "var(--danger,#dc2626)";
+          bodyEl.value = res.responseBody ?? "(no response body)";
+        }
       } catch (err) {
         setStatus(err.message || "Connection test failed.");
+        if (resultBox && summaryEl && bodyEl) {
+          resultBox.hidden = false;
+          summaryEl.textContent = `✗ ${err.message || "Connection test failed."}`;
+          summaryEl.style.color = "var(--danger,#dc2626)";
+          bodyEl.value = "";
+        }
       } finally {
         btn.disabled = false;
         btn.textContent = original;
