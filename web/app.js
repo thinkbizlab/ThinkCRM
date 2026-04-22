@@ -8,7 +8,7 @@ import {
   fmtDateTime
 } from "./modules/utils.js";
 import { state, THEME_OVERRIDE_KEY } from "./modules/state.js";
-import { api, storeTokens, clearTokens, getRefreshToken } from "./modules/api.js";
+import { api, storeTokens, clearTokens, getRefreshToken, refreshAccessToken } from "./modules/api.js";
 import {
   qs,
   authScreen, appScreen, statusBar, pageTitle,
@@ -8852,20 +8852,34 @@ function openIdleConfirmPopup() {
     if (remaining <= 0) { idleSignOut(); }
   }, 1000);
 
-  const stay = () => {
+  const stayBtn = overlay.querySelector(".idle-stay-btn");
+  const logoutBtn = overlay.querySelector(".idle-logout-btn");
+
+  const stay = async () => {
+    if (stayBtn.disabled) return;
+    stayBtn.disabled = true;
+    logoutBtn.disabled = true;
+    // Pause the countdown while the refresh is in flight so the user can't
+    // be auto-logged-out mid-request, and so a concurrent F5 doesn't race
+    // the token rotation (which previously could revoke the session).
     if (_idleCountdownInterval) { clearInterval(_idleCountdownInterval); _idleCountdownInterval = null; }
+
+    const newToken = await refreshAccessToken();
+    if (!newToken) {
+      // Refresh failed — likely the refresh token expired. Fall back to sign-out.
+      idleSignOut();
+      return;
+    }
     overlay.classList.remove("popup-visible");
     overlay.addEventListener("transitionend", () => overlay.remove(), { once: true });
     _idleOverlayEl = null;
-    // Ping server to refresh session, then resume watching
-    if (state.token) { api("/auth/me").catch(() => {}); }
     if (_idleTimerId) clearTimeout(_idleTimerId);
     _idleTimerId = setTimeout(openIdleConfirmPopup, IDLE_TIMEOUT_MS);
   };
 
-  overlay.querySelector(".idle-stay-btn").addEventListener("click", stay);
-  overlay.querySelector(".idle-logout-btn").addEventListener("click", idleSignOut);
-  overlay.querySelector(".idle-stay-btn").focus();
+  stayBtn.addEventListener("click", stay);
+  logoutBtn.addEventListener("click", idleSignOut);
+  stayBtn.focus();
 }
 
 function openContactsPopup(contacts) {

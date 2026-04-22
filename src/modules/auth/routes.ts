@@ -1497,7 +1497,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       tenantId: user.tenantId,
       role: user.role,
       email: user.email
-    }, { expiresIn: "15m" });
+    }, { expiresIn: "1h" });
 
     return { accessToken, refreshToken: newRefreshToken, tokenType: "Bearer" };
   });
