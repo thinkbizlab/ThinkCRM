@@ -17,36 +17,11 @@ import {
   switchView, showApp, showAppLoading, hideAppLoading, showAuth, showTrialBanner,
   setStatus
 } from "./modules/dom.js";
-import { openVoiceNoteModal, bindVoiceNoteModal, setVoiceNoteOnClose } from "./modules/voice-note.js";
-import { passkeyLogin, openAdminPasskeyModal, initPasskeySection } from "./modules/passkey.js";
 import { loadOAuthProviderButtons, wireOAuthProviderButtons, consumeOAuthCallback } from "./modules/oauth.js";
 import { loadDelegations, renderDelegationsSection, wireDelegationsListeners, setDelegationsDeps, loadMyPrincipals, attachOnBehalfOfField, readOnBehalfOfValue, canActOnBehalf } from "./modules/delegations.js";
-import { loadOnboardingWizard, initOnboardingWizard } from "./modules/onboarding-wizard.js";
-import { loadDemoDataStatus, renderDemoDataBanner, initDemoDataModals } from "./modules/demo-data.js";
-import { initQuickSearch } from "./modules/quick-search.js";
-import { loadCalendar, renderCalendar, setCalendarDeps } from "./modules/calendar.js";
-import { openCustomer360, renderCustomer360, setCustomer360Deps } from "./modules/customer-360.js";
-import { openDeal360, renderDeal360, navigateToDeal360, syncDeal360FromLocation, setDeal360Deps } from "./modules/deal-360.js";
-import { loadDashboard, renderDashboard, setDashboardDeps } from "./modules/dashboard.js";
-import {
-  loadVisits, renderVisits,
-  openVisitCreateModal, closeVisitCreateModal,
-  openVisitEditModal, closeVisitEditModal,
-  syncVisitPlannedAtRequired,
-  showEventDetail,
-  setVisitsDeps
-} from "./modules/visits.js";
-import { openMapPicker, closeMapPicker, initMapPicker, setMapPickerDeps } from "./modules/map-picker.js";
 import { renderCronPicker, initCronPicker } from "./modules/cron-picker.js";
 import { icon } from "./modules/icons.js";
 import { DEFAULT_TOKENS, SHADOW_PRESETS, PRESETS, findPresetBySlug, detectPresetSlug } from "./modules/theme-presets.js";
-import {
-  renderAnalytics as saRenderAnalytics,
-  renderInfra as saRenderInfra,
-  renderSubscriptions as saRenderSubscriptions,
-  openInvoicesModal as saOpenInvoicesModal,
-  createPoller as saCreatePoller,
-} from "./modules/super-admin-analytics.js";
 import {
   getCustomFieldDefinitions,
   collectCustomFieldPayload,
@@ -76,6 +51,404 @@ function ensureXLSX() {
     });
   }
   return xlsxReady;
+}
+
+let dealStageLoadPromise = null;
+let superAdminAnalyticsPromise = null;
+let voiceNoteModulePromise = null;
+let passkeyModulePromise = null;
+let mapPickerModulePromise = null;
+let mapPickerInitialized = false;
+let passkeySectionInitRequest = 0;
+let brandingLoadPromise = null;
+let brandingLoadTenantId = null;
+let onboardingWizardModulePromise = null;
+let onboardingWizardInitialized = false;
+let demoDataModulePromise = null;
+let demoDataInitialized = false;
+let dashboardModulePromise = null;
+let dashboardModuleInitialized = false;
+let calendarModulePromise = null;
+let calendarModuleInitialized = false;
+let customer360ModulePromise = null;
+let customer360ModuleInitialized = false;
+let deal360ModulePromise = null;
+let deal360ModuleInitialized = false;
+let visitsModulePromise = null;
+let visitsModuleInitialized = false;
+let quickSearchModulePromise = null;
+let quickSearchInitialized = false;
+
+state.deal360 = state.deal360 ?? null;
+
+function ensureSuperAdminAnalytics() {
+  if (!superAdminAnalyticsPromise) {
+    superAdminAnalyticsPromise = import("./modules/super-admin-analytics.js");
+  }
+  return superAdminAnalyticsPromise;
+}
+
+function ensureVoiceNoteModule() {
+  if (!voiceNoteModulePromise) {
+    voiceNoteModulePromise = import("./modules/voice-note.js").then((module) => {
+      module.bindVoiceNoteModal({ onConfirmed: handleVoiceNoteConfirmed });
+      return module;
+    });
+  }
+  return voiceNoteModulePromise;
+}
+
+function ensurePasskeyModule() {
+  if (!passkeyModulePromise) {
+    passkeyModulePromise = import("./modules/passkey.js");
+  }
+  return passkeyModulePromise;
+}
+
+async function ensureMapPickerModule() {
+  if (!mapPickerModulePromise) {
+    mapPickerModulePromise = import("./modules/map-picker.js");
+  }
+  const module = await mapPickerModulePromise;
+  module.setMapPickerDeps({ setStatus });
+  if (!mapPickerInitialized) {
+    module.initMapPicker();
+    mapPickerInitialized = true;
+  }
+  return module;
+}
+
+async function openVoiceNoteDialog(entityType, entityId, subtitle, { onClose } = {}) {
+  try {
+    const module = await ensureVoiceNoteModule();
+    if (onClose) module.setVoiceNoteOnClose(onClose);
+    await module.openVoiceNoteModal(entityType, entityId, subtitle);
+  } catch (error) {
+    if (onClose) onClose();
+    setStatus(error.message, true);
+  }
+}
+
+async function initPasskeySectionLazy() {
+  try {
+    const requestId = ++passkeySectionInitRequest;
+    const module = await ensurePasskeyModule();
+    if (requestId !== passkeySectionInitRequest) return;
+    module.initPasskeySection();
+  } catch (error) {
+    setStatus(error.message, true);
+  }
+}
+
+async function openAdminPasskeyModalLazy(userId, userName) {
+  try {
+    const module = await ensurePasskeyModule();
+    module.openAdminPasskeyModal(userId, userName);
+  } catch (error) {
+    setStatus(error.message, true);
+  }
+}
+
+async function openMapPickerLazy(defaultLat, defaultLng, onConfirm) {
+  try {
+    const module = await ensureMapPickerModule();
+    await module.openMapPicker(defaultLat, defaultLng, onConfirm);
+  } catch (error) {
+    setStatus(error.message, true);
+  }
+}
+
+function handleLazyModuleError(error) {
+  setStatus(error.message, true);
+}
+
+async function ensureDashboardModule() {
+  if (!dashboardModulePromise) {
+    dashboardModulePromise = import("./modules/dashboard.js");
+  }
+  const module = await dashboardModulePromise;
+  if (!dashboardModuleInitialized) {
+    module.setDashboardDeps({
+      asMoney,
+      avatarColor,
+      repAvatarHtml,
+      navigateToSettingsPage
+    });
+    dashboardModuleInitialized = true;
+  }
+  return module;
+}
+
+async function ensureCalendarModule() {
+  if (!calendarModulePromise) {
+    calendarModulePromise = import("./modules/calendar.js");
+  }
+  const module = await calendarModulePromise;
+  if (!calendarModuleInitialized) {
+    module.setCalendarDeps({
+      openVisitCreateModal,
+      showEventDetail,
+      msDropdown,
+      initMsDropdown
+    });
+    calendarModuleInitialized = true;
+  }
+  return module;
+}
+
+async function ensureCustomer360Module() {
+  if (!customer360ModulePromise) {
+    customer360ModulePromise = import("./modules/customer-360.js");
+  }
+  const module = await customer360ModulePromise;
+  if (!customer360ModuleInitialized) {
+    module.setCustomer360Deps({
+      asMoney,
+      avatarColor,
+      c360Initials,
+      navigateToCustomer360,
+      navigateToMasterPage,
+      renderMasterData,
+      openVisitCreateModal,
+      openDealCreateModal: openDealCreateModalWithContext
+    });
+    customer360ModuleInitialized = true;
+  }
+  return module;
+}
+
+async function ensureDeal360Module() {
+  await ensureCustomer360Module();
+  if (!deal360ModulePromise) {
+    deal360ModulePromise = import("./modules/deal-360.js");
+  }
+  const module = await deal360ModulePromise;
+  if (!deal360ModuleInitialized) {
+    module.setDeal360Deps({
+      asMoney,
+      avatarColor,
+      c360Initials,
+      navigateToView,
+      renderDeals,
+      showToast: (message, type) => setStatus(message, type === "error")
+    });
+    deal360ModuleInitialized = true;
+  }
+  return module;
+}
+
+async function ensureVisitsModule() {
+  await ensureDeal360Module();
+  if (!visitsModulePromise) {
+    visitsModulePromise = import("./modules/visits.js");
+  }
+  const module = await visitsModulePromise;
+  if (!visitsModuleInitialized) {
+    module.setVisitsDeps({
+      buildVisitListHtml,
+      attachVisitListListeners,
+      stageAccentVar,
+      openVisitDetail,
+      attachOnBehalfOfField
+    });
+    visitsModuleInitialized = true;
+  }
+  return module;
+}
+
+async function loadDashboard(...args) {
+  const module = await ensureDashboardModule();
+  return module.loadDashboard(...args);
+}
+
+function renderDashboard(...args) {
+  void ensureDashboardModule()
+    .then((module) => module.renderDashboard(...args))
+    .catch(handleLazyModuleError);
+}
+
+async function loadCalendar(...args) {
+  const module = await ensureCalendarModule();
+  return module.loadCalendar(...args);
+}
+
+async function openCustomer360(...args) {
+  const module = await ensureCustomer360Module();
+  return module.openCustomer360(...args);
+}
+
+function renderCustomer360(...args) {
+  void ensureCustomer360Module()
+    .then((module) => module.renderCustomer360(...args))
+    .catch(handleLazyModuleError);
+}
+
+function syncDeal360FromLocation() {
+  const match = window.location.pathname.match(/^\/deals\/([^/]+)$/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+async function openDeal360(...args) {
+  const module = await ensureDeal360Module();
+  return module.openDeal360(...args);
+}
+
+function renderDeal360(...args) {
+  void ensureDeal360Module()
+    .then((module) => module.renderDeal360(...args))
+    .catch(handleLazyModuleError);
+}
+
+async function loadVisits(...args) {
+  const module = await ensureVisitsModule();
+  return module.loadVisits(...args);
+}
+
+function openVisitCreateModal(...args) {
+  void ensureVisitsModule()
+    .then((module) => module.openVisitCreateModal(...args))
+    .catch(handleLazyModuleError);
+}
+
+function closeVisitCreateModal(...args) {
+  void ensureVisitsModule()
+    .then((module) => module.closeVisitCreateModal(...args))
+    .catch(handleLazyModuleError);
+}
+
+function openVisitEditModal(...args) {
+  void ensureVisitsModule()
+    .then((module) => module.openVisitEditModal(...args))
+    .catch(handleLazyModuleError);
+}
+
+function closeVisitEditModal(...args) {
+  void ensureVisitsModule()
+    .then((module) => module.closeVisitEditModal(...args))
+    .catch(handleLazyModuleError);
+}
+
+function syncVisitPlannedAtRequired(...args) {
+  void ensureVisitsModule()
+    .then((module) => module.syncVisitPlannedAtRequired(...args))
+    .catch(handleLazyModuleError);
+}
+
+function showEventDetail(...args) {
+  void ensureVisitsModule()
+    .then((module) => module.showEventDetail(...args))
+    .catch(handleLazyModuleError);
+}
+
+async function ensureQuickSearchModule() {
+  if (!quickSearchModulePromise) {
+    quickSearchModulePromise = import("./modules/quick-search.js");
+  }
+  const module = await quickSearchModulePromise;
+  if (!quickSearchInitialized) {
+    module.initQuickSearch({
+      navigateToView,
+      navigateToMasterPage,
+      openDealCreateModal: openDealCreateModalWithContext,
+      openVisitCreateModal,
+      asMoney,
+      attachGlobalTriggers: false
+    });
+    quickSearchInitialized = true;
+  }
+  return module;
+}
+
+async function openQuickSearchLazy() {
+  try {
+    const module = await ensureQuickSearchModule();
+    module.openQuickSearch();
+  } catch (error) {
+    setStatus(error.message, true);
+  }
+}
+
+async function closeQuickSearchLazy() {
+  try {
+    const module = await ensureQuickSearchModule();
+    module.closeQuickSearch();
+  } catch (error) {
+    setStatus(error.message, true);
+  }
+}
+
+async function toggleQuickSearchLazy() {
+  try {
+    const module = await ensureQuickSearchModule();
+    module.toggleQuickSearch();
+  } catch (error) {
+    setStatus(error.message, true);
+  }
+}
+
+async function ensureOnboardingWizardModule() {
+  if (!onboardingWizardModulePromise) {
+    onboardingWizardModulePromise = import("./modules/onboarding-wizard.js");
+  }
+  const module = await onboardingWizardModulePromise;
+  if (!onboardingWizardInitialized) {
+    module.initOnboardingWizard({
+      stepNav: {
+        teamCreated:      () => { navigateToSettingsPage("teams");        switchView("settings"); },
+        userInvited:      () => { navigateToSettingsPage("users");        switchView("settings"); },
+        integrationSetup: () => { navigateToSettingsPage("integrations"); switchView("settings"); },
+        customerImported: () => { navigateToMasterPage("customers");      switchView("master"); },
+        dealCreated:      () => { navigateToView("deals");                switchView("deals"); },
+        domainConfigured: () => { navigateToSettingsPage("branding");     switchView("settings"); }
+      }
+    });
+    onboardingWizardInitialized = true;
+  }
+  return module;
+}
+
+async function ensureDemoDataModule() {
+  if (!demoDataModulePromise) {
+    demoDataModulePromise = import("./modules/demo-data.js");
+  }
+  const module = await demoDataModulePromise;
+  if (!demoDataInitialized) {
+    module.initDemoDataModals({
+      refreshHost: async () => {
+        await Promise.all([loadMaster(), loadDeals(), loadVisits(), loadDashboard()]);
+      },
+      gotoIntegrations: () => { navigateToSettingsPage("integrations"); switchView("settings"); }
+    });
+    demoDataInitialized = true;
+  }
+  return module;
+}
+
+async function loadOnboardingWizardLazy(forceOpen = false) {
+  try {
+    const module = await ensureOnboardingWizardModule();
+    await module.loadOnboardingWizard(forceOpen);
+  } catch (error) {
+    setStatus(error.message, true);
+  }
+}
+
+async function loadDemoDataStatusLazy() {
+  try {
+    const module = await ensureDemoDataModule();
+    await module.loadDemoDataStatus();
+  } catch (error) {
+    setStatus(error.message, true);
+  }
+}
+
+async function renderDemoDataBannerLazy() {
+  try {
+    const module = await ensureDemoDataModule();
+    module.renderDemoDataBanner();
+  } catch (error) {
+    setStatus(error.message, true);
+  }
 }
 
 // Allowed CRM target fields per entity type. Must stay in sync with
@@ -527,6 +900,7 @@ async function loginWithPasskey() {
   if (passkeyBtn) { passkeyBtn.disabled = true; passkeyBtn.textContent = "Verifying..."; }
 
   try {
+    const { passkeyLogin } = await ensurePasskeyModule();
     const result = await passkeyLogin({ tenantSlug: slug, email });
 
     if (result.needsEmailVerification) {
@@ -547,16 +921,19 @@ async function loginWithPasskey() {
     if (window._checkSuperAdmin) window._checkSuperAdmin();
     startHeartbeat();
     updateUserMeta();
-    const onMasterRoute = syncMasterPageFromLocation();
-    const onSettingsRoute = !onMasterRoute && syncSettingsPageFromLocation();
-    const onSimpleViewRoute = !onMasterRoute && !onSettingsRoute && syncSimpleViewFromLocation();
-    const landingView = onMasterRoute ? "master"
-                      : onSettingsRoute ? "settings"
-                      : onSimpleViewRoute ? onSimpleViewRoute
-                      : "repHub";
+    const routeState = resolveRouteState();
+    const { userEditId, c360Id, deal360No, onMasterRoute, onSettingsRoute, onSimpleViewRoute, landingView } = routeState;
     await loadAllViews(landingView);
     applyBrandingTheme(state.cache.branding);
-    if (onMasterRoute) {
+    if (userEditId) {
+      await openUserEditPage(userEditId);
+    } else if (c360Id) {
+      await openCustomer360(c360Id);
+    } else if (deal360No) {
+      const allDeals = state.cache.kanban?.stages?.flatMap((s) => s.deals) ?? [];
+      const deal = allDeals.find((d) => d.dealNo === deal360No);
+      if (deal) await openDeal360(deal.id, deal360No);
+    } else if (onMasterRoute) {
       switchView("master");
     } else if (onSettingsRoute) {
       switchView("settings");
@@ -570,9 +947,9 @@ async function loginWithPasskey() {
       paintRepHubFull();
     }
     hideAppLoading();
-    await loadDemoDataStatus();
-    renderDemoDataBanner();
-    loadOnboardingWizard();
+    await loadDemoDataStatusLazy();
+    await renderDemoDataBannerLazy();
+    void loadOnboardingWizardLazy();
     startIdleWatch();
   } catch (err) {
     if (err.name === "NotAllowedError") {
@@ -601,14 +978,35 @@ qs("#oauth-passkey-btn")?.addEventListener("click", loginWithPasskey);
   showApp();
   showTrialBanner(user.subscription);
   updateUserMeta();
-  await loadAllViews("repHub");
+  const routeState = resolveRouteState();
+  const { userEditId, c360Id, deal360No, onMasterRoute, onSettingsRoute, onSimpleViewRoute, landingView } = routeState;
+  await loadAllViews(landingView);
   applyBrandingTheme(state.cache.branding);
-  window.history.replaceState({ view: "repHub" }, "", "/task");
-  switchView("repHub");
-  paintRepHubFull();
+  if (userEditId) {
+    await openUserEditPage(userEditId);
+  } else if (c360Id) {
+    await openCustomer360(c360Id);
+  } else if (deal360No) {
+    const allDeals = state.cache.kanban?.stages?.flatMap((s) => s.deals) ?? [];
+    const deal = allDeals.find((d) => d.dealNo === deal360No);
+    if (deal) await openDeal360(deal.id, deal360No);
+  } else if (onMasterRoute) {
+    switchView("master");
+  } else if (onSettingsRoute) {
+    switchView("settings");
+  } else if (onSimpleViewRoute) {
+    switchView(onSimpleViewRoute);
+    if (onSimpleViewRoute === "repHub") paintRepHubFull();
+    if (onSimpleViewRoute === "dashboard") await loadOnboardingWizardLazy();
+    if (onSimpleViewRoute === "superAdmin" && window._loadSuperAdmin) window._loadSuperAdmin();
+  } else {
+    window.history.replaceState({ view: "repHub" }, "", "/task");
+    switchView("repHub");
+    paintRepHubFull();
+  }
   hideAppLoading();
-  await loadDemoDataStatus();
-  renderDemoDataBanner();
+  await loadDemoDataStatusLazy();
+  await renderDemoDataBannerLazy();
 })();
 // Handle platform Connect redirect-backs (?xxx_connected=1 or ?xxx_error=…)
 // Stash params before app loads; act on them once the shell is ready.
@@ -1169,6 +1567,31 @@ function navigateToUserEdit(userId) {
 function syncUserEditFromLocation() {
   const match = window.location.pathname.match(/^\/settings\/users\/([^/]+)$/);
   return match ? match[1] : null;
+}
+
+function resolveRouteState() {
+  const userEditId = syncUserEditFromLocation();
+  const c360Id = !userEditId && syncC360FromLocation();
+  const deal360No = !userEditId && !c360Id && syncDeal360FromLocation();
+  const onMasterRoute = !userEditId && !c360Id && !deal360No && syncMasterPageFromLocation();
+  const onSettingsRoute = !userEditId && !c360Id && !deal360No && !onMasterRoute && syncSettingsPageFromLocation();
+  const onSimpleViewRoute = !userEditId && !c360Id && !deal360No && !onMasterRoute && !onSettingsRoute && syncSimpleViewFromLocation();
+  const landingView = userEditId ? "settings"
+                    : c360Id ? "master"
+                    : deal360No ? "deals"
+                    : onMasterRoute ? "master"
+                    : onSettingsRoute ? "settings"
+                    : onSimpleViewRoute ? onSimpleViewRoute
+                    : "repHub";
+  return {
+    userEditId,
+    c360Id,
+    deal360No,
+    onMasterRoute,
+    onSettingsRoute,
+    onSimpleViewRoute,
+    landingView
+  };
 }
 
 
@@ -2531,7 +2954,7 @@ function renderDeals(kanban, dealsRoot = views.deals, options = {}) {
     btn.addEventListener("click", () => {
       const card = btn.closest(".deal-card");
       const label = card?.querySelector(".deal-name")?.textContent?.trim() || "";
-      void openVoiceNoteModal(btn.dataset.entityType, btn.dataset.entityId, label);
+      void openVoiceNoteDialog(btn.dataset.entityType, btn.dataset.entityId, label);
     });
   });
 
@@ -2759,7 +3182,7 @@ function renderMyTasks(data) {
   });
   qs("#mt-new-visit")?.addEventListener("click", () => openVisitCreateModal());
   qs("#mt-new-deal")?.addEventListener("click", () => {
-    if (state.cache.kanban) openDealCreateModal(state.cache.kanban);
+    void openDealCreateModalWithContext();
   });
 
   views.repHub.querySelectorAll(".mt-action--checkin").forEach(btn => {
@@ -2919,9 +3342,12 @@ function openCheckInModal(visitId, customerName) {
     });
 
   captureBtn.addEventListener("click", () => {
-    canvas.width = 320; canvas.height = 240;
-    canvas.getContext("2d").drawImage(video, 0, 0, 320, 240);
-    selfieDataUrl = canvas.toDataURL("image/jpeg", 0.7);
+    const w = video.videoWidth || 640;
+    const h = video.videoHeight || 480;
+    canvas.width = w;
+    canvas.height = h;
+    canvas.getContext("2d").drawImage(video, 0, 0, w, h);
+    selfieDataUrl = canvas.toDataURL("image/jpeg", 0.85);
     preview.src = selfieDataUrl;
     preview.hidden = false;
     video.hidden = true;
@@ -3090,8 +3516,9 @@ function openCheckOutModal(visitId, customerName) {
   // Hide (not remove) the checkout modal so it's restored when voice note closes.
   voiceBtn.addEventListener("click", () => {
     modal.style.display = "none";
-    setVoiceNoteOnClose(() => { modal.style.display = ""; });
-    void openVoiceNoteModal("VISIT", visitId, `Check-out · ${customerName || ""}`);
+    void openVoiceNoteDialog("VISIT", visitId, `Check-out · ${customerName || ""}`, {
+      onClose: () => { modal.style.display = ""; }
+    });
   });
 
   // Submit
@@ -3117,9 +3544,21 @@ function openCheckOutModal(visitId, customerName) {
         const nextDate = (qs("#mt-checkout-next-date")?.value || "").trim();
         const nextObj  = (qs("#mt-checkout-next-objective")?.value || "").trim();
         if (nextDate) {
+          const todoEvents = [
+            ...(state.cache.myTasks?.pinned?.checkedInWaitingCheckout || []),
+            ...(state.cache.myTasks?.buckets?.overdue || []),
+            ...(state.cache.myTasks?.buckets?.today || []),
+            ...(state.cache.myTasks?.buckets?.tomorrow || []),
+            ...(state.cache.myTasks?.buckets?.next_week || []),
+            ...(state.cache.myTasks?.buckets?.next_month || [])
+          ];
+          const todoVisit = todoEvents.find((event) => event.type === "visit" && event.entityId === visitId);
           const existing = state.cache.visits?.find(v => v.id === visitId);
-          const custId = existing?.customerId || null;
-          const dealId = existing?.dealId     || null;
+          const custId = todoVisit?.customerId || existing?.customerId || null;
+          const dealId = todoVisit?.dealId || existing?.dealId || null;
+          if (!custId) {
+            throw new Error("Could not resolve the customer for this follow-up visit.");
+          }
           await api("/visits/planned", {
             method: "POST",
             body: {
@@ -3231,7 +3670,7 @@ function attachVisitListListeners(container) {
     btn.addEventListener("click", () => {
       const card = btn.closest(".vp-card");
       const label = card?.querySelector(".vp-card-customer")?.textContent?.trim() || "";
-      void openVoiceNoteModal(btn.dataset.entityType, btn.dataset.entityId, label);
+      void openVoiceNoteDialog(btn.dataset.entityType, btn.dataset.entityId, label);
     });
   });
 
@@ -3606,7 +4045,7 @@ function renderVisitDetailContent(visit, changelogs) {
   qs("#visit-edit-pick-location-btn")?.addEventListener("click", () => {
     const lat = parseFloat(qs("#visit-edit-site-lat")?.value) || null;
     const lng = parseFloat(qs("#visit-edit-site-lng")?.value) || null;
-    openMapPicker(lat, lng, (pickedLat, pickedLng) => {
+    void openMapPickerLazy(lat, lng, (pickedLat, pickedLng) => {
       qs("#visit-edit-site-lat").value = pickedLat;
       qs("#visit-edit-site-lng").value = pickedLng;
       const preview = qs("#visit-edit-location-preview");
@@ -5878,7 +6317,7 @@ function renderSettings() {
     }
   });
 
-  initPasskeySection();
+  void initPasskeySectionLazy();
 
   // ── Notification channel help panel toggle ───────────────────
   views.settings.querySelectorAll(".notif-channel-help-btn").forEach(btn => {
@@ -6326,11 +6765,11 @@ function renderSettings() {
         return;
       }
       navigateToSettingsPage(nav);
-      if (nav === "data-sync") await loadSyncData();
-      if (nav === "team-structure") {
-        try { state.cache.teams = await api("/teams"); } catch (_) { /* best-effort */ }
+      try {
+        await loadSettings(nav);
+      } catch (error) {
+        setStatus(error.message, true);
       }
-      renderSettings();
     });
   });
 
@@ -7443,7 +7882,7 @@ function renderSettings() {
 
   // ── Admin passkey management ─────────────────────────────────
   views.settings.querySelectorAll(".passkey-admin-btn").forEach(btn => {
-    btn.addEventListener("click", () => openAdminPasskeyModal(btn.dataset.uid, btn.dataset.name));
+    btn.addEventListener("click", () => { void openAdminPasskeyModalLazy(btn.dataset.uid, btn.dataset.name); });
   });
 
   // ── Company listeners ─────────────────────────────────────────
@@ -10613,58 +11052,215 @@ async function loadSyncData() {
   }
 }
 
-async function loadSettings() {
+async function loadBranding() {
+  const tenantId = state.user?.tenantId;
+  if (!tenantId) return null;
+  if (brandingLoadPromise && brandingLoadTenantId === tenantId) return brandingLoadPromise;
+  const requestTenantId = tenantId;
+  brandingLoadTenantId = requestTenantId;
+  const request = api(`/tenants/${requestTenantId}/branding`)
+    .then((branding) => {
+      if (state.user?.tenantId === requestTenantId) {
+        state.cache.branding = branding;
+      }
+      return branding;
+    })
+    .finally(() => {
+      if (brandingLoadPromise === request) {
+        brandingLoadPromise = null;
+        brandingLoadTenantId = null;
+      }
+    });
+  brandingLoadPromise = request;
+  return request;
+}
+
+function buildDealStageShell(stages = []) {
+  return {
+    stages: stages.map((stage) => ({
+      ...stage,
+      deals: Array.isArray(stage.deals) ? stage.deals : []
+    }))
+  };
+}
+
+async function loadDealStageCache() {
+  if (dealStageLoadPromise) return dealStageLoadPromise;
+  dealStageLoadPromise = api("/deals/stages")
+    .then((stages) => {
+      state.cache.dealStages = Array.isArray(stages) ? stages : [];
+      if (!state.cache.kanban?.stages?.length) {
+        state.cache.kanban = buildDealStageShell(state.cache.dealStages);
+      }
+      return state.cache.dealStages;
+    })
+    .finally(() => {
+      dealStageLoadPromise = null;
+    });
+  return dealStageLoadPromise;
+}
+
+async function ensureDealCreateContext() {
+  if (state.cache.kanban?.stages?.length) return state.cache.kanban;
+  const stages = await loadDealStageCache();
+  state.cache.kanban = buildDealStageShell(stages);
+  return state.cache.kanban;
+}
+
+function openDealCreateModalWithContext(kanban = state.cache.kanban) {
+  const ctxPromise = kanban?.stages?.length ? Promise.resolve(kanban) : ensureDealCreateContext();
+  return ctxPromise
+    .then((ctx) => {
+      openDealCreateModal(ctx);
+      return ctx;
+    })
+    .catch((error) => {
+      setStatus(error.message, true);
+      return null;
+    });
+}
+
+async function loadDashboardContext() {
+  const [salesReps, teams] = await Promise.all([
+    state.user?.role !== "REP" ? api("/users/visible-reps") : Promise.resolve([]),
+    api("/teams")
+  ]);
+  state.cache.salesReps = salesReps;
+  state.cache.teams = teams;
+}
+
+async function loadCalendarContext() {
+  const [salesReps] = await Promise.all([
+    state.user?.role !== "REP" ? api("/users/visible-reps") : Promise.resolve([]),
+    loadDealStageCache()
+  ]);
+  state.cache.salesReps = salesReps;
+}
+
+async function loadRepHubContext() {
+  await loadDealStageCache();
+}
+
+const DEFAULT_MASTER_API_LOCK = {
+  manageCustomersByApi: false,
+  manageItemsByApi: false,
+  managePaymentTermsByApi: false,
+  manageCustomerGroupsByApi: false
+};
+
+async function loadSettings(page = state.settingsPage || "my-profile") {
   const tenantId = state.user?.tenantId;
   if (!tenantId) return;
-  const isAdmin   = state.user?.role === "ADMIN";
-  const isManager = state.user?.role === "ADMIN" || state.user?.role === "DIRECTOR" || state.user?.role === "MANAGER";
-  // branding, taxConfig, visitConfig, and integrationCredentials require MANAGER+
-  // — skip them for REP/SUPERVISOR so the Promise.all doesn't fail with 403
-  const isAtLeastManager = isManager;
-  const [branding, taxConfig, visitConfig, kpiTargets, salesReps, integrationCredentials, teams, tenantSummary, masterApiLock] = await Promise.all([
-    api(`/tenants/${tenantId}/branding`),
-    isAtLeastManager ? api(`/tenants/${tenantId}/tax-config`) : Promise.resolve(state.cache.taxConfig),
-    isAtLeastManager ? api(`/tenants/${tenantId}/visit-config`) : Promise.resolve(state.cache.visitConfig),
-    api("/kpi-targets"),
-    state.user?.role !== "REP" ? api("/users/visible-reps") : Promise.resolve([]),
-    isAtLeastManager ? api(`/tenants/${tenantId}/integrations/credentials`) : Promise.resolve(state.cache.integrationCredentials ?? []),
-    api("/teams"),
-    isAdmin ? api(`/tenants/${tenantId}/summary`) : Promise.resolve(null),
-    isManager ? api(`/tenants/${tenantId}/master-api-lock`) : Promise.resolve(state.cache.masterApiLock)
-  ]);
-  state.cache.branding = branding;
-  state.cache.taxConfig = taxConfig;
-  state.cache.visitConfig = visitConfig;
-  state.cache.kpiTargets = kpiTargets;
-  state.cache.salesReps = salesReps;
-  state.cache.integrationCredentials = integrationCredentials;
-  state.cache.teams = teams;
-  state.cache.masterApiLock = masterApiLock || { manageCustomersByApi: false, manageItemsByApi: false, managePaymentTermsByApi: false, manageCustomerGroupsByApi: false };
-  state.cache.allUsers = tenantSummary?.users || [];
-  state.cache.tenantInfo = tenantSummary ? { id: tenantSummary.id, name: tenantSummary.name, slug: tenantSummary.slug, timezone: tenantSummary.timezone ?? "Asia/Bangkok" } : null;
-  if (isAdmin) await loadDelegations();
-  if (branding) applyBrandingTheme(branding);
-  // Load sync data only for admins on the data-sync page
-  if (isAdmin && state.settingsPage === "data-sync") {
+  state.settingsPage = page;
+  const role = state.user?.role || "REP";
+  const isAdmin = role === "ADMIN";
+  const isManager = role === "ADMIN" || role === "DIRECTOR" || role === "MANAGER";
+  const needsBranding = page === "company" || page === "branding" || page === "kpi-targets";
+  const needsCompanyConfig = page === "company" && isAdmin;
+  const needsKpiTargets = page === "kpi-targets";
+  const needsSalesReps = page === "kpi-targets" && role !== "REP";
+  const needsTeams = page === "my-profile" || page === "team-structure" || page === "roles";
+  const needsTenantSummary = isAdmin && (page === "company" || page === "roles");
+  const needsIntegrationCredentials = page === "integrations" && isManager;
+  const needsDelegationData = page === "roles" && isAdmin;
+
+  const requests = [];
+  if (needsBranding) {
+    requests.push(
+      loadBranding().then((branding) => {
+        if (branding) applyBrandingTheme(branding);
+      })
+    );
+  }
+  if (needsCompanyConfig) {
+    requests.push(
+      api(`/tenants/${tenantId}/tax-config`).then((taxConfig) => {
+        state.cache.taxConfig = taxConfig;
+      })
+    );
+    requests.push(
+      api(`/tenants/${tenantId}/visit-config`).then((visitConfig) => {
+        state.cache.visitConfig = visitConfig;
+      })
+    );
+    requests.push(
+      api(`/tenants/${tenantId}/master-api-lock`).then((masterApiLock) => {
+        state.cache.masterApiLock = masterApiLock || { ...DEFAULT_MASTER_API_LOCK };
+      })
+    );
+  }
+  if (needsKpiTargets) {
+    requests.push(
+      api("/kpi-targets").then((kpiTargets) => {
+        state.cache.kpiTargets = kpiTargets;
+      })
+    );
+  }
+  if (needsSalesReps) {
+    requests.push(
+      api("/users/visible-reps").then((salesReps) => {
+        state.cache.salesReps = salesReps;
+      })
+    );
+  }
+  if (needsTeams) {
+    requests.push(
+      api("/teams").then((teams) => {
+        state.cache.teams = teams;
+      })
+    );
+  }
+  if (needsTenantSummary) {
+    requests.push(
+      api(`/tenants/${tenantId}/summary`).then((tenantSummary) => {
+        state.cache.allUsers = tenantSummary?.users || [];
+        state.cache.tenantInfo = tenantSummary
+          ? {
+              id: tenantSummary.id,
+              name: tenantSummary.name,
+              slug: tenantSummary.slug,
+              timezone: tenantSummary.timezone ?? "Asia/Bangkok"
+            }
+          : null;
+      })
+    );
+  }
+  if (needsIntegrationCredentials) {
+    requests.push(
+      api(`/tenants/${tenantId}/integrations/credentials`).then((integrationCredentials) => {
+        state.cache.integrationCredentials = integrationCredentials;
+      })
+    );
+  }
+
+  await Promise.all(requests);
+  if (!state.cache.masterApiLock) {
+    state.cache.masterApiLock = { ...DEFAULT_MASTER_API_LOCK };
+  }
+  if (needsDelegationData) {
+    await loadDelegations();
+  }
+  if (isAdmin && page === "data-sync") {
     await loadSyncData();
   }
   renderSettings();
 }
 
 // Determine which per-view loaders need to run for a given landing view.
-// Master + Settings are always needed (master powers shared caches like customers,
-// items, payment terms used by modals app-wide; settings populates branding which
-// applyBrandingTheme consumes at shell init). Everything else is view-specific.
+// Keep boot light: load branding for the shell, then fetch only the data a
+// specific screen needs.
 function viewLoadersFor(landingView) {
-  const loaders = [loadMaster(), loadSettings()];
+  const loaders = landingView === "settings" ? [loadBranding(), loadSettings()] : [loadBranding()];
   switch (landingView) {
-    case "dashboard":    loaders.push(loadDashboard()); break;
+    case "master":       loaders.push(loadMaster()); break;
+    case "settings":     break;
+    case "dashboard":    loaders.push(loadDashboardContext(), loadDashboard()); break;
     case "deals":        loaders.push(loadDeals()); break;
     case "visits":       loaders.push(loadVisits()); break;
-    case "calendar":     loaders.push(loadCalendar()); break;
+    case "calendar":     loaders.push(loadCalendarContext(), loadCalendar()); break;
     case "integrations": loaders.push(loadIntegrations()); break;
-    case "repHub":       loaders.push(loadVisits(), loadDeals()); break;
-    // master / settings / superAdmin / unknown: nothing extra
+    case "repHub":       loaders.push(loadRepHubContext()); break;
+    // superAdmin / unknown: nothing extra
   }
   if (canActOnBehalf()) loaders.push(loadMyPrincipals());
   return loaders;
@@ -10704,23 +11300,26 @@ loginForm.addEventListener("submit", async (event) => {
     if (window._checkSuperAdmin) window._checkSuperAdmin();
     startHeartbeat();
     updateUserMeta();
-    const onMasterRoute = syncMasterPageFromLocation();
-    const onSettingsRoute = !onMasterRoute && syncSettingsPageFromLocation();
-    const onSimpleViewRoute = !onMasterRoute && !onSettingsRoute && syncSimpleViewFromLocation();
-    const landingView = onMasterRoute ? "master"
-                      : onSettingsRoute ? "settings"
-                      : onSimpleViewRoute ? onSimpleViewRoute
-                      : "repHub";
+    const routeState = resolveRouteState();
+    const { userEditId, c360Id, deal360No, onMasterRoute, onSettingsRoute, onSimpleViewRoute, landingView } = routeState;
     await loadAllViews(landingView);
     applyBrandingTheme(state.cache.branding);
-    if (onMasterRoute) {
+    if (userEditId) {
+      await openUserEditPage(userEditId);
+    } else if (c360Id) {
+      await openCustomer360(c360Id);
+    } else if (deal360No) {
+      const allDeals = state.cache.kanban?.stages?.flatMap((s) => s.deals) ?? [];
+      const deal = allDeals.find((d) => d.dealNo === deal360No);
+      if (deal) await openDeal360(deal.id, deal360No);
+    } else if (onMasterRoute) {
       switchView("master");
     } else if (onSettingsRoute) {
       switchView("settings");
     } else if (onSimpleViewRoute) {
       switchView(onSimpleViewRoute);
       if (onSimpleViewRoute === "repHub") paintRepHubFull();
-      if (onSimpleViewRoute === "dashboard") await loadOnboardingWizard();
+      if (onSimpleViewRoute === "dashboard") await loadOnboardingWizardLazy();
       if (onSimpleViewRoute === "superAdmin" && window._loadSuperAdmin) window._loadSuperAdmin();
     } else {
       window.history.replaceState({ view: "repHub" }, "", "/task");
@@ -10728,8 +11327,8 @@ loginForm.addEventListener("submit", async (event) => {
       paintRepHubFull();
     }
     hideAppLoading();
-    await loadDemoDataStatus();
-    renderDemoDataBanner();
+    await loadDemoDataStatusLazy();
+    await renderDemoDataBannerLazy();
     startIdleWatch();
   } catch (error) {
     hideAppLoading();
@@ -11086,80 +11685,29 @@ loginForm.addEventListener("submit", async (event) => {
   });
 })();
 
-setCalendarDeps({
-  openVisitCreateModal,
-  showEventDetail,
-  msDropdown,
-  initMsDropdown
-});
-
-setCustomer360Deps({
-  asMoney,
-  avatarColor,
-  c360Initials,
-  navigateToCustomer360,
-  navigateToMasterPage,
-  renderMasterData,
-  openVisitCreateModal,
-  openDealCreateModal
-});
-
-const showToast = (message, type) => setStatus(message, type === "error");
-
-setDeal360Deps({
-  asMoney,
-  avatarColor,
-  c360Initials,
-  navigateToView,
-  renderDeals,
-  showToast
-});
-
-setDashboardDeps({
-  asMoney,
-  avatarColor,
-  repAvatarHtml,
-  navigateToSettingsPage
-});
-
-setVisitsDeps({
-  buildVisitListHtml,
-  attachVisitListListeners,
-  stageAccentVar,
-  openVisitDetail,
-  attachOnBehalfOfField
-});
-
 setDelegationsDeps({
   setStatus,
   escHtml,
   renderSettings
 });
 
-// ── Onboarding wizard (S11) ───────────────────────────────────────────────────
-initOnboardingWizard({
-  stepNav: {
-    teamCreated:      () => { navigateToSettingsPage("teams");         switchView("settings"); },
-    userInvited:      () => { navigateToSettingsPage("users");         switchView("settings"); },
-    integrationSetup: () => { navigateToSettingsPage("integrations");  switchView("settings"); },
-    customerImported: () => { navigateToMasterPage("customers");        switchView("master"); },
-    dealCreated:      () => { navigateToView("deals");                 switchView("deals"); },
-    domainConfigured: () => { navigateToSettingsPage("branding");      switchView("settings"); }
-  }
-});
-
-initDemoDataModals({
-  refreshHost: async () => {
-    await Promise.all([loadMaster(), loadDeals(), loadVisits(), loadDashboard()]);
-  },
-  gotoIntegrations: () => { navigateToSettingsPage("integrations"); switchView("settings"); }
-});
-
 // ── Customer autocomplete for modal forms ─────────────────────────────────────
+async function searchCustomers(query, limit = 8) {
+  const q = String(query || "").trim();
+  if (q.length < 2) return [];
+  const params = new URLSearchParams({
+    q,
+    limit: String(limit)
+  });
+  if (state.customerScope) params.set("scope", state.customerScope);
+  return api(`/customers/search?${params.toString()}`);
+}
+
 function initCustomerAutocomplete(inputEl, listEl, hiddenEl, onSelect) {
   if (!inputEl || !listEl || !hiddenEl) return;
 
   let outsideHandler = null;
+  let activeRequest = 0;
 
   function openList() {
     const rect = inputEl.getBoundingClientRect();
@@ -11185,13 +11733,19 @@ function initCustomerAutocomplete(inputEl, listEl, hiddenEl, onSelect) {
     }
   }
 
-  inputEl.addEventListener("input", () => {
-    const q = inputEl.value.trim().toLowerCase();
+  const renderMatches = debounce(async () => {
+    const q = inputEl.value.trim();
     hiddenEl.value = "";
-    if (!q) { closeList(); return; }
-    const matches = (state.cache.customers || []).filter(
-      (c) => c.name.toLowerCase().includes(q) || (c.customerCode || "").toLowerCase().includes(q)
-    ).slice(0, 8);
+    if (q.length < 2) { closeList(); return; }
+    const reqId = ++activeRequest;
+    let matches = [];
+    try {
+      matches = await searchCustomers(q);
+    } catch {
+      if (reqId === activeRequest) closeList();
+      return;
+    }
+    if (reqId !== activeRequest || inputEl.value.trim() !== q) return;
     if (!matches.length) { closeList(); return; }
     listEl.innerHTML = matches.map((c) =>
       `<button type="button" class="ac-item" data-id="${c.id}" data-name="${escHtml(c.name)}">
@@ -11200,6 +11754,10 @@ function initCustomerAutocomplete(inputEl, listEl, hiddenEl, onSelect) {
        </button>`
     ).join("");
     openList();
+  }, 180);
+
+  inputEl.addEventListener("input", () => {
+    renderMatches();
   });
 
   // Prevent input blur when clicking inside the list
@@ -11310,14 +11868,10 @@ qs("#visit-create-modal")?.addEventListener("change", (e) => {
 });
 
 // ── Google Maps Picker ─────────────────────────────────────────────────────────
-setMapPickerDeps({ setStatus });
-initMapPicker();
-
-// Wire up "Pick on Map" button in visit form
 qs("#visit-pick-location-btn")?.addEventListener("click", () => {
   const lat = parseFloat(qs("#visit-site-lat")?.value) || null;
   const lng = parseFloat(qs("#visit-site-lng")?.value) || null;
-  openMapPicker(lat, lng, (pickedLat, pickedLng) => {
+  void openMapPickerLazy(lat, lng, (pickedLat, pickedLng) => {
     qs("#visit-site-lat").value = pickedLat;
     qs("#visit-site-lng").value = pickedLng;
     const preview = qs("#visit-location-preview");
@@ -11465,7 +12019,7 @@ userDropdown?.querySelectorAll("[data-settings-page]").forEach((item) => {
     const settingsPage = item.dataset.settingsPage;
     navigateToSettingsPage(settingsPage);
     switchView("settings");
-    try { await loadSettings(); } catch (error) { setStatus(error.message, true); }
+    try { await loadSettings(settingsPage); } catch (error) { setStatus(error.message, true); }
   }, { capture: true });
 });
 
@@ -11559,16 +12113,20 @@ document.querySelectorAll(".nav-btn").forEach((btn) => {
     switchView(target);
     try {
       if (target === "repHub") {
-        await loadVisits();
-        await loadDeals();
+        await loadRepHubContext();
         paintRepHubFull();
       }
-      if (target === "dashboard") { await loadDashboard(); await loadOnboardingWizard(); }
+      if (target === "dashboard") {
+        await Promise.all([loadDashboardContext(), loadDashboard()]);
+        await loadOnboardingWizardLazy();
+      }
       if (target === "deals") await loadDeals();
       if (target === "visits") await loadVisits();
-      if (target === "calendar") await loadCalendar();
+      if (target === "calendar") {
+        await Promise.all([loadCalendarContext(), loadCalendar()]);
+      }
       if (target === "integrations") await loadIntegrations();
-      if (target === "settings") await loadSettings();
+      if (target === "settings") await loadSettings(state.settingsPage);
     } catch (error) {
       setStatus(error.message, true);
     }
@@ -11666,7 +12224,7 @@ document.querySelectorAll(".spi[data-view]").forEach((item) => {
     }
     switchView(target);
     try {
-      if (target === "settings") await loadSettings();
+      if (target === "settings") await loadSettings(settingsPage || state.settingsPage);
     } catch (error) {
       setStatus(error.message, true);
     }
@@ -11705,7 +12263,7 @@ window.addEventListener("popstate", async () => {
   }
   const isSettingsRoute = syncSettingsPageFromLocation();
   if (isSettingsRoute) {
-    await loadSettings();
+    await loadSettings(state.settingsPage);
     return;
   }
   const simpleView = syncSimpleViewFromLocation();
@@ -11715,14 +12273,18 @@ window.addEventListener("popstate", async () => {
     switchView(simpleView);
     try {
       if (simpleView === "repHub") {
-        await loadVisits();
-        await loadDeals();
+        await loadRepHubContext();
         paintRepHubFull();
       }
-      if (simpleView === "dashboard") { await loadDashboard(); await loadOnboardingWizard(); }
+      if (simpleView === "dashboard") {
+        await Promise.all([loadDashboardContext(), loadDashboard()]);
+        await loadOnboardingWizardLazy();
+      }
       if (simpleView === "deals") await loadDeals();
       if (simpleView === "visits") await loadVisits();
-      if (simpleView === "calendar") await loadCalendar();
+      if (simpleView === "calendar") {
+        await Promise.all([loadCalendarContext(), loadCalendar()]);
+      }
       if (simpleView === "integrations") await loadIntegrations();
     } catch (e) { setStatus(e.message, true); }
   }
@@ -11742,19 +12304,8 @@ async function bootstrap() {
     showTrialBanner(me.subscription);
     if (window._checkSuperAdmin) window._checkSuperAdmin();
     startHeartbeat();
-    const userEditId = syncUserEditFromLocation();
-    const c360Id = !userEditId && syncC360FromLocation();
-    const deal360No = !userEditId && !c360Id && syncDeal360FromLocation();
-    const onMasterRoute = !userEditId && !c360Id && !deal360No && syncMasterPageFromLocation();
-    const onSettingsRoute = !userEditId && !c360Id && !deal360No && !onMasterRoute && syncSettingsPageFromLocation();
-    const onSimpleViewRoute = !userEditId && !c360Id && !deal360No && !onMasterRoute && !onSettingsRoute && syncSimpleViewFromLocation();
-    // deal360 needs kanban (loadDeals); userEdit and c360 land in settings/master
-    // which are always eager-loaded by loadAllViews.
-    const landingView = deal360No ? "deals"
-                      : onMasterRoute ? "master"
-                      : onSettingsRoute ? "settings"
-                      : onSimpleViewRoute ? onSimpleViewRoute
-                      : "repHub";
+    const routeState = resolveRouteState();
+    const { userEditId, c360Id, deal360No, onMasterRoute, onSettingsRoute, onSimpleViewRoute, landingView } = routeState;
     await loadAllViews(landingView);
     applyBrandingTheme(state.cache.branding);
 
@@ -11786,7 +12337,7 @@ async function bootstrap() {
     } else if (onSimpleViewRoute) {
       switchView(onSimpleViewRoute);
       if (onSimpleViewRoute === "repHub") paintRepHubFull();
-      if (onSimpleViewRoute === "dashboard") await loadOnboardingWizard();
+      if (onSimpleViewRoute === "dashboard") await loadOnboardingWizardLazy();
       if (onSimpleViewRoute === "superAdmin" && window._loadSuperAdmin) window._loadSuperAdmin();
     } else {
       window.history.replaceState({ view: "repHub" }, "", "/task");
@@ -11794,8 +12345,8 @@ async function bootstrap() {
       paintRepHubFull();
     }
     hideAppLoading();
-    await loadDemoDataStatus();
-    renderDemoDataBanner();
+    await loadDemoDataStatusLazy();
+    await renderDemoDataBannerLazy();
     startIdleWatch();
   } catch {
     clearTokens();
@@ -11805,19 +12356,40 @@ async function bootstrap() {
 
 // ── QUICK SEARCH ──────────────────────────────────────────────────────────────
 
-initQuickSearch({
-  navigateToView,
-  navigateToMasterPage,
-  openDealCreateModal,
-  openVisitCreateModal,
-  asMoney
+qs("#search-btn")?.addEventListener("click", () => {
+  void openQuickSearchLazy();
+});
+
+document.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+    e.preventDefault();
+    void toggleQuickSearchLazy();
+    return;
+  }
+  if (e.key === "Escape" && quickSearchInitialized) {
+    void closeQuickSearchLazy();
+  }
 });
 
 // ── Form label decorator ──────────────────────────────────────────────────────
 // Injects a red * after the label text of any .form-label that contains a
 // required input/select/textarea. Removes "(optional)" hint spans.
 function decorateFormLabels(root) {
-  (root || document).querySelectorAll(".form-label:not([data-fl])").forEach((label) => {
+  const targetRoot = root || document;
+  const labels = [];
+  if (targetRoot === document) {
+    labels.push(...document.querySelectorAll(".form-label"));
+  } else if (targetRoot instanceof Element || targetRoot instanceof DocumentFragment) {
+    const anchor = targetRoot.closest?.(".form-label");
+    if (anchor) labels.push(anchor);
+    if (targetRoot.matches?.(".form-label")) labels.push(targetRoot);
+    labels.push(...targetRoot.querySelectorAll?.(".form-label"));
+  }
+
+  const seen = new Set();
+  labels.forEach((label) => {
+    if (seen.has(label)) return;
+    seen.add(label);
     label.setAttribute("data-fl", "1");
 
     // Remove any "(optional)" hint spans
@@ -11842,43 +12414,78 @@ function decorateFormLabels(root) {
     const hasRequired = !!label.querySelector(
       "input[required], select[required], textarea[required]"
     );
-    if (!hasRequired) return;
-
     const textSpan = label.querySelector(".form-label-text");
-    if (textSpan && !textSpan.querySelector(".req-star")) {
+    const existingStar = textSpan?.querySelector(".req-star");
+    if (hasRequired && textSpan && !existingStar) {
       const star = document.createElement("span");
       star.className = "req-star";
       star.textContent = " *";
       textSpan.appendChild(star);
     }
+    if (!hasRequired && existingStar) {
+      existingStar.remove();
+    }
   });
 }
 
-// Re-run whenever new DOM is added (e.g., after renderSettings, renderDeals, etc.)
-new MutationObserver(() => decorateFormLabels(document)).observe(document.body, {
+let formLabelDecorationQueued = false;
+const pendingFormLabelRoots = new Set();
+
+function queueFormLabelDecoration(root) {
+  if (!root) return;
+  if (root === document) {
+    pendingFormLabelRoots.clear();
+    pendingFormLabelRoots.add(document);
+  } else if (root.nodeType === Node.ELEMENT_NODE || root.nodeType === Node.DOCUMENT_FRAGMENT_NODE) {
+    pendingFormLabelRoots.add(root);
+  } else {
+    return;
+  }
+
+  if (formLabelDecorationQueued) return;
+  formLabelDecorationQueued = true;
+  requestAnimationFrame(() => {
+    formLabelDecorationQueued = false;
+    const roots = [...pendingFormLabelRoots];
+    pendingFormLabelRoots.clear();
+    roots.forEach((pendingRoot) => decorateFormLabels(pendingRoot));
+  });
+}
+
+queueFormLabelDecoration(document);
+
+// Re-run only for newly added subtrees instead of rescanning the whole page.
+new MutationObserver((mutations) => {
+  for (const mutation of mutations) {
+    mutation.addedNodes.forEach((node) => {
+      if (node.nodeType === Node.ELEMENT_NODE || node.nodeType === Node.DOCUMENT_FRAGMENT_NODE) {
+        queueFormLabelDecoration(node);
+      }
+    });
+  }
+}).observe(document.body, {
   childList: true,
   subtree: true,
 });
 
-bindVoiceNoteModal({
-  async onConfirmed({ entityType, entityId, summary }) {
-    if (entityType === "DEAL") {
-      await loadDeals();
-      await loadDashboard();
-    } else if (entityType === "VISIT") {
-      if (summary) {
-        const checkoutResultEl = qs("#mt-checkout-result");
-        if (checkoutResultEl && !checkoutResultEl.value.trim()) {
-          checkoutResultEl.value = summary;
-        }
-      }
-      await loadVisits();
-      if (entityId && visitDetailBody && !visitDetailBody.closest("[hidden]")) {
-        openVisitDetail(entityId);
+async function handleVoiceNoteConfirmed({ entityType, entityId, summary }) {
+  if (entityType === "DEAL") {
+    await loadDeals();
+    await loadDashboard();
+  } else if (entityType === "VISIT") {
+    if (summary) {
+      const checkoutResultEl = qs("#mt-checkout-result");
+      if (checkoutResultEl && !checkoutResultEl.value.trim()) {
+        checkoutResultEl.value = summary;
       }
     }
+    await loadVisits();
+    if (entityId && visitDetailBody && !visitDetailBody.closest("[hidden]")) {
+      openVisitDetail(entityId);
+    }
   }
-});
+}
+
 applyThemeMode("LIGHT");
 
 // ── Super Admin ────────────────────────────────────────────────────────────────
@@ -12026,46 +12633,55 @@ applyThemeMode("LIGHT");
     });
 
     stopSAPoller();
-    if (tabKey === "analytics") startAnalyticsTab();
-    else if (tabKey === "infra") startInfraTab();
-    else if (tabKey === "subscriptions") startSubscriptionsTab();
+    if (tabKey === "analytics") void startAnalyticsTab();
+    else if (tabKey === "infra") void startInfraTab();
+    else if (tabKey === "subscriptions") void startSubscriptionsTab();
   }
 
-  function startAnalyticsTab() {
+  async function startAnalyticsTab() {
     const root = qs("#sa-analytics-root");
     if (!root) return;
-    _saPoller = saCreatePoller({
+    root.innerHTML = '<div class="sa-empty">Loading realtime activity…</div>';
+    const analytics = await ensureSuperAdminAnalytics();
+    if (_saActiveTab !== "analytics") return;
+    _saPoller = analytics.createPoller({
       tick: async () => {
         const data = await api("/super-admin/realtime");
-        saRenderAnalytics(root, data);
+        analytics.renderAnalytics(root, data);
       },
     });
     _saPoller.start();
   }
 
-  function startInfraTab() {
+  async function startInfraTab() {
     const root = qs("#sa-infra-root");
     if (!root) return;
-    _saPoller = saCreatePoller({
+    root.innerHTML = '<div class="sa-empty">Loading infrastructure…</div>';
+    const analytics = await ensureSuperAdminAnalytics();
+    if (_saActiveTab !== "infra") return;
+    _saPoller = analytics.createPoller({
       tick: async () => {
         const data = await api("/super-admin/infra");
-        saRenderInfra(root, data);
+        analytics.renderInfra(root, data);
       },
     });
     _saPoller.start();
   }
 
-  function startSubscriptionsTab() {
+  async function startSubscriptionsTab() {
     const root = qs("#sa-subs-root");
     if (!root) return;
-    _saPoller = saCreatePoller({
+    root.innerHTML = '<div class="sa-empty">Loading subscriptions…</div>';
+    const analytics = await ensureSuperAdminAnalytics();
+    if (_saActiveTab !== "subscriptions") return;
+    _saPoller = analytics.createPoller({
       intervalMs: 60_000, // subs don't change often; slower cadence
       tick: async () => {
         const data = await api("/super-admin/subscriptions");
-        saRenderSubscriptions(root, data, {
+        analytics.renderSubscriptions(root, data, {
           onSend: (tenantId, tenantName) => {
             const modal = qs("#sa-detail-modal");
-            saOpenInvoicesModal(tenantId, tenantName, { modalEl: modal });
+            analytics.openInvoicesModal(tenantId, tenantName, { modalEl: modal });
           },
         });
       },
