@@ -160,11 +160,12 @@ async function uploadVoiceNoteAudio(blob, filename) {
       els2.summary.value = job.transcript?.summaryText ?? "";
       els2.review.hidden = false;
     }
+    const gotServerTranscript = Boolean(els2?.transcript?.value?.trim());
     setVoiceNoteStatus(
-      aiReady && hasTranscript
+      gotServerTranscript
         ? "Review and edit, then confirm to save."
         : aiReady
-          ? "No speech detected. Enter notes manually and confirm to save."
+          ? "Couldn’t transcribe the audio. Enter notes manually and confirm to save."
           : "Audio uploaded. Enter visit notes and confirm to save."
     );
   } catch (error) {
@@ -222,7 +223,11 @@ async function startVoiceNoteRecording() {
             }
           }
         };
-        recog.onerror = () => { /* silently ignore — audio still uploads */ };
+        recog.onerror = (ev) => {
+          // Surface the reason in dev but don't block upload — server-side
+          // transcription (OpenAI) runs on the audio bytes regardless.
+          console.warn("SpeechRecognition error:", ev?.error || "unknown");
+        };
         recog.start();
         voiceNoteState.recognition = recog;
       } catch {

@@ -18,6 +18,9 @@ const configSchema = z.object({
   R2_PUBLIC_URL: z.preprocess(v => (v === "" ? undefined : v), z.string().url().optional()),
   GOOGLE_MAPS_API_KEY: z.string().min(1).optional(),
   ANTHROPIC_API_KEY: z.preprocess(v => (v === "" ? undefined : v), z.string().min(1).optional()),
+  // Optional: OpenAI API key. Used for server-side audio transcription (gpt-4o-transcribe).
+  // Enables voice-note transcription on browsers without SpeechRecognition (Firefox, iOS Safari, Samsung Internet).
+  OPENAI_API_KEY: z.preprocess(v => (v === "" ? undefined : v), z.string().min(1).optional()),
   // Optional: public URL of this app (e.g. https://app.thinkbizcrm.com). Used for deep links in email notifications and OAuth redirect URIs.
   APP_URL: z.preprocess(v => (v === "" ? undefined : v), z.string().url().optional()),
   // Optional: base domain for tenant subdomains (e.g. "thinkbizcrm.com").

@@ -218,6 +218,62 @@ async function resolveAnthropicApiKey(tenantId: string): Promise<string | null> 
   return config.ANTHROPIC_API_KEY ?? null;
 }
 
+async function resolveOpenAIApiKey(tenantId: string): Promise<string | null> {
+  const cred = await prisma.tenantIntegrationCredential.findFirst({
+    where: {
+      tenantId,
+      platform: IntegrationPlatform.OPENAI,
+      status: "ENABLED",
+      apiKeyRef: { not: null }
+    },
+    select: { apiKeyRef: true }
+  });
+  if (cred?.apiKeyRef) return decryptField(cred.apiKeyRef);
+  return config.OPENAI_API_KEY ?? null;
+}
+
+function openAiFileExtension(mimeType: string): string {
+  const m = mimeType.toLowerCase();
+  if (m.includes("mp4") || m.includes("m4a") || m.includes("aac")) return "m4a";
+  if (m.includes("webm")) return "webm";
+  if (m.includes("ogg")) return "ogg";
+  if (m.includes("wav")) return "wav";
+  if (m.includes("mpeg") || m.includes("mp3")) return "mp3";
+  if (m.includes("flac")) return "flac";
+  return "webm";
+}
+
+async function transcribeWithOpenAI(
+  audioBuffer: Buffer,
+  audioMimeType: string,
+  outputLang: "TH" | "EN",
+  apiKey: string
+): Promise<string> {
+  // OpenAI's audio transcriptions endpoint accepts multipart/form-data up to 25 MB.
+  // gpt-4o-transcribe handles Thai + code-switched Thai/English well.
+  const ext = openAiFileExtension(audioMimeType);
+  const form = new FormData();
+  // Copy Buffer bytes into a plain ArrayBuffer so TS's Blob constructor accepts them.
+  const ab = new ArrayBuffer(audioBuffer.byteLength);
+  new Uint8Array(ab).set(audioBuffer);
+  form.append("file", new Blob([ab], { type: audioMimeType }), `voice-note.${ext}`);
+  form.append("model", "gpt-4o-transcribe");
+  form.append("language", outputLang === "TH" ? "th" : "en");
+  form.append("response_format", "json");
+
+  const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}` },
+    body: form
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    throw new Error(`OpenAI transcription failed (${res.status}): ${errText.slice(0, 200)}`);
+  }
+  const data = (await res.json()) as { text?: string };
+  return (data.text ?? "").trim();
+}
+
 async function summarizeTranscript(
   transcriptText: string,
   apiKey: string,
@@ -977,8 +1033,13 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
 
   app.get("/ai/status", async (request) => {
     const tenantId = requireTenantId(request);
-    const apiKey = await resolveAnthropicApiKey(tenantId);
-    return { transcriptionAvailable: Boolean(apiKey) };
+    const [anthropicKey, openaiKey] = await Promise.all([
+      resolveAnthropicApiKey(tenantId),
+      resolveOpenAIApiKey(tenantId)
+    ]);
+    // Transcription is available if either the browser speech API will be used
+    // (Anthropic handles summary) or OpenAI can transcribe server-side.
+    return { transcriptionAvailable: Boolean(anthropicKey || openaiKey) };
   });
 
   app.post("/voice-notes", async (request, reply) => {
@@ -1031,14 +1092,29 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
       if (!deal) throw app.httpErrors.notFound("Deal not found in tenant.");
     }
 
-    const anthropicApiKey = await resolveAnthropicApiKey(tenantId);
+    const [anthropicApiKey, openaiApiKey] = await Promise.all([
+      resolveAnthropicApiKey(tenantId),
+      resolveOpenAIApiKey(tenantId)
+    ]);
     const browserTranscript = multipartResult?.transcriptText ?? null;
     const outputLang = multipartResult?.outputLang ?? "TH";
+
+    // If browser didn't transcribe (Firefox, iOS Safari, Samsung Internet, bad mic),
+    // fall back to OpenAI server-side transcription when a key is configured.
+    let effectiveTranscript = browserTranscript ?? "";
+    if (!effectiveTranscript && audioBuffer && openaiApiKey) {
+      try {
+        effectiveTranscript = await transcribeWithOpenAI(audioBuffer, audioMimeType, outputLang, openaiApiKey);
+      } catch (error) {
+        request.log.warn({ err: error }, "OpenAI transcription failed");
+      }
+    }
+
     const transcript =
-      browserTranscript && anthropicApiKey
-        ? await summarizeTranscript(browserTranscript, anthropicApiKey, outputLang)
-        : browserTranscript
-          ? { transcriptText: browserTranscript, summaryText: "", confidenceScore: 0 }
+      effectiveTranscript && anthropicApiKey
+        ? await summarizeTranscript(effectiveTranscript, anthropicApiKey, outputLang)
+        : effectiveTranscript
+          ? { transcriptText: effectiveTranscript, summaryText: "", confidenceScore: 0 }
           : { transcriptText: "", summaryText: "", confidenceScore: 0 };
 
     const created = await prisma.voiceNoteJob.create({
