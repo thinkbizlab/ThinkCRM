@@ -396,6 +396,7 @@ model Customer {
   @@unique([tenantId, taxId])
   @@unique([tenantId, externalRef])
   @@index([tenantId, customerGroupId])
+  @@index([tenantId, name])
 }
 
 enum CustomerDuplicateSignal {
@@ -476,6 +477,7 @@ model Item {
   name         String
   externalRef  String?
   unitPrice    Float
+  isActive     Boolean  @default(true)
   customFields Json?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -484,6 +486,7 @@ model Item {
 
   @@unique([tenantId, itemCode])
   @@unique([tenantId, externalRef])
+  @@index([tenantId, name])
 }
 
 model CustomFieldDefinition {
@@ -555,6 +558,7 @@ model Deal {
   @@index([tenantId, ownerId, status, closedAt])
   @@index([tenantId, stageId])
   @@index([tenantId, followUpAt])
+  @@index([tenantId, customerId])
 }
 
 model DealProgressUpdate {
@@ -594,6 +598,7 @@ model Quotation {
   items          QuotationItem[]
 
   @@unique([tenantId, quotationNo])
+  @@index([tenantId, dealId])
 }
 
 model TenantRoleChain {
@@ -681,6 +686,7 @@ model Visit {
   @@unique([tenantId, visitNo])
   @@index([tenantId, repId, checkInAt])
   @@index([tenantId, status, plannedAt])
+  @@index([tenantId, customerId])
 }
 
 model SalesKpiTarget {

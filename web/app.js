@@ -5,7 +5,8 @@ import {
   prettyLabel,
   asDate, asDateInput, asPercent,
   shiftAnchorDate,
-  fmtDateTime
+  fmtDateTime,
+  debounce
 } from "./modules/utils.js";
 import { state, THEME_OVERRIDE_KEY } from "./modules/state.js";
 import { api, storeTokens, clearTokens, getRefreshToken, refreshAccessToken } from "./modules/api.js";
@@ -547,7 +548,11 @@ async function loginWithPasskey() {
     const onMasterRoute = syncMasterPageFromLocation();
     const onSettingsRoute = !onMasterRoute && syncSettingsPageFromLocation();
     const onSimpleViewRoute = !onMasterRoute && !onSettingsRoute && syncSimpleViewFromLocation();
-    await loadAllViews();
+    const landingView = onMasterRoute ? "master"
+                      : onSettingsRoute ? "settings"
+                      : onSimpleViewRoute ? onSimpleViewRoute
+                      : "repHub";
+    await loadAllViews(landingView);
     applyBrandingTheme(state.cache.branding);
     if (onMasterRoute) {
       switchView("master");
@@ -594,7 +599,7 @@ qs("#oauth-passkey-btn")?.addEventListener("click", loginWithPasskey);
   showApp();
   showTrialBanner(user.subscription);
   updateUserMeta();
-  await loadAllViews();
+  await loadAllViews("repHub");
   applyBrandingTheme(state.cache.branding);
   window.history.replaceState({ view: "repHub" }, "", "/task");
   switchView("repHub");
@@ -2346,9 +2351,10 @@ function renderDeals(kanban, dealsRoot = views.deals, options = {}) {
   if (!compact) {
     dealsRoot.querySelector("#deals-create-btn")?.addEventListener("click", () => openDealCreateModal(kanban));
 
+    const debouncedDealsSearch = debounce(() => rdeals(kanban), 250);
     dealsRoot.querySelector("#deals-search")?.addEventListener("input", (e) => {
       state.dealsFilter.query = e.target.value;
-      rdeals(kanban);
+      debouncedDealsSearch();
     });
 
     dealsRoot.querySelector("#deals-suspicious-btn")?.addEventListener("click", () => {
@@ -7114,9 +7120,10 @@ function renderSettings() {
 
   wireDelegationsListeners(views.settings);
 
+  const debouncedRolePageSearch = debounce(() => renderSettings(), 250);
   qs("#rp-search")?.addEventListener("input", (e) => {
     state.rolePageQuery = e.target.value;
-    renderSettings();
+    debouncedRolePageSearch();
   });
 
   qs("#rp-team-filter")?.addEventListener("change", (e) => {
@@ -9504,12 +9511,16 @@ function renderCustomerListSection(container, termOptions) {
     </div>
   `;
 
-  // Search — only refreshes the body, keeps input alive
+  // Search — only refreshes the body, keeps input alive. Debounced to avoid
+  // re-rendering the full table on every keystroke.
+  const bodyEl = container.querySelector("#cust-body");
+  const debouncedCustSearch = debounce(() => {
+    state.customerListPage = 1;
+    refreshCustBody(bodyEl, termOptions);
+  }, 250);
   container.querySelector("#cust-search-input")?.addEventListener("input", (e) => {
     state.customerListQuery = e.target.value;
-    state.customerListPage = 1;
-    const bodyEl = container.querySelector("#cust-body");
-    refreshCustBody(bodyEl, termOptions);
+    debouncedCustSearch();
   });
 
   // Scope pills
@@ -10603,17 +10614,27 @@ async function loadSettings() {
   renderSettings();
 }
 
-async function loadAllViews() {
-  await Promise.all([
-    loadDashboard(),
-    loadMaster(),
-    loadDeals(),
-    loadVisits(),
-    loadCalendar(),
-    loadIntegrations(),
-    loadSettings(),
-    canActOnBehalf() ? loadMyPrincipals() : Promise.resolve()
-  ]);
+// Determine which per-view loaders need to run for a given landing view.
+// Master + Settings are always needed (master powers shared caches like customers,
+// items, payment terms used by modals app-wide; settings populates branding which
+// applyBrandingTheme consumes at shell init). Everything else is view-specific.
+function viewLoadersFor(landingView) {
+  const loaders = [loadMaster(), loadSettings()];
+  switch (landingView) {
+    case "dashboard":    loaders.push(loadDashboard()); break;
+    case "deals":        loaders.push(loadDeals()); break;
+    case "visits":       loaders.push(loadVisits()); break;
+    case "calendar":     loaders.push(loadCalendar()); break;
+    case "integrations": loaders.push(loadIntegrations()); break;
+    case "repHub":       loaders.push(loadVisits(), loadDeals()); break;
+    // master / settings / superAdmin / unknown: nothing extra
+  }
+  if (canActOnBehalf()) loaders.push(loadMyPrincipals());
+  return loaders;
+}
+
+async function loadAllViews(landingView) {
+  await Promise.all(viewLoadersFor(landingView));
 }
 
 loginForm.addEventListener("submit", async (event) => {
@@ -10649,7 +10670,11 @@ loginForm.addEventListener("submit", async (event) => {
     const onMasterRoute = syncMasterPageFromLocation();
     const onSettingsRoute = !onMasterRoute && syncSettingsPageFromLocation();
     const onSimpleViewRoute = !onMasterRoute && !onSettingsRoute && syncSimpleViewFromLocation();
-    await loadAllViews();
+    const landingView = onMasterRoute ? "master"
+                      : onSettingsRoute ? "settings"
+                      : onSimpleViewRoute ? onSimpleViewRoute
+                      : "repHub";
+    await loadAllViews(landingView);
     applyBrandingTheme(state.cache.branding);
     if (onMasterRoute) {
       switchView("master");
@@ -11686,7 +11711,14 @@ async function bootstrap() {
     const onMasterRoute = !userEditId && !c360Id && !deal360No && syncMasterPageFromLocation();
     const onSettingsRoute = !userEditId && !c360Id && !deal360No && !onMasterRoute && syncSettingsPageFromLocation();
     const onSimpleViewRoute = !userEditId && !c360Id && !deal360No && !onMasterRoute && !onSettingsRoute && syncSimpleViewFromLocation();
-    await loadAllViews();
+    // deal360 needs kanban (loadDeals); userEdit and c360 land in settings/master
+    // which are always eager-loaded by loadAllViews.
+    const landingView = deal360No ? "deals"
+                      : onMasterRoute ? "master"
+                      : onSettingsRoute ? "settings"
+                      : onSimpleViewRoute ? onSimpleViewRoute
+                      : "repHub";
+    await loadAllViews(landingView);
     applyBrandingTheme(state.cache.branding);
 
     // Handle platform Connect redirect-backs (LINE / MS Teams / Slack)

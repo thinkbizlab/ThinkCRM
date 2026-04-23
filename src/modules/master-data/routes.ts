@@ -378,12 +378,24 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       query.scope === "team" || query.scope === "all"
         ? { in: visibleUserIdList }
         : requesterId;
+    // List view: skip `addresses` (unused in table + list-derived consumers)
+    // and narrow `contacts` + `paymentTerm` to the fields the UI actually reads.
+    // Full relations are re-fetched by `/customers/:id` on detail open.
     return prisma.customer.findMany({
       where: { tenantId, ownerId: ownerFilter },
       include: {
-        addresses: true,
-        contacts: true,
-        paymentTerm: true,
+        contacts: {
+          select: {
+            id: true,
+            name: true,
+            position: true,
+            tel: true,
+            email: true,
+            lineId: true,
+            whatsapp: true
+          }
+        },
+        paymentTerm: { select: { id: true, code: true, name: true } },
         customerGroup: { select: { id: true, code: true, name: true } },
         owner: { select: { id: true, fullName: true } }
       },

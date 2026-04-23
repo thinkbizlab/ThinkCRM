@@ -100,6 +100,14 @@ export function shiftAnchorDate(anchorDate, view, direction) {
   return d.toISOString();
 }
 
+export function debounce(fn, ms = 250) {
+  let t;
+  return function (...args) {
+    clearTimeout(t);
+    t = setTimeout(() => fn.apply(this, args), ms);
+  };
+}
+
 const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 export function fmtDateTime(dateOrStr) {
   const d = dateOrStr instanceof Date ? dateOrStr : new Date(dateOrStr);

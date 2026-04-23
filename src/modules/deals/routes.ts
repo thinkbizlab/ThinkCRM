@@ -714,16 +714,26 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
       prisma.dealStage.findMany({ where: { tenantId }, orderBy: { stageOrder: "asc" } }),
       prisma.deal.findMany({
         where: { tenantId, ownerId: { in: visibleUserIdList } },
-        include: { customer: true, stage: true, owner: true },
+        include: {
+          customer: { select: { id: true, name: true } },
+          stage: true,
+          owner: { select: { id: true, fullName: true } }
+        },
         orderBy: { updatedAt: "desc" }
       })
     ]);
     const dealCards = deals.map(withDealCardFlags);
+    const dealsByStage = new Map<string, typeof dealCards>();
+    for (const deal of dealCards) {
+      const bucket = dealsByStage.get(deal.stageId);
+      if (bucket) bucket.push(deal);
+      else dealsByStage.set(deal.stageId, [deal]);
+    }
 
     return {
       stages: stages.map((stage) => ({
         ...stage,
-        deals: dealCards.filter((deal) => deal.stageId === stage.id)
+        deals: dealsByStage.get(stage.id) ?? []
       }))
     };
   });
