@@ -100,6 +100,7 @@ const itemSchema = z.object({
   name: z.string().min(2).max(200),
   unitPrice: z.number().nonnegative(),
   externalRef: z.string().trim().max(100).optional(),
+  isActive: z.boolean().optional(),
   customFields: customFieldValuesSchema.optional()
 });
 const itemUpdateSchema = itemSchema.partial();
@@ -962,6 +963,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
           itemCode: parsed.data.itemCode,
           name: parsed.data.name,
           unitPrice: parsed.data.unitPrice,
+          isActive: parsed.data.isActive ?? true,
           customFields
         }
       });
@@ -1012,6 +1014,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
           itemCode: parsed.data.itemCode,
           name: parsed.data.name,
           unitPrice: parsed.data.unitPrice,
+          isActive: parsed.data.isActive,
           customFields
         }
       });

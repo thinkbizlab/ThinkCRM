@@ -33,6 +33,7 @@ const customerMappedSchema = z.object({
   siteLat: z.number().min(-90).max(90).optional(),
   siteLng: z.number().min(-180).max(180).optional(),
   externalRef: z.string().trim().max(100).optional(),
+  disabled: z.boolean().optional(),
   customFields: z.record(z.string(), z.unknown()).optional()
 });
 
@@ -41,6 +42,7 @@ const itemMappedSchema = z.object({
   name: z.string().min(1),
   unitPrice: z.number().nonnegative(),
   externalRef: z.string().trim().max(100).optional(),
+  isActive: z.boolean().optional(),
   customFields: z.record(z.string(), z.unknown()).optional()
 });
 
@@ -423,6 +425,7 @@ async function upsertEntity(
             ownerId: resolvedOwnerId,
             siteLat: payload.siteLat ?? undefined,
             siteLng: payload.siteLng ?? undefined,
+            disabled: payload.disabled ?? undefined,
             defaultTermId,
             customFields: validatedCf ?? undefined
           }
@@ -446,6 +449,7 @@ async function upsertEntity(
         siteLat: payload.siteLat ?? undefined,
         siteLng: payload.siteLng ?? undefined,
         externalRef: payload.externalRef ?? undefined,
+        disabled: payload.disabled ?? undefined,
         defaultTermId,
         customFields: validatedCf ?? undefined
       },
@@ -459,6 +463,7 @@ async function upsertEntity(
         siteLat: payload.siteLat ?? undefined,
         siteLng: payload.siteLng ?? undefined,
         externalRef: payload.externalRef ?? undefined,
+        disabled: payload.disabled ?? false,
         defaultTermId,
         customFields: validatedCf ?? undefined
       }
@@ -488,6 +493,7 @@ async function upsertEntity(
             itemCode: payload.itemCode,
             name: payload.name,
             unitPrice: payload.unitPrice,
+            isActive: payload.isActive ?? undefined,
             customFields: validatedCf ?? undefined
           }
         });
@@ -506,6 +512,7 @@ async function upsertEntity(
         name: payload.name,
         unitPrice: payload.unitPrice,
         externalRef: payload.externalRef ?? undefined,
+        isActive: payload.isActive ?? undefined,
         customFields: validatedCf ?? undefined
       },
       create: {
@@ -514,6 +521,7 @@ async function upsertEntity(
         name: payload.name,
         unitPrice: payload.unitPrice,
         externalRef: payload.externalRef ?? undefined,
+        isActive: payload.isActive ?? true,
         customFields: validatedCf ?? undefined
       }
     });

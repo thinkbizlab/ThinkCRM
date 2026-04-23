@@ -92,13 +92,15 @@ const CRM_TARGET_FIELDS = {
     { value: "ownerId",            label: "Owner User ID",         required: false },
     { value: "siteLat",            label: "Site Latitude",         required: false },
     { value: "siteLng",            label: "Site Longitude",        required: false },
-    { value: "externalRef",        label: "External Reference",    required: false }
+    { value: "externalRef",        label: "External Reference",    required: false },
+    { value: "disabled",           label: "Disabled",              required: false }
   ],
   ITEM: [
     { value: "itemCode",    label: "Item Code",           required: true },
     { value: "name",        label: "Item Name",           required: true },
     { value: "unitPrice",   label: "Unit Price",          required: true },
-    { value: "externalRef", label: "External Reference",  required: false }
+    { value: "externalRef", label: "External Reference",  required: false },
+    { value: "isActive",    label: "Active",              required: false }
   ],
   PAYMENT_TERM: [
     { value: "code",    label: "Term Code", required: true },
@@ -1641,17 +1643,22 @@ function renderMasterData(paymentTerms) {
     const page = state.itemListPage;
     const start = ps === Infinity ? 0 : (page - 1) * ps;
     const slice = ps === Infinity ? all : all.slice(start, start + ps);
-    listEl.innerHTML = slice.map((item) => `
+    listEl.innerHTML = slice.map((item) => {
+      const active = item.isActive !== false;
+      return `
       <div class="row">
-        <h4>${escHtml(item.name)} (${escHtml(item.itemCode)})</h4>
+        <h4 style="display:inline">${escHtml(item.name)} (${escHtml(item.itemCode)})</h4>
         <div class="muted">Unit price ${asMoney(item.unitPrice)}${item.externalRef ? ` · Ref: ${escHtml(item.externalRef)}` : ""}</div>
+        <div class="chip ${active ? "chip-success" : "chip-danger"}">${active ? "Active" : "Inactive"}</div>
         ${renderCustomFieldsSummary(item.customFields)}
         ${isItemApiLocked() ? "" : `
         <div class="inline-actions wrap">
           <button class="item-price" data-id="${item.id}" data-price="${item.unitPrice}">Update Price</button>
+          <button class="item-toggle" data-id="${item.id}" data-active="${active}">${active ? "Deactivate" : "Activate"}</button>
           <button class="item-delete ghost" data-id="${item.id}">Delete</button>
         </div>`}
-      </div>`).join("");
+      </div>`;
+    }).join("");
     pagEl.innerHTML = masterPaginationHtml({
       total: all.length, page, totalPages, key: "item", pageSize: ps, noun: "item"
     });
@@ -1947,6 +1954,20 @@ function renderMasterData(paymentTerms) {
       try {
         await api(`/items/${btn.dataset.id}`, { method: "DELETE" });
         setStatus("Item deleted.");
+        await loadMaster();
+      } catch (error) {
+        setStatus(error.message, true);
+      }
+    });
+  });
+
+  views.master.querySelectorAll(".item-toggle").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      try {
+        await api(`/items/${btn.dataset.id}`, {
+          method: "PATCH",
+          body: { isActive: btn.dataset.active !== "true" }
+        });
         await loadMaster();
       } catch (error) {
         setStatus(error.message, true);
@@ -8990,6 +9011,7 @@ function buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk
                 <button class="cust-action-btn cust-360-btn" data-id="${c.id}" data-code="${escHtml(c.customerCode)}">360°</button>
                 ${!apiLocked && canReassign ? `<button class="cust-action-btn cust-reassign-btn" data-id="${c.id}" data-name="${escHtml(c.name)}" title="Reassign owner">Reassign</button>` : ""}
                 ${!apiLocked ? `<button class="cust-action-btn cust-edit-btn" data-id="${c.id}" data-customer='${escHtml(JSON.stringify({ id: c.id, customerCode: c.customerCode, name: c.name, customerType: c.customerType, taxId: c.taxId || "", defaultTermId: c.paymentTerm?.id || "", externalRef: c.externalRef || "", disabled: !!c.disabled, customerGroupId: c.customerGroup?.id || "" }))}'>Edit</button>` : ""}
+                ${!apiLocked ? `<button class="cust-action-btn cust-toggle-btn" data-id="${c.id}" data-disabled="${!!c.disabled}">${c.disabled ? "Activate" : "Deactivate"}</button>` : ""}
                 ${!apiLocked && isAdmin ? `<button class="cust-action-btn cust-delete-btn danger" data-id="${c.id}" data-name="${escHtml(c.name)}">Delete</button>` : ""}
               </div></td>
             </tr>`;
@@ -9028,6 +9050,21 @@ function attachCustBodyListeners(container, totalPages, termOptions) {
       let cust = {};
       try { cust = JSON.parse(btn.dataset.customer || "{}"); } catch (_) {}
       openEditCustomerModal(cust, termOptions);
+    });
+  });
+
+  container.querySelectorAll(".cust-toggle-btn").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      try {
+        await api(`/customers/${btn.dataset.id}`, {
+          method: "PATCH",
+          body: { disabled: btn.dataset.disabled !== "true" }
+        });
+        await loadMaster();
+      } catch (error) {
+        setStatus(error.message, true);
+      }
     });
   });
 
