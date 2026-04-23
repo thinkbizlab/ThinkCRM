@@ -1037,9 +1037,12 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
       resolveAnthropicApiKey(tenantId),
       resolveOpenAIApiKey(tenantId)
     ]);
-    // Transcription is available if either the browser speech API will be used
-    // (Anthropic handles summary) or OpenAI can transcribe server-side.
-    return { transcriptionAvailable: Boolean(anthropicKey || openaiKey) };
+    // Transcription requires OpenAI — Claude cannot process audio.
+    // Summaries need Anthropic separately. Frontend gates recording on transcriptionAvailable.
+    return {
+      transcriptionAvailable: Boolean(openaiKey),
+      summaryAvailable: Boolean(anthropicKey)
+    };
   });
 
   app.post("/voice-notes", async (request, reply) => {
@@ -1048,6 +1051,14 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
     // S7: check voice notes feature gate before doing any file work
     const limits = await getPlanLimits(tenantId);
     assertVoiceNotesAvailable(limits, app.httpErrors);
+    // Require OpenAI — Claude cannot transcribe audio, and browser
+    // SpeechRecognition is too unreliable (Firefox/iOS Safari/Samsung Internet).
+    const openaiApiKeyEarly = await resolveOpenAIApiKey(tenantId);
+    if (!openaiApiKeyEarly) {
+      throw app.httpErrors.forbidden(
+        "Voice notes require an OpenAI API key. Ask your workspace admin to configure it in Settings → Integrations → OpenAI."
+      );
+    }
     const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { slug: true } });
     if (!tenant) throw app.httpErrors.notFound("Tenant not found.");
     let audioBuffer: Buffer | null = null;
@@ -1092,19 +1103,16 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
       if (!deal) throw app.httpErrors.notFound("Deal not found in tenant.");
     }
 
-    const [anthropicApiKey, openaiApiKey] = await Promise.all([
-      resolveAnthropicApiKey(tenantId),
-      resolveOpenAIApiKey(tenantId)
-    ]);
+    const anthropicApiKey = await resolveAnthropicApiKey(tenantId);
     const browserTranscript = multipartResult?.transcriptText ?? null;
     const outputLang = multipartResult?.outputLang ?? "TH";
 
-    // If browser didn't transcribe (Firefox, iOS Safari, Samsung Internet, bad mic),
-    // fall back to OpenAI server-side transcription when a key is configured.
+    // OpenAI key is guaranteed here (checked at top of handler). Use browser
+    // transcript when present; otherwise transcribe server-side.
     let effectiveTranscript = browserTranscript ?? "";
-    if (!effectiveTranscript && audioBuffer && openaiApiKey) {
+    if (!effectiveTranscript && audioBuffer) {
       try {
-        effectiveTranscript = await transcribeWithOpenAI(audioBuffer, audioMimeType, outputLang, openaiApiKey);
+        effectiveTranscript = await transcribeWithOpenAI(audioBuffer, audioMimeType, outputLang, openaiApiKeyEarly);
       } catch (error) {
         request.log.warn({ err: error }, "OpenAI transcription failed");
       }

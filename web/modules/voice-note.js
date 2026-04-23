@@ -96,15 +96,21 @@ export async function openVoiceNoteModal(entityType, entityId, subtitle) {
   els.subtitle.textContent = subtitle ? `${entityType} · ${subtitle}` : entityType;
   els.root.hidden = false;
 
-  if (voiceNoteState.aiAvailable === null) {
-    try {
-      const status = await api("/ai/status");
-      voiceNoteState.aiAvailable = status.transcriptionAvailable === true;
-    } catch {
-      voiceNoteState.aiAvailable = false;
-    }
+  // Always re-check so admin config changes (adding OpenAI key) take effect
+  // without a page reload.
+  try {
+    const status = await api("/ai/status");
+    voiceNoteState.aiAvailable = status.transcriptionAvailable === true;
+  } catch {
+    voiceNoteState.aiAvailable = false;
   }
-  els.aiWarning.hidden = voiceNoteState.aiAvailable !== false;
+  const transcriptionDisabled = voiceNoteState.aiAvailable === false;
+  els.aiWarning.hidden = !transcriptionDisabled;
+  els.recordBtn.disabled = transcriptionDisabled;
+  els.fileInput.disabled = transcriptionDisabled;
+  // Dim the "Upload file" label visually when the hidden input is disabled.
+  const fileLabel = els.fileInput.closest("label");
+  if (fileLabel) fileLabel.classList.toggle("voice-note-file-label--disabled", transcriptionDisabled);
 }
 
 function closeVoiceNoteModal() {
