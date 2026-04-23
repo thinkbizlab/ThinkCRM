@@ -18,25 +18,31 @@ import {
   setStatus
 } from "./modules/dom.js";
 import { loadOAuthProviderButtons, wireOAuthProviderButtons, consumeOAuthCallback } from "./modules/oauth.js";
-import { loadDelegations, renderDelegationsSection, wireDelegationsListeners, setDelegationsDeps, loadMyPrincipals, attachOnBehalfOfField, readOnBehalfOfValue, canActOnBehalf } from "./modules/delegations.js";
-import { renderCronPicker, initCronPicker } from "./modules/cron-picker.js";
 import { icon } from "./modules/icons.js";
-import { DEFAULT_TOKENS, SHADOW_PRESETS, PRESETS, findPresetBySlug, detectPresetSlug } from "./modules/theme-presets.js";
-import {
-  getCustomFieldDefinitions,
-  collectCustomFieldPayload,
-  renderCustomFieldInputs,
-  renderCustomFieldsSummary,
-  renderCustomFieldFilters,
-  collectCustomFieldFilters,
-  matchesCustomFieldFilters
-} from "./modules/custom-fields.js";
 
 const loginForm = qs("#login-form");
 const authMessage = qs("#auth-message");
 
 const HOUR_OPTIONS = Array.from({ length: 24 }, (_, h) => `<option value="${h}">${String(h).padStart(2,"0")}:00</option>`).join("");
 const DAY_OF_WEEK = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+const DEFAULT_TOKENS = {
+  background: "#ffffff",
+  text: "#0f172a",
+  accent: "#7c3aed",
+  card: "#ffffff",
+  muted: "#f1f5f9",
+  border: "#e2e8f0",
+  destructive: "#ef4444",
+  radius: 12,
+  shadow: "MD"
+};
+const SHADOW_PRESETS = {
+  NONE: "none",
+  SM: "0 1px 2px rgba(0, 0, 0, 0.04)",
+  MD: "0 4px 12px rgba(0, 0, 0, 0.08)",
+  LG: "0 10px 30px rgba(0, 0, 0, 0.10)",
+  XL: "0 20px 50px rgba(0, 0, 0, 0.14)"
+};
 
 let xlsxReady = null;
 function ensureXLSX() {
@@ -78,8 +84,174 @@ let visitsModulePromise = null;
 let visitsModuleInitialized = false;
 let quickSearchModulePromise = null;
 let quickSearchInitialized = false;
+let delegationsModulePromise = null;
+let delegationsModule = null;
+let cronPickerModulePromise = null;
+let cronPickerModule = null;
+let customFieldsModulePromise = null;
+let customFieldsModule = null;
+let themePresetsModulePromise = null;
+let themePresetsModule = null;
+let settingsAdminModulePromise = null;
+let settingsAdminModule = null;
+let adminChromeRefreshTimerId = null;
+let adminChromeRefreshIdleId = null;
 
 state.deal360 = state.deal360 ?? null;
+
+async function ensureDelegationsModule() {
+  if (!delegationsModulePromise) {
+    delegationsModulePromise = import("./modules/delegations.js").then((module) => {
+      module.setDelegationsDeps({
+        setStatus,
+        escHtml,
+        renderSettings
+      });
+      delegationsModule = module;
+      return module;
+    });
+  }
+  return delegationsModulePromise;
+}
+
+async function ensureCronPickerModule() {
+  if (!cronPickerModulePromise) {
+    cronPickerModulePromise = import("./modules/cron-picker.js").then((module) => {
+      cronPickerModule = module;
+      return module;
+    });
+  }
+  return cronPickerModulePromise;
+}
+
+async function ensureCustomFieldsModule() {
+  if (!customFieldsModulePromise) {
+    customFieldsModulePromise = import("./modules/custom-fields.js").then((module) => {
+      customFieldsModule = module;
+      return module;
+    });
+  }
+  return customFieldsModulePromise;
+}
+
+async function ensureThemePresetsModule() {
+  if (!themePresetsModulePromise) {
+    themePresetsModulePromise = import("./modules/theme-presets.js").then((module) => {
+      themePresetsModule = module;
+      return module;
+    });
+  }
+  return themePresetsModulePromise;
+}
+
+async function ensureSettingsAdminModule() {
+  if (!settingsAdminModulePromise) {
+    settingsAdminModulePromise = import("./modules/settings-admin.js").then((module) => {
+      module.setSettingsAdminDeps({
+        CURRENCIES,
+        getActiveCurrency,
+        CURRENCY_STORAGE_KEY,
+        getThemePresets,
+        findPresetBySlug,
+        renderThemeRow,
+        applyBrandingTheme,
+        applyThemeMode,
+        renderDeals,
+        renderDashboard,
+        loadSettings,
+        renderSettings,
+        loadMaster
+      });
+      settingsAdminModule = module;
+      return module;
+    });
+  }
+  return settingsAdminModulePromise;
+}
+
+async function loadDelegations(...args) {
+  const module = await ensureDelegationsModule();
+  return module.loadDelegations(...args);
+}
+
+function renderDelegationsSection(...args) {
+  return delegationsModule ? delegationsModule.renderDelegationsSection(...args) : "";
+}
+
+function wireDelegationsListeners(...args) {
+  return delegationsModule?.wireDelegationsListeners(...args);
+}
+
+async function loadMyPrincipals(...args) {
+  const module = await ensureDelegationsModule();
+  return module.loadMyPrincipals(...args);
+}
+
+function attachOnBehalfOfField(...args) {
+  return ensureDelegationsModule().then((module) => module.attachOnBehalfOfField(...args));
+}
+
+function readOnBehalfOfValue(container) {
+  if (delegationsModule) return delegationsModule.readOnBehalfOfValue(container);
+  const sel = container?.querySelector?.('[name="onBehalfOfUserId"]');
+  const value = sel?.value;
+  return value && value !== "__self__" ? value : null;
+}
+
+function canActOnBehalf() {
+  if (delegationsModule) return delegationsModule.canActOnBehalf();
+  const role = state.user?.role;
+  return role === "SALES_ADMIN" || role === "ASSISTANT_MANAGER";
+}
+
+function renderCronPicker(...args) {
+  return cronPickerModule ? cronPickerModule.renderCronPicker(...args) : "";
+}
+
+function initCronPicker(...args) {
+  return cronPickerModule?.initCronPicker(...args);
+}
+
+function getCustomFieldDefinitions(pageKey) {
+  if (customFieldsModule) return customFieldsModule.getCustomFieldDefinitions(pageKey);
+  return state.cache.customFieldDefinitions?.[pageKey] || [];
+}
+
+function collectCustomFieldPayload(...args) {
+  return customFieldsModule ? customFieldsModule.collectCustomFieldPayload(...args) : {};
+}
+
+function renderCustomFieldInputs(...args) {
+  return customFieldsModule ? customFieldsModule.renderCustomFieldInputs(...args) : "";
+}
+
+function renderCustomFieldsSummary(...args) {
+  return customFieldsModule ? customFieldsModule.renderCustomFieldsSummary(...args) : "";
+}
+
+function renderCustomFieldFilters(...args) {
+  return customFieldsModule ? customFieldsModule.renderCustomFieldFilters(...args) : "";
+}
+
+function collectCustomFieldFilters(...args) {
+  return customFieldsModule ? customFieldsModule.collectCustomFieldFilters(...args) : {};
+}
+
+function matchesCustomFieldFilters(...args) {
+  return customFieldsModule ? customFieldsModule.matchesCustomFieldFilters(...args) : true;
+}
+
+function getThemePresets() {
+  return themePresetsModule?.PRESETS || [];
+}
+
+function findPresetBySlug(slug) {
+  return themePresetsModule ? themePresetsModule.findPresetBySlug(slug) : null;
+}
+
+function detectPresetSlug(tokens) {
+  return themePresetsModule ? themePresetsModule.detectPresetSlug(tokens) : "custom";
+}
 
 function ensureSuperAdminAnalytics() {
   if (!superAdminAnalyticsPromise) {
@@ -210,7 +382,9 @@ async function ensureCustomer360Module() {
       navigateToMasterPage,
       renderMasterData,
       openVisitCreateModal,
-      openDealCreateModal: openDealCreateModalWithContext
+      openDealCreateModal: openDealCreateModalWithContext,
+      openDeal360,
+      openVisitDetail
     });
     customer360ModuleInitialized = true;
   }
@@ -238,17 +412,20 @@ async function ensureDeal360Module() {
 }
 
 async function ensureVisitsModule() {
-  await ensureDeal360Module();
   if (!visitsModulePromise) {
     visitsModulePromise = import("./modules/visits.js");
   }
   const module = await visitsModulePromise;
   if (!visitsModuleInitialized) {
     module.setVisitsDeps({
-      buildVisitListHtml,
-      attachVisitListListeners,
       stageAccentVar,
-      openVisitDetail,
+      avatarColor,
+      repAvatarHtml,
+      setStatus,
+      openVoiceNoteDialog,
+      openMapPicker: openMapPickerLazy,
+      openDeal360,
+      loadMyTasks,
       attachOnBehalfOfField
     });
     visitsModuleInitialized = true;
@@ -325,6 +502,18 @@ function openVisitEditModal(...args) {
 function closeVisitEditModal(...args) {
   void ensureVisitsModule()
     .then((module) => module.closeVisitEditModal(...args))
+    .catch(handleLazyModuleError);
+}
+
+function openVisitDetail(...args) {
+  void ensureVisitsModule()
+    .then((module) => module.openVisitDetail(...args))
+    .catch(handleLazyModuleError);
+}
+
+function closeVisitDetailPanel(...args) {
+  void ensureVisitsModule()
+    .then((module) => module.closeVisitDetailPanel(...args))
     .catch(handleLazyModuleError);
 }
 
@@ -417,7 +606,10 @@ async function ensureDemoDataModule() {
       refreshHost: async () => {
         await Promise.all([loadMaster(), loadDeals(), loadVisits(), loadDashboard()]);
       },
-      gotoIntegrations: () => { navigateToSettingsPage("integrations"); switchView("settings"); }
+      gotoIntegrations: () => { navigateToSettingsPage("integrations"); switchView("settings"); },
+      refreshOnboarding: async () => {
+        await loadOnboardingWizardLazy();
+      }
     });
     demoDataInitialized = true;
   }
@@ -449,6 +641,56 @@ async function renderDemoDataBannerLazy() {
   } catch (error) {
     setStatus(error.message, true);
   }
+}
+
+function scheduleAdminChromeRefresh(options = {}) {
+  const delayMs = Number.isFinite(options.delayMs) ? Math.max(0, options.delayMs) : 1200;
+  if (adminChromeRefreshTimerId) {
+    window.clearTimeout(adminChromeRefreshTimerId);
+    adminChromeRefreshTimerId = null;
+  }
+  if (adminChromeRefreshIdleId != null && typeof window.cancelIdleCallback === "function") {
+    window.cancelIdleCallback(adminChromeRefreshIdleId);
+    adminChromeRefreshIdleId = null;
+  }
+
+  const run = async () => {
+    adminChromeRefreshTimerId = null;
+    adminChromeRefreshIdleId = null;
+    const isAdmin = state.user?.role === "ADMIN";
+    const isTrialAdmin = isAdmin && state.user?.subscription?.status === "TRIALING";
+
+    if (!isTrialAdmin) {
+      const banner = qs("#demo-data-banner");
+      if (banner) {
+        banner.hidden = true;
+        banner.innerHTML = "";
+      }
+    } else {
+      await loadDemoDataStatusLazy();
+      await renderDemoDataBannerLazy();
+    }
+
+    if (isAdmin) {
+      await loadOnboardingWizardLazy();
+    }
+  };
+
+  const scheduleTimer = () => {
+    adminChromeRefreshTimerId = window.setTimeout(() => {
+      void run();
+    }, delayMs);
+  };
+
+  if (delayMs === 0) {
+    requestAnimationFrame(() => { void run(); });
+    return;
+  }
+  if (typeof window.requestIdleCallback === "function") {
+    adminChromeRefreshIdleId = window.requestIdleCallback(scheduleTimer, { timeout: delayMs });
+    return;
+  }
+  requestAnimationFrame(scheduleTimer);
 }
 
 // Allowed CRM target fields per entity type. Must stay in sync with
@@ -964,9 +1206,7 @@ async function loginWithPasskey() {
       paintRepHubFull();
     }
     hideAppLoading();
-    await loadDemoDataStatusLazy();
-    await renderDemoDataBannerLazy();
-    void loadOnboardingWizardLazy();
+    scheduleAdminChromeRefresh();
     startIdleWatch();
   } catch (err) {
     if (err.name === "NotAllowedError") {
@@ -1014,7 +1254,7 @@ qs("#oauth-passkey-btn")?.addEventListener("click", loginWithPasskey);
   } else if (onSimpleViewRoute) {
     switchView(onSimpleViewRoute);
     if (onSimpleViewRoute === "repHub") paintRepHubFull();
-    if (onSimpleViewRoute === "dashboard") await loadOnboardingWizardLazy();
+    if (onSimpleViewRoute === "dashboard") scheduleAdminChromeRefresh({ delayMs: 250 });
     if (onSimpleViewRoute === "superAdmin" && window._loadSuperAdmin) window._loadSuperAdmin();
   } else {
     window.history.replaceState({ view: "repHub" }, "", "/task");
@@ -1022,8 +1262,7 @@ qs("#oauth-passkey-btn")?.addEventListener("click", loginWithPasskey);
     paintRepHubFull();
   }
   hideAppLoading();
-  await loadDemoDataStatusLazy();
-  await renderDemoDataBannerLazy();
+  scheduleAdminChromeRefresh();
 })();
 // Handle platform Connect redirect-backs (?xxx_connected=1 or ?xxx_error=…)
 // Stash params before app loads; act on them once the shell is ready.
@@ -1880,7 +2119,7 @@ function openMasterDataImportModal(entity) {
   });
 }
 
-function renderMasterData(paymentTerms) {
+function renderMasterData(paymentTerms = []) {
   installMasterPageSizeDelegation();
   const termOptions = paymentTerms
     .map((term) => `<option value="${term.id}">${escHtml(term.code)} - ${escHtml(term.name)}</option>`)
@@ -1909,16 +2148,9 @@ function renderMasterData(paymentTerms) {
     </div>` : (canManageMaster && entityLocked(id)) ? `
     <span class="muted small" style="margin-left:var(--sp-2)" title="Manage by API is ON — UI actions disabled in Settings.">🔒 API-managed (read-only)</span>` : "";
 
-  views.master.innerHTML = `
-    <div class="master-outer">
-    <div class="master-tabs">
-      <button class="master-page-btn ${state.masterPage === "customers" ? "active-master-btn" : ""}" data-page="customers">${icon('building')} Customers</button>
-      <button class="master-page-btn ${state.masterPage === "items" ? "active-master-btn" : ""}" data-page="items">${icon('box')} Items</button>
-      <button class="master-page-btn ${state.masterPage === "payment-terms" ? "active-master-btn" : ""}" data-page="payment-terms">${icon('card')} Payment Terms</button>
-      <button class="master-page-btn ${state.masterPage === "customer-groups" ? "active-master-btn" : ""}" data-page="customer-groups">${icon('folder')} Customer Groups</button>
-    </div>
-
-    <section class="card" ${state.masterPage !== "payment-terms" ? 'style="display:none"' : ""}>
+  const activeMasterPage = state.masterPage || "customers";
+  const renderPaymentTermsSection = () => `
+    <section class="card">
       <div style="display:flex;align-items:center;margin-bottom:var(--sp-4)">
         <h3 class="section-title" style="margin:0">Payment Terms</h3>
         ${importBtns("payment-terms")}
@@ -1948,7 +2180,9 @@ function renderMasterData(paymentTerms) {
       <div id="pt-pagination"></div>
       ${isAdmin ? `<div id="pt-bulk-toolbar" class="cust-bulk-toolbar" style="display:none"></div>` : ""}
     </section>
-    <section class="card" ${state.masterPage !== "customers" ? 'style="display:none"' : ""} id="customers-section">
+  `;
+  const renderCustomersSection = () => `
+    <section class="card" id="customers-section">
       <div style="display:flex;align-items:center;margin-bottom:var(--sp-4)">
         <h3 class="section-title" style="margin:0">Customers</h3>
         ${importBtns("customers")}
@@ -1956,7 +2190,9 @@ function renderMasterData(paymentTerms) {
       </div>
       <div id="cust-list-mount"></div>
     </section>
-    <section class="card" ${state.masterPage !== "items" ? 'style="display:none"' : ""}>
+  `;
+  const renderItemsSection = () => `
+    <section class="card">
       <div style="display:flex;align-items:center;margin-bottom:var(--sp-4)">
         <h3 class="section-title" style="margin:0">Items</h3>
         ${importBtns("items")}
@@ -1993,7 +2229,9 @@ function renderMasterData(paymentTerms) {
       <div class="list" id="item-list"></div>
       <div id="item-pagination"></div>
     </section>
-    <section class="card" ${state.masterPage !== "customer-groups" ? 'style="display:none"' : ""}>
+  `;
+  const renderCustomerGroupsSection = () => `
+    <section class="card">
       <div style="display:flex;align-items:center;margin-bottom:var(--sp-4)">
         <h3 class="section-title" style="margin:0">Customer Groups</h3>
         ${importBtns("customer-groups")}
@@ -2015,10 +2253,30 @@ function renderMasterData(paymentTerms) {
       <div class="list" id="cg-list-body"></div>
       <div id="cg-pagination"></div>
     </section>
+  `;
+  const masterSectionHtml = activeMasterPage === "payment-terms"
+    ? renderPaymentTermsSection()
+    : activeMasterPage === "items"
+      ? renderItemsSection()
+      : activeMasterPage === "customer-groups"
+        ? renderCustomerGroupsSection()
+        : renderCustomersSection();
+
+  views.master.innerHTML = `
+    <div class="master-outer">
+    <div class="master-tabs">
+      <button class="master-page-btn ${activeMasterPage === "customers" ? "active-master-btn" : ""}" data-page="customers">${icon('building')} Customers</button>
+      <button class="master-page-btn ${activeMasterPage === "items" ? "active-master-btn" : ""}" data-page="items">${icon('box')} Items</button>
+      <button class="master-page-btn ${activeMasterPage === "payment-terms" ? "active-master-btn" : ""}" data-page="payment-terms">${icon('card')} Payment Terms</button>
+      <button class="master-page-btn ${activeMasterPage === "customer-groups" ? "active-master-btn" : ""}" data-page="customer-groups">${icon('folder')} Customer Groups</button>
+    </div>
+    ${masterSectionHtml}
     </div>
   `;
 
-  const custMount = views.master.querySelector("#cust-list-mount");
+  const custMount = activeMasterPage === "customers"
+    ? views.master.querySelector("#cust-list-mount")
+    : null;
   if (!state.cache.masterRenderers) state.cache.masterRenderers = {};
   state.cache.masterRenderers.customerTermOptions = termOptions;
   if (custMount) renderCustomerListSection(custMount, termOptions);
@@ -2068,7 +2326,7 @@ function renderMasterData(paymentTerms) {
   };
   if (!state.cache.masterRenderers) state.cache.masterRenderers = {};
   state.cache.masterRenderers.paymentTerm = renderPaymentTermsList;
-  renderPaymentTermsList();
+  if (activeMasterPage === "payment-terms") renderPaymentTermsList();
 
   // ── Items list (paginated) ──────────────────────────────────────────────
   const itemDefsActive = itemFieldDefinitions.filter((d) => d.isActive);
@@ -2076,7 +2334,7 @@ function renderMasterData(paymentTerms) {
     const listEl = qs("#item-list");
     const pagEl  = qs("#item-pagination");
     if (!listEl || !pagEl) return;
-    const all = state.cache.items.filter((it) => matchesCustomFieldFilters(it, itemDefsActive, state.itemCustomFieldFilters));
+    const all = (state.cache.items || []).filter((it) => matchesCustomFieldFilters(it, itemDefsActive, state.itemCustomFieldFilters));
     const ps = getMasterPageSize("item");
     const totalPages = Math.max(1, Math.ceil(all.length / (ps === Infinity ? Math.max(1, all.length) : ps)));
     state.itemListPage = Math.min(Math.max(1, state.itemListPage || 1), totalPages);
@@ -2114,7 +2372,7 @@ function renderMasterData(paymentTerms) {
   };
   if (!state.cache.masterRenderers) state.cache.masterRenderers = {};
   state.cache.masterRenderers.item = renderItemsList;
-  renderItemsList();
+  if (activeMasterPage === "items") renderItemsList();
 
   // ── Customer Groups list (paginated) ────────────────────────────────────
   const renderCustomerGroupsList = () => {
@@ -2159,12 +2417,19 @@ function renderMasterData(paymentTerms) {
     });
   };
   state.cache.masterRenderers.customerGroup = renderCustomerGroupsList;
-  renderCustomerGroupsList();
+  if (activeMasterPage === "customer-groups") renderCustomerGroupsList();
 
   views.master.querySelectorAll(".master-page-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", async () => {
       navigateToMasterPage(btn.dataset.page);
-      renderMasterData(state.cache.paymentTerms);
+      setStatus("Loading…");
+      try {
+        await loadMaster(btn.dataset.page);
+      } catch (err) {
+        setStatus(err.message || "Failed to load master data.", true);
+      } finally {
+        setStatus("");
+      }
     });
   });
 
@@ -2243,7 +2508,7 @@ function renderMasterData(paymentTerms) {
     });
   });
 
-  qs("#payment-term-form").addEventListener("submit", async (event) => {
+  qs("#payment-term-form")?.addEventListener("submit", async (event) => {
     if (state.masterPage !== "payment-terms") return;
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
@@ -2346,7 +2611,7 @@ function renderMasterData(paymentTerms) {
     updatePaymentTermBulkToolbar();
   }
 
-  qs("#item-form").addEventListener("submit", async (event) => {
+  qs("#item-form")?.addEventListener("submit", async (event) => {
     if (state.masterPage !== "items") return;
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
@@ -3602,523 +3867,8 @@ function openCheckOutModal(visitId, customerName) {
 // ── legacy stubs (kept so repHub nav wiring still calls something) ─────────────
 function paintRepHubFull() { loadMyTasks().catch(e => setStatus(e.message, true)); }
 
-function visitActionLabel(v) {
-  if (v.status === "CHECKED_IN") return "Check-out";
-  if (v.status === "PLANNED") return "Check-in";
-  return "Done";
-}
-
-function buildVisitListHtml(visits, q, status) {
-  const statusLabel  = { PLANNED: "Planned", CHECKED_IN: "Active", CHECKED_OUT: "Completed" };
-  const visitTypeLabel = { PLANNED: "Scheduled", UNPLANNED: "Drop-in" };
-  const statusCls   = { PLANNED: "", CHECKED_IN: "chip-primary", CHECKED_OUT: "chip-success" };
-  const statusOrder = { CHECKED_IN: 0, PLANNED: 1, CHECKED_OUT: 2 };
-  const filtered = (q
-    ? visits.filter(v =>
-        v.customer?.name?.toLowerCase().includes(q) ||
-        v.rep?.fullName?.toLowerCase().includes(q) ||
-        v.objective?.toLowerCase().includes(q) ||
-        v.result?.toLowerCase().includes(q)
-      )
-    : visits
-  ).slice().sort((a, b) => (statusOrder[a.status] ?? 1) - (statusOrder[b.status] ?? 1));
-
-  if (!filtered.length) return `
-    <div class="empty-state">
-      <svg class="empty-icon-svg" width="40" height="40" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
-      <div><strong>${q || status ? "No visits match your filters" : "No visits yet"}</strong><p>${q || status ? "Try adjusting the search or status filter." : "Add planned or drop-in visits to get started."}</p></div>
-    </div>`;
-
-  return `<div class="vp-list">${filtered.map(v => {
-    const isOwn = v.rep?.id === state.user?.id;
-    return `
-    <div class="vp-card status-${v.status}" data-visit-id="${v.id}">
-      <div class="vp-card-status-bar"></div>
-      <div class="vp-card-body">
-        <div class="vp-card-top">
-          <div class="vp-card-customer">${escHtml(v.customer?.name || "—")}</div>
-          <div class="vp-card-chips">
-            ${v.visitNo ? `<span class="chip chip--visitno">${escHtml(v.visitNo)}</span>` : ""}
-            <span class="chip ${statusCls[v.status]}">${statusLabel[v.status] || v.status}</span>
-          </div>
-        </div>
-        <div class="vp-card-meta">
-          <div class="vp-card-rep">
-            <span class="vp-rep-avatar" style="${v.rep?.avatarUrl ? "overflow:hidden" : "background:" + avatarColor(v.rep?.fullName || "")}">${repAvatarHtml(v.rep?.fullName || "", v.rep?.avatarUrl)}</span>
-            <span class="vp-rep-name">${escHtml(v.rep?.fullName || "—")}${isOwn ? " (me)" : ""}</span>
-          </div>
-          <span class="vp-card-date">
-            <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-            ${asDate(v.plannedAt)}
-          </span>
-          ${v.deal ? `<span class="vp-deal-link muted">Deal: ${escHtml(v.deal.name || v.deal.id)}</span>` : ""}
-        </div>
-        ${v.objective ? `<div class="vp-card-objective">${escHtml(v.objective)}</div>` : ""}
-        ${v.result ? `<div class="vp-card-result"><svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>${escHtml(v.result)}</div>` : ""}
-        <div class="vp-card-actions">
-          <button type="button" class="ghost voice-note-btn vp-icon-btn" data-entity-type="VISIT" data-entity-id="${v.id}" title="Voice note">
-            <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-          </button>
-          ${isOwn && v.status !== "CHECKED_OUT" ? `
-            <button type="button" class="visit-action ${v.status === "CHECKED_IN" ? "btn-success" : ""}" data-visit-id="${v.id}" data-visit-status="${v.status}">
-              ${v.status === "PLANNED"
-                ? `<svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> Check In`
-                : `<svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg> Check Out`
-              }
-            </button>
-          ` : ""}
-        </div>
-      </div>
-    </div>`;
-  }).join("")}</div>`;
-}
-
-function attachVisitListListeners(container) {
-  // Click on card body (not on buttons) → open detail panel
-  container.querySelectorAll(".vp-card").forEach((card) => {
-    card.addEventListener("click", (e) => {
-      if (e.target.closest("button")) return;
-      const id = card.dataset.visitId;
-      if (id) openVisitDetail(id);
-    });
-  });
-
-  container.querySelectorAll(".voice-note-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const card = btn.closest(".vp-card");
-      const label = card?.querySelector(".vp-card-customer")?.textContent?.trim() || "";
-      void openVoiceNoteDialog(btn.dataset.entityType, btn.dataset.entityId, label);
-    });
-  });
-
-  container.querySelectorAll(".visit-action").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const id = btn.dataset.visitId;
-      const status = btn.dataset.visitStatus;
-      try {
-        if (status === "PLANNED") {
-          await api(`/visits/${id}/checkin`, {
-            method: "POST",
-            body: { lat: 13.7563, lng: 100.5018, selfieUrl: "r2://demo/selfie.jpg" }
-          });
-          setStatus("Checked in.");
-        } else if (status === "CHECKED_IN") {
-          const result = window.prompt("Visit outcome / result:", "");
-          if (result === null) return;
-          await api(`/visits/${id}/checkout`, {
-            method: "POST",
-            body: { lat: 13.7564, lng: 100.5019, result: result || "Completed." }
-          });
-          setStatus("Visit completed.");
-        }
-        await loadVisits();
-      } catch (error) {
-        setStatus(error.message, true);
-      }
-    });
-  });
-}
-
-// ── Visit Detail Panel ────────────────────────────────────────────────────────
-
 const visitDetailPanel = qs("#visit-detail-panel");
 const visitDetailBody  = qs("#visit-detail-body");
-
-qs("#visit-detail-close")?.addEventListener("click", closeVisitDetailPanel);
-
-function openVisitDetailPanel() {
-  // Close other panels first (notif, settings)
-  if (notifPanel && !notifPanel.hidden)    { notifPanel.hidden = true; notifPanel.classList.remove("open"); }
-  if (settingsPanel && !settingsPanel.hidden) { settingsPanel.hidden = true; settingsPanel.classList.remove("open"); }
-  if (!visitDetailPanel) return;
-  visitDetailPanel.hidden = false;
-  requestAnimationFrame(() => visitDetailPanel.classList.add("open"));
-  if (panelBackdrop) {
-    panelBackdrop.hidden = false;
-    requestAnimationFrame(() => panelBackdrop.classList.add("open"));
-  }
-}
-
-function closeVisitDetailPanel() {
-  if (!visitDetailPanel) return;
-  visitDetailPanel.classList.remove("open");
-  visitDetailPanel.addEventListener("transitionend", () => { visitDetailPanel.hidden = true; }, { once: true });
-  if (panelBackdrop) {
-    panelBackdrop.classList.remove("open");
-    panelBackdrop.addEventListener("transitionend", () => { panelBackdrop.hidden = true; }, { once: true });
-  }
-}
-
-async function openVisitDetail(visitId) {
-  if (!visitDetailBody) return;
-  visitDetailBody.innerHTML = `<div class="vd-loading">Loading…</div>`;
-  openVisitDetailPanel();
-
-  try {
-    const [visit, changelogs] = await Promise.all([
-      api(`/visits/${visitId}`),
-      api(`/changelogs?entityType=VISIT&entityId=${visitId}&limit=50`).catch(() => null)
-    ]);
-    renderVisitDetailContent(visit, changelogs);
-  } catch (err) {
-    visitDetailBody.innerHTML = `<div class="vd-loading" style="color:var(--danger-text,red)">${escHtml(err.message)}</div>`;
-  }
-}
-
-function fmtDuration(ms) {
-  if (ms == null || isNaN(ms)) return "—";
-  const totalSec = Math.floor(Math.abs(ms) / 1000);
-  const h = Math.floor(totalSec / 3600);
-  const m = Math.floor((totalSec % 3600) / 60);
-  const s = totalSec % 60;
-  const pad = n => String(n).padStart(2, "0");
-  return `${pad(h)}:${pad(m)}:${pad(s)}`;
-}
-
-function fmtDiffLabel(ms) {
-  if (ms == null || isNaN(ms)) return null;
-  const totalSec = Math.floor(Math.abs(ms) / 1000);
-  const h = Math.floor(totalSec / 3600);
-  const m = Math.floor((totalSec % 3600) / 60);
-  const parts = [];
-  if (h > 0) parts.push(`${h}h`);
-  if (m > 0 || h === 0) parts.push(`${m}m`);
-  const label = parts.join(" ");
-  if (Math.abs(ms) < 60000) return { cls: "ontime", text: "On time" };
-  return ms < 0
-    ? { cls: "early", text: `${label} early` }
-    : { cls: "late",  text: `${label} late` };
-}
-
-function renderVisitDetailContent(visit, changelogs) {
-  if (!visitDetailBody) return;
-
-  const statusLabelMap = { PLANNED: "Planned", CHECKED_IN: "Active", CHECKED_OUT: "Completed" };
-  const statusClsMap   = { PLANNED: "planned", CHECKED_IN: "active", CHECKED_OUT: "done" };
-  const visitTypeLabelMap = { PLANNED: "Scheduled", UNPLANNED: "Drop-in" };
-
-  const plannedAt  = visit.plannedAt  ? new Date(visit.plannedAt)  : null;
-  const checkInAt  = visit.checkInAt  ? new Date(visit.checkInAt)  : null;
-  const checkOutAt = visit.checkOutAt ? new Date(visit.checkOutAt) : null;
-
-  const plannedVsActualMs = (plannedAt && checkInAt) ? (checkInAt - plannedAt) : null;
-  const durationMs        = (checkInAt && checkOutAt) ? (checkOutAt - checkInAt) : null;
-  const diffInfo = fmtDiffLabel(plannedVsActualMs);
-
-  // ── Hero ────────────────────────────────────────────────────────────────────
-  const isOwnVisit = visit.rep?.id === state.user?.id;
-  const canEdit = isOwnVisit && visit.status === "PLANNED";
-  const heroHtml = `
-    <div class="vd-hero">
-      <div class="vd-hero-top">
-        <div class="vd-hero-customer">${escHtml(visit.customer?.name || "—")}</div>
-        ${canEdit ? `<button type="button" class="ghost small vd-edit-btn" data-visit-id="${visit.id}" title="Edit visit">
-          <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-          Edit
-        </button>` : ""}
-      </div>
-      <div class="vd-hero-meta">
-        ${visit.visitNo ? `<span class="vd-hero-visitno">${escHtml(visit.visitNo)}</span>` : ""}
-        <span class="vd-status-badge ${statusClsMap[visit.status] || "planned"}">${statusLabelMap[visit.status] || visit.status}</span>
-        <span class="vd-hero-badge">${visitTypeLabelMap[visit.visitType] || visit.visitType}</span>
-        <span class="vd-hero-rep">
-          <span class="vd-hero-rep-avatar" style="${visit.rep?.avatarUrl ? "overflow:hidden" : "background:" + avatarColor(visit.rep?.fullName || "")}">${repAvatarHtml(visit.rep?.fullName || "", visit.rep?.avatarUrl)}</span>
-          ${escHtml(visit.rep?.fullName || "—")}
-        </span>
-      </div>
-    </div>`;
-
-  // ── Customer Detail ──────────────────────────────────────────────────────────
-  const c = visit.customer || {};
-  const addr = c.addresses?.[0];
-  const addrLine = addr
-    ? [addr.addressLine1, addr.district, addr.province, addr.country].filter(Boolean).join(", ")
-    : null;
-  const customerHtml = `
-    <div class="vd-section">
-      <p class="vd-section-title">${icon('building')} Customer</p>
-      <div class="vd-detail-rows">
-        <div class="vd-detail-row"><span class="vd-detail-row-label">Code</span><span class="vd-detail-row-value">${escHtml(c.customerCode || "—")}</span></div>
-        <div class="vd-detail-row"><span class="vd-detail-row-label">Type</span><span class="vd-detail-row-value">${escHtml(c.customerType || "—")}</span></div>
-        ${addrLine ? `<div class="vd-detail-row"><span class="vd-detail-row-label">Address</span><span class="vd-detail-row-value">${escHtml(addrLine)}</span></div>` : ""}
-        ${c.taxId ? `<div class="vd-detail-row"><span class="vd-detail-row-label">Tax ID</span><span class="vd-detail-row-value">${escHtml(c.taxId)}</span></div>` : ""}
-      </div>
-    </div>`;
-
-  // ── Deal ────────────────────────────────────────────────────────────────────
-  const dealHtml = visit.deal ? `
-    <div class="vd-section">
-      <p class="vd-section-title">${icon('handshake')} Related Deal</p>
-      <div class="vd-deal-card">
-        <div class="vd-deal-no">${escHtml(visit.deal.dealNo)}</div>
-        <div class="vd-deal-name">${escHtml(visit.deal.dealName)}</div>
-        ${visit.deal.stage ? `<div class="vd-deal-stage">${escHtml(visit.deal.stage.stageName)}</div>` : ""}
-      </div>
-    </div>` : "";
-
-  // ── Timing ──────────────────────────────────────────────────────────────────
-  const timingHtml = `
-    <div class="vd-section">
-      <p class="vd-section-title">${icon('bell')} Timing</p>
-      <div class="vd-timing-grid">
-        <div class="vd-timing-card">
-          <div class="vd-timing-card-label">Planned</div>
-          <div class="vd-timing-card-value ${plannedAt ? "" : "muted"}">${plannedAt ? asDate(plannedAt) : "—"}</div>
-        </div>
-        <div class="vd-timing-card ${checkInAt ? "" : ""}">
-          <div class="vd-timing-card-label">Check-in</div>
-          <div class="vd-timing-card-value ${checkInAt ? "" : "muted"}">${checkInAt ? asDate(checkInAt) : "—"}</div>
-        </div>
-        <div class="vd-timing-card ${checkOutAt ? "" : ""}">
-          <div class="vd-timing-card-label">Check-out</div>
-          <div class="vd-timing-card-value ${checkOutAt ? "" : "muted"}">${checkOutAt ? asDate(checkOutAt) : "—"}</div>
-        </div>
-        <div class="vd-timing-card ${durationMs == null ? "" : durationMs < (state.cache.visitConfig?.minVisitDurationMinutes ?? 15) * 60 * 1000 ? "vd-timing-card--danger" : "vd-timing-card--success"}">
-          <div class="vd-timing-card-label">Meeting Duration</div>
-          <div class="vd-timing-card-value ${durationMs != null ? "" : "muted"}">${durationMs != null ? fmtDuration(durationMs) : "—"}</div>
-        </div>
-      </div>
-      ${diffInfo ? `
-        <div class="vd-detail-rows" style="margin-top:var(--sp-1)">
-          <div class="vd-detail-row">
-            <span class="vd-detail-row-label">Planned vs Actual</span>
-            <span class="vd-detail-row-value">
-              <span class="vd-diff-pill ${diffInfo.cls}">${escHtml(diffInfo.text)}</span>
-              ${plannedVsActualMs != null ? `<span style="font-size:0.75rem;color:var(--muted-color);margin-left:6px">(${fmtDuration(plannedVsActualMs)} ${plannedVsActualMs < 0 ? "before" : "after"} plan)</span>` : ""}
-            </span>
-          </div>
-        </div>` : ""}
-    </div>`;
-
-  // ── Expected Result ──────────────────────────────────────────────────────────
-  const objectiveHtml = `
-    <div class="vd-section">
-      <p class="vd-section-title">${icon('target')} Expected Result</p>
-      <div class="vd-result-block ${visit.objective ? "" : "empty"}">${visit.objective ? escHtml(visit.objective) : "No objective recorded."}</div>
-    </div>`;
-
-  // ── Actual Result ────────────────────────────────────────────────────────────
-  const resultHtml = `
-    <div class="vd-section">
-      <p class="vd-section-title">${icon('checkCircle')} Actual Result</p>
-      <div class="vd-result-block ${visit.result ? "" : "empty"}">${visit.result ? escHtml(visit.result) : "No result recorded yet."}</div>
-    </div>`;
-
-  // ── Location ─────────────────────────────────────────────────────────────────
-  // Prefer check-in coords → planned coords → customer coords → customer address text
-  const lat = visit.checkInLat ?? visit.siteLat ?? visit.customer?.siteLat ?? null;
-  const lng = visit.checkInLng ?? visit.siteLng ?? visit.customer?.siteLng ?? null;
-  const custAddr = visit.customer?.addresses?.[0];
-  const addrText = custAddr
-    ? [custAddr.addressLine1, custAddr.district, custAddr.province, custAddr.country].filter(Boolean).join(", ")
-    : null;
-
-  let locationHtml = "";
-  if (lat != null && lng != null) {
-    const apiKey = state.googleMapsApiKey;
-    const dirUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
-    const mapHtml = apiKey
-      ? `<img class="vd-map-img" loading="lazy"
-            src="https://maps.googleapis.com/maps/api/staticmap?center=${lat},${lng}&zoom=15&size=600x240&scale=2&markers=color:red%7C${lat},${lng}&key=${encodeURIComponent(apiKey)}"
-            alt="Visit location map" />`
-      : `<div class="vd-map-fallback">${icon('location')} ${lat.toFixed(5)}, ${lng.toFixed(5)}</div>`;
-    locationHtml = `
-      <div class="vd-section">
-        <p class="vd-section-title">${icon('location')} Location</p>
-        ${mapHtml}
-        <a class="vd-directions-btn" href="${dirUrl}" target="_blank" rel="noopener">
-          Get Directions
-        </a>
-      </div>`;
-  } else if (addrText) {
-    const dirUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(addrText)}`;
-    locationHtml = `
-      <div class="vd-section">
-        <p class="vd-section-title">${icon('location')} Location</p>
-        <div class="vd-map-fallback">${icon('location')} ${escHtml(addrText)}</div>
-        <a class="vd-directions-btn" href="${dirUrl}" target="_blank" rel="noopener">
-          Get Directions
-        </a>
-      </div>`;
-  }
-
-  // ── Changelog ───────────────────────────────────────────────────────────────
-  let changelogHtml;
-  if (changelogs === null) {
-    changelogHtml = `<div class="vd-section"><p class="vd-section-title">Change History</p><div class="vd-cl-restricted">Not available for your role.</div></div>`;
-  } else {
-    const actionLabelMap = { CREATE: "Visit Created", UPDATE: "Visit Updated" };
-    const dotClsMap = { CREATE: "create" };
-    const workflowDotMap = { CHECK_IN: "checkin", CHECK_OUT: "checkout" };
-    const workflowLabelMap = { CHECK_IN: "Checked In", CHECK_OUT: "Checked Out" };
-
-    const clItems = (changelogs || []).map((cl) => {
-      const workflow = cl.contextJson?.workflow;
-      const dotCls = workflowDotMap[workflow] || dotClsMap[cl.action] || "";
-      const actionLabel = workflowLabelMap[workflow] || actionLabelMap[cl.action] || cl.action;
-      const when = cl.createdAt ? asDate(cl.createdAt) : "—";
-      const who = cl.changedBy?.fullName || "System";
-
-      // Build a diff table for UPDATE actions
-      let diffRows = "";
-      if (cl.action === "UPDATE" && cl.beforeJson && cl.afterJson) {
-        const before = cl.beforeJson;
-        const after  = cl.afterJson;
-        const tracked = ["status", "result", "objective", "checkInAt", "checkOutAt"];
-        const changed = tracked.filter((k) => String(before[k] ?? "") !== String(after[k] ?? ""));
-        if (changed.length) {
-          const fmtVal = (k, v) => {
-            if (v == null || v === "") return "(empty)";
-            if (k.endsWith("At")) return asDate(v);
-            return String(v);
-          };
-          diffRows = `<div class="vd-cl-changes">${changed.map((k) => `
-            <div class="vd-cl-change-row">
-              <span class="vd-cl-field">${escHtml(k)}</span>
-              <span class="vd-cl-from">${escHtml(fmtVal(k, before[k]))}</span>
-              <span class="vd-cl-arrow">→</span>
-              <span class="vd-cl-to">${escHtml(fmtVal(k, after[k]))}</span>
-            </div>`).join("")}</div>`;
-        }
-      }
-
-      return `
-        <div class="vd-cl-item">
-          <div class="vd-cl-dot ${dotCls}"></div>
-          <div class="vd-cl-content">
-            <div class="vd-cl-action">${escHtml(actionLabel)}</div>
-            <div class="vd-cl-meta">${escHtml(when)} &middot; ${escHtml(who)}</div>
-            ${diffRows}
-          </div>
-        </div>`;
-    }).join("");
-
-    changelogHtml = `
-      <div class="vd-section">
-        <p class="vd-section-title">${icon('pen')} Change History</p>
-        ${clItems ? `<div class="vd-changelog-list">${clItems}</div>` : `<div class="vd-cl-empty">No changes recorded.</div>`}
-      </div>`;
-  }
-
-  // ── Voice Notes ─────────────────────────────────────────────────────────────
-  let voiceNotesHtml = "";
-  if (visit.voiceNotes?.length) {
-    const items = visit.voiceNotes.map((vn) => {
-      const when = vn.transcript?.confirmedAt ? asDate(new Date(vn.transcript.confirmedAt)) : "—";
-      const summary = vn.transcript?.summaryText ? escHtml(vn.transcript.summaryText) : "";
-      return `
-        <div class="vd-vn-item" data-job-id="${escHtml(vn.id)}">
-          <div class="vd-vn-meta">${when}</div>
-          ${summary ? `<div class="vd-vn-summary">${summary}</div>` : ""}
-          <div class="vd-vn-player">
-            <audio class="vd-vn-audio" controls preload="none" style="width:100%">
-              Your browser does not support audio playback.
-            </audio>
-            <span class="vd-vn-loading muted small">Loading audio…</span>
-          </div>
-        </div>`;
-    }).join("");
-    voiceNotesHtml = `
-      <div class="vd-section">
-        <p class="vd-section-title">${icon('mic')} Voice Notes</p>
-        <div class="vd-vn-list">${items}</div>
-      </div>`;
-  }
-
-  visitDetailBody.innerHTML = heroHtml + customerHtml + dealHtml + timingHtml + objectiveHtml + resultHtml + locationHtml + voiceNotesHtml + changelogHtml;
-
-  // Wire edit button
-  visitDetailBody.querySelector(".vd-edit-btn")?.addEventListener("click", () => openVisitEditModal(visit));
-
-  // Load audio URLs for each voice note after rendering
-  if (visit.voiceNotes?.length) {
-    visitDetailBody.querySelectorAll(".vd-vn-item").forEach(async (item) => {
-      const jobId = item.dataset.jobId;
-      const audioEl = item.querySelector(".vd-vn-audio");
-      const loadingEl = item.querySelector(".vd-vn-loading");
-      try {
-        const { url } = await api(`/voice-notes/${jobId}/audio-url`);
-        if (url) {
-          audioEl.src = url;
-          loadingEl.hidden = true;
-        } else {
-          loadingEl.textContent = "Audio not available in dev mode.";
-        }
-      } catch {
-        loadingEl.textContent = "Could not load audio.";
-      }
-    });
-  }
-}
-
-
-
-(function initVisitEditModal() {
-  const modal = qs("#visit-edit-modal");
-  if (!modal) return;
-  modal.querySelectorAll("[data-visit-edit-close]").forEach(el => {
-    el.addEventListener("click", closeVisitEditModal);
-  });
-  qs("#visit-edit-pick-location-btn")?.addEventListener("click", () => {
-    const lat = parseFloat(qs("#visit-edit-site-lat")?.value) || null;
-    const lng = parseFloat(qs("#visit-edit-site-lng")?.value) || null;
-    void openMapPickerLazy(lat, lng, (pickedLat, pickedLng) => {
-      qs("#visit-edit-site-lat").value = pickedLat;
-      qs("#visit-edit-site-lng").value = pickedLng;
-      const preview = qs("#visit-edit-location-preview");
-      const text = qs("#visit-edit-location-text");
-      if (preview) preview.hidden = false;
-      if (text) text.textContent = `${pickedLat.toFixed(6)}, ${pickedLng.toFixed(6)}`;
-      const pickBtn = qs("#visit-edit-pick-location-btn");
-      if (pickBtn) pickBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> Change Location`;
-    });
-  });
-
-  qs("#visit-edit-location-clear")?.addEventListener("click", () => {
-    qs("#visit-edit-site-lat").value = "";
-    qs("#visit-edit-site-lng").value = "";
-    qs("#visit-edit-location-preview").hidden = true;
-    const pickBtn = qs("#visit-edit-pick-location-btn");
-    if (pickBtn) pickBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> Pick on Map`;
-  });
-
-  qs("#visit-edit-form")?.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const id = qs("#visit-edit-id").value;
-    const plannedAt = qs("#visit-edit-planned-at").value;
-    const objective = qs("#visit-edit-objective").value.trim();
-    const latRaw = qs("#visit-edit-site-lat").value;
-    const lngRaw = qs("#visit-edit-site-lng").value;
-    const body = {};
-    if (plannedAt) body.plannedAt = new Date(plannedAt).toISOString();
-    if (objective) body.objective = objective;
-    if (latRaw && lngRaw) {
-      body.siteLat = parseFloat(latRaw);
-      body.siteLng = parseFloat(lngRaw);
-    } else if (latRaw === "" && lngRaw === "") {
-      // Explicitly clear location if both were emptied
-      body.siteLat = null;
-      body.siteLng = null;
-    }
-    if (!Object.keys(body).length) { closeVisitEditModal(); return; }
-    const submitBtn = qs("#visit-edit-submit");
-    submitBtn.disabled = true;
-    submitBtn.textContent = "Saving…";
-    try {
-      await api(`/visits/${id}`, { method: "PATCH", body });
-      closeVisitEditModal();
-      setStatus("Visit updated.");
-      const reloadId = id;
-      await Promise.all([loadVisits(), loadMyTasks().catch(() => {})]);
-      if (visitDetailBody && !visitDetailPanel?.hidden) openVisitDetail(reloadId);
-    } catch (err) {
-      setStatus(err.message, true);
-    } finally {
-      submitBtn.disabled = false;
-      submitBtn.textContent = "Save Changes";
-    }
-  });
-})();
 
 // ── Deal Edit Modal ───────────────────────────────────────────────────────────
 
@@ -4585,382 +4335,24 @@ function renderSettings() {
     `;
     } // end else (prefs loaded)
   } else if (page === "company") {
-    const csec = (title, body) => `
-      <section class="card settings-collapsible" data-collapsed="true">
-        <button type="button" class="settings-section-toggle">
-          <span class="section-title">${title}</span>
-          <svg class="settings-collapse-icon" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
-        </button>
-        <div class="settings-section-body">${body}</div>
-      </section>`;
-
-    pageHtml = `
-      ${csec("Company Information", `
-        <form id="company-form" class="settings-form">
-          <div class="settings-field-row">
-            <label class="form-label">Company Name
-              <input class="form-input" name="name" value="${tenantInfo.name || ""}" placeholder="Company name" required />
-            </label>
-            <label class="form-label">Workspace Slug
-              <input class="form-input" value="${tenantInfo.slug || ""}" disabled />
-              <span class="form-hint">Slug cannot be changed after setup.</span>
-            </label>
-          </div>
-          ${isAdmin ? `<button type="submit">Save Company Info</button>` : `<div class="muted">Admin access required to edit.</div>`}
-        </form>
-      `)}
-
-      ${csec("Regional Settings", `
-        <form id="currency-form" class="settings-form">
-          <label class="form-label" style="max-width:300px">Currency
-            <select class="form-input" name="currency" style="text-transform:none;letter-spacing:0;font-weight:400">
-              ${CURRENCIES.map((c) => `<option value="${c.code}" ${getActiveCurrency() === c.code ? "selected" : ""}>${c.label}</option>`).join("")}
-            </select>
-          </label>
-          <button type="submit">Save Currency</button>
-        </form>
-        <p class="muted" style="margin:var(--sp-2) 0 0;font-size:0.8rem">Affects all money fields across Deals, Dashboard, KPI, and Visits.</p>
-        ${isAdmin ? `
-        <form id="timezone-form" class="settings-form" style="margin-top:var(--sp-4)">
-          <label class="form-label" style="max-width:340px">Tenant Timezone
-            <select class="form-input" name="timezone" style="text-transform:none;letter-spacing:0;font-weight:400">
-              ${[
-                ["Pacific/Midway","-11:00 Midway Island"],["Pacific/Honolulu","-10:00 Hawaii"],["America/Anchorage","-09:00 Alaska"],
-                ["America/Los_Angeles","-08:00 Pacific Time (US)"],["America/Denver","-07:00 Mountain Time (US)"],
-                ["America/Chicago","-06:00 Central Time (US)"],["America/New_York","-05:00 Eastern Time (US)"],
-                ["America/Bogota","-05:00 Bogota, Lima"],["America/Caracas","-04:30 Caracas"],
-                ["America/Halifax","-04:00 Atlantic Time (Canada)"],["America/Sao_Paulo","-03:00 Brasilia"],
-                ["Atlantic/Azores","-01:00 Azores"],["UTC","±00:00 UTC"],["Europe/London","+00:00 London, Dublin"],
-                ["Europe/Paris","+01:00 Paris, Madrid, Rome"],["Europe/Helsinki","+02:00 Helsinki, Kiev"],
-                ["Europe/Moscow","+03:00 Moscow"],["Asia/Tehran","+03:30 Tehran"],
-                ["Asia/Dubai","+04:00 Dubai, Abu Dhabi"],["Asia/Kabul","+04:30 Kabul"],
-                ["Asia/Karachi","+05:00 Karachi, Islamabad"],["Asia/Kolkata","+05:30 Mumbai, Kolkata"],
-                ["Asia/Kathmandu","+05:45 Kathmandu"],["Asia/Dhaka","+06:00 Dhaka"],
-                ["Asia/Rangoon","+06:30 Yangon"],["Asia/Bangkok","+07:00 Bangkok, Hanoi, Jakarta"],
-                ["Asia/Ho_Chi_Minh","+07:00 Ho Chi Minh City"],["Asia/Singapore","+08:00 Singapore, Kuala Lumpur"],
-                ["Asia/Shanghai","+08:00 Beijing, Shanghai"],["Asia/Taipei","+08:00 Taipei"],
-                ["Asia/Manila","+08:00 Manila"],["Asia/Seoul","+09:00 Seoul"],
-                ["Asia/Tokyo","+09:00 Tokyo, Osaka"],["Australia/Adelaide","+09:30 Adelaide"],
-                ["Australia/Sydney","+10:00 Sydney, Melbourne"],["Pacific/Noumea","+11:00 New Caledonia"],
-                ["Pacific/Auckland","+12:00 Auckland"]
-              ].map(([tz, label]) => `<option value="${tz}" ${(tenantInfo.timezone || "Asia/Bangkok") === tz ? "selected" : ""}>${label}</option>`).join("")}
-            </select>
-            <span class="form-hint">Applied to all date/time calculations across the tenant.</span>
-          </label>
-          <button type="submit">Save Timezone</button>
-        </form>
-        ` : `<p class="muted" style="margin-top:var(--sp-4)">Timezone: <strong>${tenantInfo.timezone || "Asia/Bangkok"}</strong></p>`}
-      `)}
-
-      ${csec("Tax Configuration", isAdmin ? `
-        <form id="tax-form" class="settings-form">
-          <label class="settings-checkbox-label">
-            <input name="vatEnabled" type="checkbox" ${tax.vatEnabled ? "checked" : ""} />
-            VAT Enabled
-          </label>
-          <label class="form-label" style="max-width:200px">VAT Rate (%)
-            <input class="form-input" name="vatRatePercent" type="number" min="0" step="0.01" value="${tax.vatRatePercent}" required />
-          </label>
-          <button type="submit">Save Tax Config</button>
-        </form>
-      ` : `<div class="muted">Admin access required.</div>`)}
-
-      ${csec("Master Data — Manage by API", isAdmin ? `
-        <form id="master-api-lock-form" class="settings-form">
-          <p style="margin:0 0 var(--sp-3);font-size:0.83rem;color:var(--muted-color)">
-            When a toggle is ON, the corresponding master entity can only be changed through the sync API (X-Api-Key). UI actions (create / edit / delete / import) on that entity are disabled tenant-wide. Use this when an ERP is the authoritative source.
-          </p>
-          <label class="settings-checkbox-label">
-            <input name="manageCustomersByApi" type="checkbox" ${masterLock.manageCustomersByApi ? "checked" : ""} />
-            Manage <strong>Customer</strong> by API only
-          </label>
-          <label class="settings-checkbox-label">
-            <input name="manageItemsByApi" type="checkbox" ${masterLock.manageItemsByApi ? "checked" : ""} />
-            Manage <strong>Item</strong> by API only
-          </label>
-          <label class="settings-checkbox-label">
-            <input name="managePaymentTermsByApi" type="checkbox" ${masterLock.managePaymentTermsByApi ? "checked" : ""} />
-            Manage <strong>Payment Term</strong> by API only
-          </label>
-          <label class="settings-checkbox-label">
-            <input name="manageCustomerGroupsByApi" type="checkbox" ${masterLock.manageCustomerGroupsByApi ? "checked" : ""} />
-            Manage <strong>Customer Group</strong> by API only
-          </label>
-          <button type="submit">Save Master Data Lock</button>
-        </form>
-      ` : `<div class="muted">Admin access required.</div>`)}
-
-      ${csec("Visit Check-in Settings", isAdmin ? `
-        <form id="visit-config-form" class="settings-form">
-          <label class="form-label" style="max-width:260px">Max check-in distance (metres)
-            <input class="form-input" name="checkInMaxDistanceM" type="number" min="100" max="100000" step="100"
-              value="${visitCfg.checkInMaxDistanceM}" required />
-            <span class="form-hint">How close the rep must be to the visit location to check in. Default: 1000 m.</span>
-          </label>
-          <label class="form-label" style="max-width:260px">Minimum visit duration (minutes)
-            <input class="form-input" name="minVisitDurationMinutes" type="number" min="1" max="480" step="1"
-              value="${visitCfg.minVisitDurationMinutes ?? 15}" required />
-            <span class="form-hint">Visits shorter than this are highlighted in red on the visit detail. Default: 15 min.</span>
-          </label>
-          <button type="submit">Save Visit Settings</button>
-        </form>
-      ` : `<div class="muted">Admin access required.</div>`)}
-
-      ${(function() {
-        const sub = state.user?.subscription;
-        if (!sub || !isAdmin) return "";
-        const isTrialing = sub.status === "TRIALING";
-        const daysLeft = sub.trialEndsAt
-          ? Math.max(0, Math.ceil((new Date(sub.trialEndsAt) - Date.now()) / 86400000))
-          : null;
-        const trialEndDate = sub.trialEndsAt
-          ? new Date(sub.trialEndsAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })
-          : "—";
-        const statusBadge = {
-          TRIALING:  `<span class="badge badge--warning">Trial</span>`,
-          ACTIVE:    `<span class="badge badge--success">Active</span>`,
-          PAST_DUE:  `<span class="badge badge--danger">Past Due</span>`,
-          CANCELED:  `<span class="badge badge--danger">Canceled</span>`,
-        }[sub.status] ?? `<span class="badge">${escHtml(sub.status)}</span>`;
-
-        return csec("Subscription & Trial", `
-          <div class="settings-form">
-            <div class="settings-field-row" style="gap:var(--sp-6);flex-wrap:wrap">
-              <div><span class="form-label" style="margin:0">Status</span><div style="margin-top:var(--sp-1)">${statusBadge}</div></div>
-              <div><span class="form-label" style="margin:0">Seats</span><div style="margin-top:var(--sp-1);font-weight:600">${sub.seatCount}</div></div>
-              ${isTrialing ? `<div><span class="form-label" style="margin:0">Trial ends</span><div style="margin-top:var(--sp-1);font-weight:600">${escHtml(trialEndDate)} ${daysLeft !== null ? `<span class="muted">(${daysLeft}d left)</span>` : ""}</div></div>` : ""}
-            </div>
-            ${isTrialing ? `
-            <div style="margin-top:var(--sp-5);border-top:1px solid var(--border);padding-top:var(--sp-4)">
-              <p class="form-label" style="margin:0 0 var(--sp-2)">Extend trial</p>
-              <p style="font-size:0.83rem;color:var(--muted-color);margin:0 0 var(--sp-3)">Add days to the trial period (e.g. for ongoing negotiations). Max 90 days per extension, 180 days from today total.</p>
-              <form id="extend-trial-form" style="display:flex;align-items:center;gap:var(--sp-3);flex-wrap:wrap">
-                <input class="form-input" id="extend-trial-days" name="days" type="number" min="1" max="90" step="1" value="14" style="width:100px" required />
-                <button type="submit">Extend trial</button>
-              </form>
-              <p id="extend-trial-msg" style="margin:var(--sp-2) 0 0;font-size:0.83rem;min-height:1.2em"></p>
-            </div>
-            ` : ""}
-            ${!isTrialing && sub.status !== "ACTIVE" ? `
-            <p style="margin-top:var(--sp-3);font-size:0.83rem;color:var(--muted-color)">To reactivate, please contact support or complete a new subscription checkout.</p>
-            ` : ""}
-          </div>
-        `);
-      })()}
-    `;
+    pageHtml = settingsAdminModule
+      ? settingsAdminModule.renderCompanySettingsPage({
+          isAdmin,
+          tax,
+          visitCfg,
+          masterLock,
+          tenantInfo
+        })
+      : `<section class="card"><div class="muted">Loading company settings...</div></section>`;
   } else if (page === "branding") {
-    pageHtml = `
-      <section class="card">
-        <h3 class="section-title">${icon('palette')} Logo &amp; Colors</h3>
-        ${isAdmin ? `
-        <form id="branding-form" class="settings-form">
-          <div class="brand-assets-row">
-            <div class="brand-asset-col">
-              <p class="form-label" style="margin-bottom:var(--sp-2)">Company Logo</p>
-              <div class="logo-upload-area" id="logo-upload-area">
-                <img src="${branding.logoUrl || "/default-brand.svg"}" class="logo-upload-preview" id="logo-preview" alt="Current logo" />
-                <span class="logo-upload-change-hint">${branding.logoUrl ? "Click to change" : "Default · click to upload"}</span>
-                <input type="file" name="logoFile" id="logo-file-input" accept="image/*" class="logo-file-input" />
-              </div>
-            </div>
-            <div class="brand-asset-col brand-asset-col--favicon">
-              <p class="form-label" style="margin-bottom:var(--sp-2)">Favicon</p>
-              <div class="logo-upload-area favicon-upload-area" id="favicon-upload-area">
-                <img src="${branding.faviconUrl || "/default-brand.svg"}" class="favicon-upload-preview" id="favicon-preview" alt="Current favicon" />
-                <span class="logo-upload-change-hint">${branding.faviconUrl ? "Click to change" : "Default · click to upload"}</span>
-                <input type="file" name="faviconFile" id="favicon-file-input" accept="image/png,image/x-icon,image/svg+xml,image/jpeg" class="logo-file-input" />
-              </div>
-            </div>
-          </div>
-          <div class="settings-field-row">
-            <label class="form-label" style="flex:1">App Name
-              <input class="form-input" name="appName" placeholder="ThinkCRM" value="${branding.appName || ""}" maxlength="64" style="margin-top:var(--sp-1)" />
-              <span class="muted" style="font-size:0.78rem">Displayed next to the logo in the sidebar. Leave blank to use the default.</span>
-            </label>
-          </div>
-          <div class="theme-editor">
-            <div class="theme-preset-picker">
-              <label class="theme-editor-label">Theme</label>
-              <div class="theme-preset-trigger" data-role="preset-trigger">
-                <span class="theme-preset-swatches" data-role="preset-swatches">
-                  ${(findPresetBySlug(activePresetSlug)?.swatches || [brandingTokens.background, branding.secondaryColor || "#0f172a", branding.primaryColor || "#7c3aed"])
-                    .map((c) => `<span style="background:${escHtml(c)}"></span>`).join("")}
-                </span>
-                <span class="theme-preset-name" data-role="preset-name">${escHtml(findPresetBySlug(activePresetSlug)?.name || "Custom Theme")}</span>
-                ${icon("chevronDown", 14, "theme-preset-chevron")}
-                <select class="theme-preset-select" name="themePreset" aria-label="Theme preset">
-                  <option value="custom"${activePresetSlug === "custom" ? " selected" : ""}>Custom Theme</option>
-                  ${PRESETS.map((p) => `<option value="${p.slug}"${activePresetSlug === p.slug ? " selected" : ""}>${escHtml(p.name)}</option>`).join("")}
-                </select>
-              </div>
-            </div>
-
-            <div class="theme-editor-label">Colors</div>
-
-            <details class="theme-group" open>
-              <summary class="theme-group-summary">
-                <span class="theme-group-swatches">
-                  <span style="background:${escHtml(brandingTokens.background)}"></span>
-                  <span style="background:${escHtml(brandingTokens.text)}"></span>
-                  <span style="background:${escHtml(branding.primaryColor || "#7c3aed")}"></span>
-                </span>
-                <span class="theme-group-title">Primary</span>
-                ${icon("chevronDown", 14, "theme-group-chevron")}
-              </summary>
-              ${renderThemeRow("Background", "tokenBackground", brandingTokens.background)}
-              ${renderThemeRow("Text", "tokenText", brandingTokens.text)}
-              ${renderThemeRow("Primary", "primaryColor", branding.primaryColor || "#7c3aed", { required: true })}
-            </details>
-
-            <details class="theme-group" open>
-              <summary class="theme-group-summary">
-                <span class="theme-group-swatches">
-                  <span style="background:${escHtml(branding.secondaryColor || "#0f172a")}"></span>
-                  <span style="background:${escHtml(brandingTokens.accent)}"></span>
-                </span>
-                <span class="theme-group-title">Secondary</span>
-                ${icon("chevronDown", 14, "theme-group-chevron")}
-              </summary>
-              ${renderThemeRow("Secondary", "secondaryColor", branding.secondaryColor || "#0f172a", { required: true })}
-              ${renderThemeRow("Accent", "tokenAccent", brandingTokens.accent)}
-            </details>
-
-            <details class="theme-group">
-              <summary class="theme-group-summary">
-                <span class="theme-group-swatches">
-                  <span style="background:${escHtml(brandingTokens.card)}"></span>
-                  <span style="background:${escHtml(brandingTokens.border)}"></span>
-                </span>
-                <span class="theme-group-title">Advanced</span>
-                ${icon("chevronDown", 14, "theme-group-chevron")}
-              </summary>
-              ${renderThemeRow("Card", "tokenCard", brandingTokens.card)}
-              ${renderThemeRow("Muted", "tokenMuted", brandingTokens.muted)}
-              ${renderThemeRow("Border", "tokenBorder", brandingTokens.border)}
-              ${renderThemeRow("Destructive", "tokenDestructive", brandingTokens.destructive)}
-            </details>
-
-            <div class="theme-radius">
-              <label class="theme-editor-label">Radius</label>
-              <div class="theme-radius-controls">
-                <input type="range" name="tokenRadiusRange" min="0" max="24" step="1" value="${brandingTokens.radius}" />
-                <input type="number" name="tokenRadius" min="0" max="32" step="1" value="${brandingTokens.radius}" class="form-input theme-radius-number" />
-                <span class="muted">px</span>
-              </div>
-            </div>
-
-            <div class="theme-shadow">
-              <label class="theme-editor-label">Shadow</label>
-              <select class="form-input theme-shadow-select" name="tokenShadow">
-                <option value="NONE"${brandingTokens.shadow === "NONE" ? " selected" : ""}>None</option>
-                <option value="SM"${brandingTokens.shadow === "SM" ? " selected" : ""}>Small</option>
-                <option value="MD"${brandingTokens.shadow === "MD" ? " selected" : ""}>Medium</option>
-                <option value="LG"${brandingTokens.shadow === "LG" ? " selected" : ""}>Large</option>
-                <option value="XL"${brandingTokens.shadow === "XL" ? " selected" : ""}>Extra Large</option>
-              </select>
-            </div>
-          </div>
-          <div class="gradient-section">
-            <div class="accent-mode-row">
-              <label class="theme-editor-label">Accent Style</label>
-              <div class="segmented" role="tablist" aria-label="Accent style">
-                <button type="button" class="segmented-item" role="tab" data-value="false" aria-selected="${!branding.accentGradientEnabled}">Solid</button>
-                <button type="button" class="segmented-item" role="tab" data-value="true" aria-selected="${!!branding.accentGradientEnabled}">Gradient</button>
-              </div>
-              <input type="hidden" name="accentGradientEnabled" value="${branding.accentGradientEnabled ? "true" : "false"}" />
-              <span class="muted" style="font-size:0.78rem">Gradient blends primary into a second color on buttons, login hero, and KPI highlights.</span>
-            </div>
-            <div class="gradient-controls" ${branding.accentGradientEnabled ? "" : 'style="display:none"'}>
-              <div class="settings-field-row">
-                <label class="form-label">Gradient End Color
-                  <div class="color-input-row">
-                    <input type="color" name="accentGradientColorPicker" value="${branding.accentGradientColor || "#ec4899"}" class="color-swatch" />
-                    <input class="form-input" name="accentGradientColor" placeholder="#ec4899" value="${branding.accentGradientColor || "#ec4899"}" style="flex:1" />
-                  </div>
-                </label>
-                <label class="form-label">Angle
-                  <div class="color-input-row">
-                    <input type="range" name="accentGradientAngleRange" min="0" max="360" step="5" value="${branding.accentGradientAngle ?? 135}" style="flex:1" />
-                    <input type="number" name="accentGradientAngle" min="0" max="360" step="5" value="${branding.accentGradientAngle ?? 135}" class="form-input" style="width:70px" />
-                    <span class="muted" style="font-size:0.78rem">°</span>
-                  </div>
-                </label>
-              </div>
-              <div class="gradient-preview" aria-label="Gradient preview">
-                <div class="gradient-preview-swatch" id="gradient-preview-swatch"
-                     style="background:linear-gradient(${branding.accentGradientAngle ?? 135}deg, ${branding.primaryColor || "#7c3aed"}, ${branding.accentGradientColor || "#ec4899"})">
-                  <span>Preview</span>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div class="settings-field-row">
-            <label class="form-label">Default Theme
-              <select class="form-input" name="themeMode" style="margin-top:var(--sp-1)">
-                <option value="LIGHT"${(branding.themeMode || "LIGHT") === "LIGHT" ? ' selected' : ''}>Light</option>
-                <option value="DARK"${branding.themeMode === "DARK" ? ' selected' : ''}>Dark</option>
-              </select>
-              <span class="muted" style="font-size:0.78rem">Tenant-wide default. Users can override with the theme toggle.</span>
-            </label>
-          </div>
-          <details class="theme-group" style="margin-top:var(--sp-4)">
-            <summary class="theme-editor-label" style="cursor:pointer">Login Screen</summary>
-            <p class="muted" style="font-size:0.82rem;margin:var(--sp-2) 0 var(--sp-3)">Customize what users see at your sign-in page.</p>
-            <div class="brand-asset-col" style="max-width:280px;margin-bottom:var(--sp-4)">
-              <p class="form-label" style="margin-bottom:var(--sp-2)">Login Hero Image</p>
-              <div class="logo-upload-area" id="login-hero-upload-area">
-                <img src="${branding.loginHeroImageUrl || "/default-brand.svg"}" class="logo-upload-preview" id="login-hero-preview" alt="Login hero preview" />
-                <span class="logo-upload-change-hint">${branding.loginHeroImageUrl ? "Click to change" : "Optional · click to upload"}</span>
-                <input type="file" name="loginHeroFile" id="login-hero-file-input" accept="image/*" class="logo-file-input" />
-              </div>
-              <span class="muted" style="font-size:0.78rem">Used as the background on the left hero panel. A dark overlay is applied for readability.</span>
-            </div>
-            <div class="settings-field-row">
-              <label class="form-label" style="flex:1">Tagline Headline
-                <input class="form-input" name="loginTaglineHeadline" maxlength="120" placeholder="Sales intelligence." value="${escHtml(branding.loginTaglineHeadline || "")}" style="margin-top:var(--sp-1)" />
-              </label>
-              <label class="form-label" style="flex:1">Tagline Subtext
-                <input class="form-input" name="loginTaglineSubtext" maxlength="160" placeholder="Field-first." value="${escHtml(branding.loginTaglineSubtext || "")}" style="margin-top:var(--sp-1)" />
-              </label>
-            </div>
-            <div class="settings-field-row">
-              <label class="form-label" style="flex:1">Welcome Message (above the form)
-                <input class="form-input" name="loginWelcomeMessage" maxlength="200" placeholder="Welcome to your portal" value="${escHtml(branding.loginWelcomeMessage || "")}" style="margin-top:var(--sp-1)" />
-              </label>
-            </div>
-            <div class="settings-field-row">
-              <label class="form-label" style="flex:1">Footer Text
-                <input class="form-input" name="loginFooterText" maxlength="200" placeholder="© 2026 Acme Co. All rights reserved." value="${escHtml(branding.loginFooterText || "")}" style="margin-top:var(--sp-1)" />
-              </label>
-            </div>
-            <div class="settings-field-row">
-              <label class="form-label" style="flex:1">Terms URL
-                <input class="form-input" name="loginTermsUrl" type="url" maxlength="300" placeholder="https://acme.com/terms" value="${escHtml(branding.loginTermsUrl || "")}" style="margin-top:var(--sp-1)" />
-              </label>
-              <label class="form-label" style="flex:1">Privacy URL
-                <input class="form-input" name="loginPrivacyUrl" type="url" maxlength="300" placeholder="https://acme.com/privacy" value="${escHtml(branding.loginPrivacyUrl || "")}" style="margin-top:var(--sp-1)" />
-              </label>
-              <label class="form-label" style="flex:1">Support Email
-                <input class="form-input" name="loginSupportEmail" type="email" maxlength="200" placeholder="support@acme.com" value="${escHtml(branding.loginSupportEmail || "")}" style="margin-top:var(--sp-1)" />
-              </label>
-            </div>
-            <div class="settings-field-row" style="flex-direction:column;gap:var(--sp-2);align-items:flex-start">
-              <span class="form-label">Visible Sign-in Options</span>
-              <label class="form-label" style="flex-direction:row;align-items:center;gap:var(--sp-2)"><input type="checkbox" name="loginShowSignup" ${branding.loginShowSignup !== false ? "checked" : ""} /> Show "Create a new workspace" link</label>
-              <label class="form-label" style="flex-direction:row;align-items:center;gap:var(--sp-2)"><input type="checkbox" name="loginShowGoogle" ${branding.loginShowGoogle !== false ? "checked" : ""} /> Show Google sign-in</label>
-              <label class="form-label" style="flex-direction:row;align-items:center;gap:var(--sp-2)"><input type="checkbox" name="loginShowMicrosoft" ${branding.loginShowMicrosoft !== false ? "checked" : ""} /> Show Microsoft 365 sign-in</label>
-              <label class="form-label" style="flex-direction:row;align-items:center;gap:var(--sp-2)"><input type="checkbox" name="loginShowPasskey" ${branding.loginShowPasskey !== false ? "checked" : ""} /> Show Passkey sign-in</label>
-            </div>
-          </details>
-          <div style="display:flex;gap:var(--sp-2);align-items:center;flex-wrap:wrap">
-            <button type="submit">Save Branding</button>
-            <button type="button" id="branding-restore-default" class="ghost">Restore to Default</button>
-          </div>
-        </form>
-        ` : `<div class="muted">Admin access required.</div>`}
-      </section>
-
-    `;
+    pageHtml = settingsAdminModule
+      ? settingsAdminModule.renderBrandingSettingsPage({
+          branding,
+          brandingTokens,
+          activePresetSlug,
+          isAdmin
+        })
+      : `<section class="card"><div class="muted">Loading branding settings...</div></section>`;
   } else if (page === "team-structure") {
     const roleColorCls = { DIRECTOR: "org-role--director", MANAGER: "org-role--manager", SUPERVISOR: "org-role--supervisor", REP: "org-role--rep" };
 
@@ -6334,7 +5726,9 @@ function renderSettings() {
     }
   });
 
-  void initPasskeySectionLazy();
+  if (page === "my-profile" && window.PublicKeyCredential) {
+    void initPasskeySectionLazy();
+  }
 
   // ── Notification channel help panel toggle ───────────────────
   views.settings.querySelectorAll(".notif-channel-help-btn").forEach(btn => {
@@ -7902,148 +7296,9 @@ function renderSettings() {
     btn.addEventListener("click", () => { void openAdminPasskeyModalLazy(btn.dataset.uid, btn.dataset.name); });
   });
 
-  // ── Company listeners ─────────────────────────────────────────
-  // Collapsible section toggles (company page)
-  qs(".settings-content")?.querySelectorAll(".settings-section-toggle").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const section = btn.closest(".settings-collapsible");
-      if (!section) return;
-      if (section.hasAttribute("data-collapsed")) {
-        section.removeAttribute("data-collapsed");
-      } else {
-        section.setAttribute("data-collapsed", "true");
-      }
-    });
-  });
-
-  qs("#company-form")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const name = new FormData(event.currentTarget).get("name");
-    try {
-      await api(`/tenants/${tenantId}`, { method: "PATCH", body: { name } });
-      setStatus("Company name updated.");
-      await loadSettings();
-    } catch (error) {
-      setStatus(error.message, true);
-    }
-  });
-
-  qs("#currency-form")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const code = new FormData(event.currentTarget).get("currency");
-    if (!code) return;
-    localStorage.setItem(CURRENCY_STORAGE_KEY, code);
-    try {
-      const updatedBranding = { ...state.cache.branding, currency: code };
-      await api(`/tenants/${tenantId}/branding`, { method: "PUT", body: updatedBranding });
-      state.cache.branding = updatedBranding;
-      setStatus(`Currency set to ${code}.`);
-      if (state.cache.kanban) renderDeals(state.cache.kanban);
-      if (state.cache.dashboard) renderDashboard(state.cache.dashboard);
-    } catch {
-      setStatus(`Currency set to ${code} (saved locally).`);
-      if (state.cache.kanban) renderDeals(state.cache.kanban);
-    }
-  });
-
-  qs("#timezone-form")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const timezone = new FormData(event.currentTarget).get("timezone");
-    if (!timezone) return;
-    try {
-      const name = state.cache.tenantInfo?.name;
-      await api(`/tenants/${tenantId}`, { method: "PATCH", body: { name, timezone } });
-      if (state.cache.tenantInfo) state.cache.tenantInfo.timezone = timezone;
-      setStatus(`Timezone set to ${timezone}.`);
-    } catch (error) {
-      setStatus(error.message, true);
-    }
-  });
-
-  qs("#tax-form")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const fd = new FormData(event.currentTarget);
-    try {
-      await api(`/tenants/${tenantId}/tax-config`, {
-        method: "PUT",
-        body: { vatEnabled: fd.get("vatEnabled") === "on", vatRatePercent: Number(fd.get("vatRatePercent")) }
-      });
-      setStatus("Tax config saved.");
-      await loadSettings();
-    } catch (error) {
-      setStatus(error.message, true);
-    }
-  });
-
-  qs("#extend-trial-form")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const msgEl = qs("#extend-trial-msg");
-    const btn   = event.currentTarget.querySelector("button[type='submit']");
-    const days  = parseInt(qs("#extend-trial-days")?.value || "0", 10);
-    if (!days || days < 1 || days > 90) {
-      msgEl.textContent = "Enter a number between 1 and 90.";
-      msgEl.style.color = "var(--danger)";
-      return;
-    }
-    btn.disabled = true;
-    try {
-      const res = await api(`/tenants/${tenantId}/extend-trial`, { method: "PATCH", body: { days } });
-      msgEl.textContent = res.message;
-      msgEl.style.color = "var(--success)";
-      // Update in-memory subscription so the banner refreshes
-      if (state.user?.subscription) {
-        state.user.subscription.trialEndsAt = res.trialEndsAt;
-        showTrialBanner(state.user.subscription);
-      }
-      await loadSettings();
-    } catch (error) {
-      msgEl.textContent = error.message;
-      msgEl.style.color = "var(--danger)";
-    } finally {
-      btn.disabled = false;
-    }
-  });
-
-  qs("#master-api-lock-form")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const fd = new FormData(event.currentTarget);
-    try {
-      await api(`/tenants/${tenantId}/master-api-lock`, {
-        method: "PUT",
-        body: {
-          manageCustomersByApi:   !!fd.get("manageCustomersByApi"),
-          manageItemsByApi:       !!fd.get("manageItemsByApi"),
-          managePaymentTermsByApi: !!fd.get("managePaymentTermsByApi"),
-          manageCustomerGroupsByApi: !!fd.get("manageCustomerGroupsByApi")
-        }
-      });
-      setStatus("Master data lock saved.");
-      await loadSettings();
-      // Refresh session so other pages hide their mutation buttons immediately
-      try { state.user = await api("/auth/me"); } catch (_) {}
-      await loadMaster();
-    } catch (error) {
-      setStatus(error.message, true);
-    }
-  });
-
-  qs("#visit-config-form")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const fd = new FormData(event.currentTarget);
-    try {
-      await api(`/tenants/${tenantId}/visit-config`, {
-        method: "PUT",
-        body: {
-          checkInMaxDistanceM: Number(fd.get("checkInMaxDistanceM")),
-          minVisitDurationMinutes: Number(fd.get("minVisitDurationMinutes"))
-        }
-      });
-      setStatus("Visit settings saved.");
-      await loadSettings();
-    } catch (error) {
-      setStatus(error.message, true);
-    }
-  });
+  if (page === "company") {
+    settingsAdminModule?.wireCompanySettingsPage({ tenantId });
+  }
 
   const kpiForm = qs("#kpi-form");
   if (kpiForm) {
@@ -8291,440 +7546,9 @@ function renderSettings() {
     });
   });
 
-  // ── Branding listeners ────────────────────────────────────────
-  ["primary", "secondary"].forEach((key) => {
-    const picker = views.settings.querySelector(`[name="${key}ColorPicker"]`);
-    const text   = views.settings.querySelector(`[name="${key}Color"]`);
-    if (picker && text) {
-      picker.addEventListener("input", () => { text.value = picker.value; });
-      text.addEventListener("input", () => { if (/^#[0-9a-fA-F]{6}$/.test(text.value)) picker.value = text.value; });
-    }
-  });
-
-  // ── Logo upload area interactions ────────────────────────────
-  const logoArea = qs("#logo-upload-area");
-  const logoFileInput = qs("#logo-file-input");
-  if (logoArea && logoFileInput) {
-    logoArea.addEventListener("click", () => logoFileInput.click());
-    logoArea.addEventListener("dragover", (e) => { e.preventDefault(); logoArea.classList.add("drag-over"); });
-    logoArea.addEventListener("dragleave", () => logoArea.classList.remove("drag-over"));
-    logoArea.addEventListener("drop", (e) => {
-      e.preventDefault();
-      logoArea.classList.remove("drag-over");
-      const file = e.dataTransfer?.files?.[0];
-      if (file) {
-        const dt = new DataTransfer();
-        dt.items.add(file);
-        logoFileInput.files = dt.files;
-        logoFileInput.dispatchEvent(new Event("change"));
-      }
-    });
-    logoFileInput.addEventListener("change", () => {
-      const file = logoFileInput.files?.[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const preview = qs("#logo-preview");
-        if (preview) preview.src = e.target.result;
-        const hint = logoArea.querySelector(".logo-upload-change-hint");
-        if (hint) hint.textContent = "Click to change";
-      };
-      reader.readAsDataURL(file);
-    });
+  if (page === "branding") {
+    settingsAdminModule?.wireBrandingSettingsPage({ tenantId, tenantThemeMode, branding });
   }
-
-  // ── Favicon upload area interactions ─────────────────────────
-  const faviconArea = qs("#favicon-upload-area");
-  const faviconFileInput = qs("#favicon-file-input");
-  if (faviconArea && faviconFileInput) {
-    faviconArea.addEventListener("click", () => faviconFileInput.click());
-    faviconArea.addEventListener("dragover", (e) => { e.preventDefault(); faviconArea.classList.add("drag-over"); });
-    faviconArea.addEventListener("dragleave", () => faviconArea.classList.remove("drag-over"));
-    faviconArea.addEventListener("drop", (e) => {
-      e.preventDefault();
-      faviconArea.classList.remove("drag-over");
-      const file = e.dataTransfer?.files?.[0];
-      if (file) {
-        const dt = new DataTransfer();
-        dt.items.add(file);
-        faviconFileInput.files = dt.files;
-        faviconFileInput.dispatchEvent(new Event("change"));
-      }
-    });
-    faviconFileInput.addEventListener("change", () => {
-      const file = faviconFileInput.files?.[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const preview = qs("#favicon-preview");
-        if (preview) preview.src = e.target.result;
-        const hint = faviconArea.querySelector(".logo-upload-change-hint");
-        if (hint) hint.textContent = "Click to change";
-      };
-      reader.readAsDataURL(file);
-    });
-  }
-
-  // ── Login hero upload area interactions ──────────────────────
-  const heroArea = qs("#login-hero-upload-area");
-  const heroFileInput = qs("#login-hero-file-input");
-  if (heroArea && heroFileInput) {
-    heroArea.addEventListener("click", () => heroFileInput.click());
-    heroArea.addEventListener("dragover", (e) => { e.preventDefault(); heroArea.classList.add("drag-over"); });
-    heroArea.addEventListener("dragleave", () => heroArea.classList.remove("drag-over"));
-    heroArea.addEventListener("drop", (e) => {
-      e.preventDefault();
-      heroArea.classList.remove("drag-over");
-      const file = e.dataTransfer?.files?.[0];
-      if (file) {
-        const dt = new DataTransfer();
-        dt.items.add(file);
-        heroFileInput.files = dt.files;
-        heroFileInput.dispatchEvent(new Event("change"));
-      }
-    });
-    heroFileInput.addEventListener("change", () => {
-      const file = heroFileInput.files?.[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const preview = qs("#login-hero-preview");
-        if (preview) preview.src = e.target.result;
-        const hint = heroArea.querySelector(".logo-upload-change-hint");
-        if (hint) hint.textContent = "Click to change";
-      };
-      reader.readAsDataURL(file);
-    });
-  }
-
-  qs('[name="primaryColorPicker"]')?.addEventListener("input", (e) => {
-    const hex = qs('[name="primaryColor"]');
-    if (hex) hex.value = e.target.value;
-  });
-  qs('[name="primaryColor"]')?.addEventListener("input", (e) => {
-    const picker = qs('[name="primaryColorPicker"]');
-    if (picker && /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(e.target.value)) picker.value = e.target.value;
-  });
-  qs('[name="secondaryColorPicker"]')?.addEventListener("input", (e) => {
-    const hex = qs('[name="secondaryColor"]');
-    if (hex) hex.value = e.target.value;
-  });
-  qs('[name="secondaryColor"]')?.addEventListener("input", (e) => {
-    const picker = qs('[name="secondaryColorPicker"]');
-    if (picker && /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(e.target.value)) picker.value = e.target.value;
-  });
-
-  // Gradient controls: segmented Solid/Gradient pill, sync picker↔text, live preview
-  const gradientHidden = qs('[name="accentGradientEnabled"]');
-  const gradientControls = document.querySelector(".gradient-controls");
-  const refreshGradientPreview = () => {
-    const swatch = qs("#gradient-preview-swatch");
-    if (!swatch) return;
-    const p = qs('[name="primaryColor"]')?.value || "#7c3aed";
-    const g = qs('[name="accentGradientColor"]')?.value || "#ec4899";
-    const a = qs('[name="accentGradientAngle"]')?.value || 135;
-    swatch.style.background = `linear-gradient(${a}deg, ${p}, ${g})`;
-  };
-  const segmentedItems = document.querySelectorAll(".accent-mode-row .segmented-item");
-  segmentedItems.forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const enabled = btn.dataset.value === "true";
-      segmentedItems.forEach((b) => b.setAttribute("aria-selected", String(b === btn)));
-      if (gradientHidden) gradientHidden.value = enabled ? "true" : "false";
-      if (gradientControls) gradientControls.style.display = enabled ? "" : "none";
-      if (typeof livePreview === "function") livePreview();
-    });
-  });
-  qs('[name="accentGradientColorPicker"]')?.addEventListener("input", (e) => {
-    const hex = qs('[name="accentGradientColor"]');
-    if (hex) hex.value = e.target.value;
-    refreshGradientPreview();
-  });
-  qs('[name="accentGradientColor"]')?.addEventListener("input", (e) => {
-    const picker = qs('[name="accentGradientColorPicker"]');
-    if (picker && /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(e.target.value)) picker.value = e.target.value;
-    refreshGradientPreview();
-  });
-  qs('[name="accentGradientAngleRange"]')?.addEventListener("input", (e) => {
-    const num = qs('[name="accentGradientAngle"]');
-    if (num) num.value = e.target.value;
-    refreshGradientPreview();
-  });
-  qs('[name="accentGradientAngle"]')?.addEventListener("input", (e) => {
-    const range = qs('[name="accentGradientAngleRange"]');
-    if (range) range.value = e.target.value;
-    refreshGradientPreview();
-  });
-  qs('[name="primaryColor"]')?.addEventListener("input", refreshGradientPreview);
-  qs('[name="primaryColorPicker"]')?.addEventListener("input", refreshGradientPreview);
-
-  // Full custom theme editor — wire picker/hex sync for all token rows, the
-  // radius range↔number pair, the shadow select, the preset selector, and a
-  // live preview that runs applyBrandingTheme() on every change so the whole
-  // app repaints as the admin tweaks values.
-  const THEME_TOKEN_INPUTS = [
-    "tokenBackground", "tokenText", "tokenAccent",
-    "tokenCard", "tokenMuted", "tokenBorder", "tokenDestructive"
-  ];
-  const BRAND_COLOR_INPUTS = ["primaryColor", "secondaryColor"];
-  const collectThemeDraft = () => {
-    const read = (n) => qs(`[name="${n}"]`)?.value || "";
-    return {
-      primaryColor:   read("primaryColor")   || "#7c3aed",
-      secondaryColor: read("secondaryColor") || "#0f172a",
-      themeTokens: {
-        background:  read("tokenBackground"),
-        text:        read("tokenText"),
-        accent:      read("tokenAccent"),
-        card:        read("tokenCard"),
-        muted:       read("tokenMuted"),
-        border:      read("tokenBorder"),
-        destructive: read("tokenDestructive"),
-        radius:      Number(read("tokenRadius")) || 12,
-        shadow:      read("tokenShadow") || "MD"
-      },
-      accentGradientEnabled: qs('[name="accentGradientEnabled"]')?.value === "true",
-      accentGradientColor:   read("accentGradientColor"),
-      accentGradientAngle:   Number(read("accentGradientAngle")) || 135,
-      themeMode:             read("themeMode") || "LIGHT",
-      appName:               branding.appName,
-      logoUrl:               branding.logoUrl,
-      faviconUrl:            branding.faviconUrl
-    };
-  };
-  const refreshPresetChrome = (slug) => {
-    const preset = findPresetBySlug(slug);
-    const nameEl = document.querySelector('[data-role="preset-name"]');
-    const swEl = document.querySelector('[data-role="preset-swatches"]');
-    if (nameEl) nameEl.textContent = preset?.name || "Custom Theme";
-    if (swEl) {
-      const swatches = preset?.swatches || (() => {
-        const d = collectThemeDraft();
-        return [d.themeTokens.background, d.secondaryColor, d.primaryColor];
-      })();
-      swEl.innerHTML = swatches.map((c) => `<span style="background:${escHtml(c)}"></span>`).join("");
-    }
-  };
-  const livePreview = () => {
-    applyBrandingTheme(collectThemeDraft());
-  };
-  const setPresetSelect = (slug) => {
-    const sel = qs('[name="themePreset"]');
-    if (sel && sel.value !== slug) sel.value = slug;
-    refreshPresetChrome(slug);
-  };
-  const markCustom = () => setPresetSelect("custom");
-
-  // Picker ↔ hex sync + live preview for every token row
-  [...THEME_TOKEN_INPUTS, ...BRAND_COLOR_INPUTS].forEach((n) => {
-    const picker = qs(`[name="${n}Picker"]`);
-    const hex = qs(`[name="${n}"]`);
-    picker?.addEventListener("input", (e) => {
-      if (hex) hex.value = e.target.value;
-      markCustom();
-      livePreview();
-    });
-    hex?.addEventListener("input", (e) => {
-      if (picker && /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(e.target.value)) picker.value = e.target.value;
-      markCustom();
-      livePreview();
-    });
-  });
-
-  // Radius range ↔ number
-  qs('[name="tokenRadiusRange"]')?.addEventListener("input", (e) => {
-    const num = qs('[name="tokenRadius"]');
-    if (num) num.value = e.target.value;
-    markCustom();
-    livePreview();
-  });
-  qs('[name="tokenRadius"]')?.addEventListener("input", (e) => {
-    const range = qs('[name="tokenRadiusRange"]');
-    if (range) range.value = e.target.value;
-    markCustom();
-    livePreview();
-  });
-  qs('[name="tokenShadow"]')?.addEventListener("change", () => {
-    markCustom();
-    livePreview();
-  });
-
-  // Preset selector — fill every input, then re-run the live preview
-  qs('[name="themePreset"]')?.addEventListener("change", (e) => {
-    const slug = e.target.value;
-    if (slug === "custom") { refreshPresetChrome("custom"); return; }
-    const preset = findPresetBySlug(slug);
-    if (!preset) return;
-    const set = (name, val) => {
-      const el = qs(`[name="${name}"]`);
-      if (el) el.value = val;
-      const picker = qs(`[name="${name}Picker"]`);
-      if (picker && typeof val === "string" && /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(val)) picker.value = val;
-    };
-    const t = preset.tokens;
-    set("primaryColor",   t.primaryColor);
-    set("secondaryColor", t.secondaryColor);
-    set("tokenBackground", t.background);
-    set("tokenText",       t.text);
-    set("tokenAccent",     t.accent);
-    set("tokenCard",       t.card);
-    set("tokenMuted",      t.muted);
-    set("tokenBorder",     t.border);
-    set("tokenDestructive", t.destructive);
-    const rN = qs('[name="tokenRadius"]'); if (rN) rN.value = t.radius;
-    const rR = qs('[name="tokenRadiusRange"]'); if (rR) rR.value = t.radius;
-    const sS = qs('[name="tokenShadow"]'); if (sS) sS.value = t.shadow;
-    refreshPresetChrome(slug);
-    livePreview();
-  });
-
-  qs("#branding-form")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const submitBtn = form.querySelector('button[type="submit"]');
-    const originalBtnText = submitBtn?.textContent;
-    if (submitBtn) {
-      submitBtn.disabled = true;
-      submitBtn.textContent = "Saving…";
-    }
-    try {
-      const fd = new FormData(form);
-      const logoFile = fd.get("logoFile");
-      if (logoFile instanceof File && logoFile.size > 0) {
-        const uploadFd = new FormData();
-        uploadFd.append("file", logoFile, logoFile.name);
-        try {
-          const uploadResult = await api(`/tenants/${tenantId}/branding/logo`, { method: "POST", body: uploadFd });
-          if (uploadResult?.logoUrl) fd.set("logoUrl", uploadResult.logoUrl);
-          const previewSrc = uploadResult?.logoDownloadUrl || uploadResult?.logoUrl;
-          if (previewSrc) { const p = qs("#logo-preview"); if (p) p.src = previewSrc; }
-        } catch (error) {
-          setStatus(`Logo upload failed: ${error.message}`, true);
-          return;
-        }
-      }
-      const faviconFile = fd.get("faviconFile");
-      if (faviconFile instanceof File && faviconFile.size > 0) {
-        const uploadFd = new FormData();
-        uploadFd.append("file", faviconFile, faviconFile.name);
-        try {
-          const uploadResult = await api(`/tenants/${tenantId}/branding/favicon`, { method: "POST", body: uploadFd });
-          if (uploadResult?.faviconUrl) fd.set("faviconUrl", uploadResult.faviconUrl);
-          const previewSrc = uploadResult?.faviconDownloadUrl || uploadResult?.faviconUrl;
-          if (previewSrc) { const p = qs("#favicon-preview"); if (p) p.src = previewSrc; }
-        } catch (error) {
-          setStatus(`Favicon upload failed: ${error.message}`, true);
-          return;
-        }
-      }
-      const loginHeroFile = fd.get("loginHeroFile");
-      if (loginHeroFile instanceof File && loginHeroFile.size > 0) {
-        const uploadFd = new FormData();
-        uploadFd.append("file", loginHeroFile, loginHeroFile.name);
-        try {
-          const uploadResult = await api(`/tenants/${tenantId}/branding/login-hero`, { method: "POST", body: uploadFd });
-          if (uploadResult?.loginHeroImageUrl) fd.set("loginHeroImageUrl", uploadResult.loginHeroImageUrl);
-          const previewSrc = uploadResult?.loginHeroDownloadUrl || uploadResult?.loginHeroImageUrl;
-          if (previewSrc) { const p = qs("#login-hero-preview"); if (p) p.src = previewSrc; }
-        } catch (error) {
-          setStatus(`Login hero upload failed: ${error.message}`, true);
-          return;
-        }
-      }
-      const payload = Object.fromEntries(fd.entries());
-      if (!payload.logoUrl) delete payload.logoUrl;
-      if (!payload.faviconUrl) delete payload.faviconUrl;
-      if (!payload.loginHeroImageUrl) delete payload.loginHeroImageUrl;
-      delete payload.logoFile;
-      delete payload.faviconFile;
-      delete payload.loginHeroFile;
-      delete payload.primaryColorPicker;
-      delete payload.secondaryColorPicker;
-      delete payload.accentGradientColorPicker;
-      delete payload.accentGradientAngleRange;
-      payload.accentGradientEnabled = fd.get("accentGradientEnabled") === "true" ? "true" : "false";
-      payload.loginShowSignup    = fd.get("loginShowSignup")    === "on" ? "true" : "false";
-      payload.loginShowGoogle    = fd.get("loginShowGoogle")    === "on" ? "true" : "false";
-      payload.loginShowMicrosoft = fd.get("loginShowMicrosoft") === "on" ? "true" : "false";
-      payload.loginShowPasskey   = fd.get("loginShowPasskey")   === "on" ? "true" : "false";
-
-      // Assemble themeTokens from the grouped editor fields, then strip the
-      // per-field entries and helper Picker/Range inputs from the payload.
-      payload.themeTokens = {
-        background:  fd.get("tokenBackground")  || undefined,
-        text:        fd.get("tokenText")        || undefined,
-        accent:      fd.get("tokenAccent")      || undefined,
-        card:        fd.get("tokenCard")        || undefined,
-        muted:       fd.get("tokenMuted")       || undefined,
-        border:      fd.get("tokenBorder")      || undefined,
-        destructive: fd.get("tokenDestructive") || undefined,
-        radius:      Number(fd.get("tokenRadius")) || 12,
-        shadow:      fd.get("tokenShadow")      || "MD"
-      };
-      [
-        "themePreset",
-        "tokenBackground", "tokenBackgroundPicker",
-        "tokenText",       "tokenTextPicker",
-        "tokenAccent",     "tokenAccentPicker",
-        "tokenCard",       "tokenCardPicker",
-        "tokenMuted",      "tokenMutedPicker",
-        "tokenBorder",     "tokenBorderPicker",
-        "tokenDestructive","tokenDestructivePicker",
-        "tokenRadius", "tokenRadiusRange", "tokenShadow"
-      ].forEach((k) => delete payload[k]);
-      try {
-        await api(`/tenants/${tenantId}/branding`, { method: "PUT", body: payload });
-        setStatus("Branding saved.");
-        await loadSettings();
-      } catch (error) {
-        setStatus(error.message, true);
-      }
-    } finally {
-      if (submitBtn) {
-        submitBtn.disabled = false;
-        submitBtn.textContent = originalBtnText || "Save Branding";
-      }
-    }
-  });
-
-  qs("#branding-restore-default")?.addEventListener("click", async (event) => {
-    const btn = event.currentTarget;
-    if (!confirm("Restore branding to defaults? App name, colors, gradient, theme mode, and login-screen customizations will be reset. Logo, favicon, and hero image will be kept.")) return;
-    btn.disabled = true;
-    const original = btn.textContent;
-    btn.textContent = "Restoring…";
-    try {
-      await api(`/tenants/${tenantId}/branding`, {
-        method: "PUT",
-        body: {
-          appName: "",
-          primaryColor: "#7c3aed",
-          secondaryColor: "#0f172a",
-          accentGradientEnabled: "false",
-          accentGradientColor: "#ec4899",
-          accentGradientAngle: 135,
-          themeMode: "LIGHT",
-          loginTaglineHeadline: "",
-          loginTaglineSubtext: "",
-          loginWelcomeMessage: "",
-          loginFooterText: "",
-          loginTermsUrl: "",
-          loginPrivacyUrl: "",
-          loginSupportEmail: "",
-          loginShowSignup: "true",
-          loginShowGoogle: "true",
-          loginShowMicrosoft: "true",
-          loginShowPasskey: "true"
-        }
-      });
-      setStatus("Branding restored to defaults.");
-      await loadSettings();
-    } catch (error) {
-      setStatus(error.message, true);
-      btn.disabled = false;
-      btn.textContent = original;
-    }
-  });
 
   qs("#theme-override-auto")?.addEventListener("click", () => {
     state.themeOverride = "AUTO";
@@ -9158,7 +7982,7 @@ function filteredCustomers() {
   const defs = getCustomFieldDefinitions("customers");
   const cfFilters = state.customerCustomFieldFilters || {};
   const groupFilter = state.customerGroupFilter || "";
-  return state.cache.customers.filter((c) => {
+  return (state.cache.customers || []).filter((c) => {
     if (q) {
       const matches =
         c.customerCode?.toLowerCase().includes(q) ||
@@ -9175,6 +7999,10 @@ function filteredCustomers() {
     }
     return matchesCustomFieldFilters(c, defs, cfFilters);
   });
+}
+
+function getCachedCustomerById(customerId) {
+  return (state.cache.customers || []).find((customer) => customer.id === customerId) || null;
 }
 
 function dealsForCustomer(customerId) {
@@ -9431,6 +8259,11 @@ function buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk
   const selected = state.customerSelectedIds || new Set();
   const pageIds = slice.map((c) => c.id);
   const allOnPageSelected = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
+  const ownerNameById = new Map((state.cache.allUsers || []).map((user) => [
+    user.id,
+    user.fullName || user.email || user.id
+  ]));
+  const currentUserOwnerName = state.user?.fullName || state.user?.email || null;
   const tableHtml = all.length === 0 && state.customerListQuery
     ? `<div class="cust-empty">No customers match "<strong>${escHtml(state.customerListQuery)}</strong>"</div>`
     : all.length === 0
@@ -9450,8 +8283,8 @@ function buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk
         <tbody>
           ${slice.map((c, i) => {
             const ownerName = c.owner?.fullName
-              || state.cache.allUsers?.find(u => u.id === c.ownerId)?.fullName
-              || (c.ownerId === state.user?.id ? state.user?.fullName : null);
+              || ownerNameById.get(c.ownerId)
+              || (c.ownerId === state.user?.id ? currentUserOwnerName : null);
             const isChecked = selected.has(c.id);
             return `
             <tr class="cust-row${isChecked ? " cust-row-selected" : ""}" data-id="${c.id}">
@@ -9461,12 +8294,12 @@ function buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk
               <td><button class="cust-name-btn" data-id="${c.id}" data-code="${escHtml(c.customerCode)}">${escHtml(c.name)}</button>${c.customerGroup ? ` <span class="cust-group-pill" title="Customer group">${escHtml(c.customerGroup.name)}</span>` : ""}${c.disabled ? ' <span class="cust-disabled-pill" title="Disabled — cannot be used for new deals/visits/quotations">Disabled</span>' : ""}</td>
               <td>${ownerName ? escHtml(ownerName) : '<span class="muted small">—</span>'}</td>
               <td>${c.contacts?.length
-                ? `<button class="cust-badge-contact cust-contacts-btn" data-id="${c.id}" data-contacts='${escHtml(JSON.stringify(c.contacts))}' title="View contacts"><svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>${c.contacts.length}</button>`
+                ? `<button class="cust-badge-contact cust-contacts-btn" data-id="${c.id}" title="View contacts"><svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>${c.contacts.length}</button>`
                 : '<span class="muted small">—</span>'}</td>
               <td><div class="cust-actions-cell">
                 <button class="cust-action-btn cust-360-btn" data-id="${c.id}" data-code="${escHtml(c.customerCode)}">360°</button>
                 ${!apiLocked && canReassign ? `<button class="cust-action-btn cust-reassign-btn" data-id="${c.id}" data-name="${escHtml(c.name)}" title="Reassign owner">Reassign</button>` : ""}
-                ${!apiLocked ? `<button class="cust-action-btn cust-edit-btn" data-id="${c.id}" data-customer='${escHtml(JSON.stringify({ id: c.id, customerCode: c.customerCode, name: c.name, customerType: c.customerType, taxId: c.taxId || "", defaultTermId: c.paymentTerm?.id || "", externalRef: c.externalRef || "", disabled: !!c.disabled, customerGroupId: c.customerGroup?.id || "" }))}'>Edit</button>` : ""}
+                ${!apiLocked ? `<button class="cust-action-btn cust-edit-btn" data-id="${c.id}">Edit</button>` : ""}
                 ${!apiLocked ? `<button class="cust-action-btn cust-toggle-btn" data-id="${c.id}" data-disabled="${!!c.disabled}">${c.disabled ? "Activate" : "Deactivate"}</button>` : ""}
                 ${!apiLocked && isAdmin ? `<button class="cust-action-btn cust-delete-btn danger" data-id="${c.id}" data-name="${escHtml(c.name)}">Delete</button>` : ""}
               </div></td>
@@ -9493,8 +8326,7 @@ function attachCustBodyListeners(container, totalPages, termOptions) {
   container.querySelectorAll(".cust-contacts-btn").forEach((btn) => {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
-      let contacts = [];
-      try { contacts = JSON.parse(btn.dataset.contacts || "[]"); } catch (_) {}
+      const contacts = getCachedCustomerById(btn.dataset.id)?.contacts || [];
       openContactsPopup(contacts);
     });
   });
@@ -9503,9 +8335,19 @@ function attachCustBodyListeners(container, totalPages, termOptions) {
   container.querySelectorAll(".cust-edit-btn").forEach((btn) => {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
-      let cust = {};
-      try { cust = JSON.parse(btn.dataset.customer || "{}"); } catch (_) {}
-      openEditCustomerModal(cust, termOptions);
+      const customer = getCachedCustomerById(btn.dataset.id);
+      if (!customer) return;
+      openEditCustomerModal({
+        id: customer.id,
+        customerCode: customer.customerCode,
+        name: customer.name,
+        customerType: customer.customerType,
+        taxId: customer.taxId || "",
+        defaultTermId: customer.paymentTerm?.id || customer.defaultTermId || "",
+        externalRef: customer.externalRef || "",
+        disabled: !!customer.disabled,
+        customerGroupId: customer.customerGroup?.id || ""
+      }, termOptions);
     });
   });
 
@@ -10998,40 +9840,116 @@ async function exportRows(baseName, rows, format) {
 }
 
 
-async function loadMaster() {
+async function loadMaster(page = state.masterPage || "customers", options = {}) {
+  const force = options.force ?? arguments.length === 0;
+  state.masterPage = page;
+  await ensureCustomFieldsModule();
   const scopeParam = state.customerScope !== "mine"
     ? `?scope=${encodeURIComponent(state.customerScope)}`
     : "";
-  const [
-    paymentTerms,
-    customers,
-    items,
-    customerGroups,
-    paymentTermCustomFields,
-    customerCustomFields,
-    itemCustomFields,
-    customerGroupCustomFields
-  ] = await Promise.all([
-    api("/payment-terms"),
-    api(`/customers${scopeParam}`),
-    api("/items"),
-    api("/customer-groups"),
-    api("/custom-fields/payment-term"),
-    api("/custom-fields/customer"),
-    api("/custom-fields/item"),
-    api("/custom-fields/customer-group")
-  ]);
-  state.cache.paymentTerms = paymentTerms;
-  state.cache.customers = customers;
-  state.cache.items = items;
-  state.cache.customerGroups = customerGroups;
-  state.cache.customFieldDefinitions = {
-    "payment-terms": paymentTermCustomFields,
-    customers: customerCustomFields,
-    items: itemCustomFields,
-    "customer-groups": customerGroupCustomFields
-  };
-  renderMasterData(paymentTerms);
+  const customFieldDefinitions = state.cache.customFieldDefinitions || {};
+  const needsPaymentTerms = force || !Array.isArray(state.cache.paymentTerms);
+  const needsCustomers = force || !Array.isArray(state.cache.customers) || state.cache.customerScopeLoaded !== state.customerScope;
+  const needsItems = force || !Array.isArray(state.cache.items);
+  const needsCustomerGroups = force || !Array.isArray(state.cache.customerGroups);
+  const needsPaymentTermFields = force || !Array.isArray(customFieldDefinitions["payment-terms"]);
+  const needsCustomerFields = force || !Array.isArray(customFieldDefinitions.customers);
+  const needsItemFields = force || !Array.isArray(customFieldDefinitions.items);
+  const needsCustomerGroupFields = force || !Array.isArray(customFieldDefinitions["customer-groups"]);
+  const requests = [];
+
+  if ((page === "customers" || page === "payment-terms") && needsPaymentTerms) {
+    requests.push(
+      api("/payment-terms").then((paymentTerms) => {
+        state.cache.paymentTerms = paymentTerms;
+      })
+    );
+  }
+  if ((page === "customers" || page === "payment-terms") && needsPaymentTermFields) {
+    requests.push(
+      api("/custom-fields/payment-term").then((paymentTermCustomFields) => {
+        state.cache.customFieldDefinitions = {
+          ...(state.cache.customFieldDefinitions || {}),
+          "payment-terms": paymentTermCustomFields
+        };
+      })
+    );
+  }
+
+  if (page === "customers" && needsCustomers) {
+    requests.push(
+      api(`/customers${scopeParam}`).then((customers) => {
+        state.cache.customers = customers;
+        state.cache.customerScopeLoaded = state.customerScope;
+      })
+    );
+  }
+  if (page === "customers" && needsCustomerGroups) {
+    requests.push(
+      api("/customer-groups").then((customerGroups) => {
+        state.cache.customerGroups = customerGroups;
+      })
+    );
+  }
+  if (page === "customers" && needsCustomerFields) {
+    requests.push(
+      api("/custom-fields/customer").then((customerCustomFields) => {
+        state.cache.customFieldDefinitions = {
+          ...(state.cache.customFieldDefinitions || {}),
+          customers: customerCustomFields
+        };
+      })
+    );
+  }
+  if (page === "customers" && needsCustomerGroupFields) {
+    requests.push(
+      api("/custom-fields/customer-group").then((customerGroupCustomFields) => {
+        state.cache.customFieldDefinitions = {
+          ...(state.cache.customFieldDefinitions || {}),
+          "customer-groups": customerGroupCustomFields
+        };
+      })
+    );
+  }
+
+  if (page === "items" && needsItems) {
+    requests.push(
+      api("/items").then((items) => {
+        state.cache.items = items;
+      })
+    );
+  }
+  if (page === "items" && needsItemFields) {
+    requests.push(
+      api("/custom-fields/item").then((itemCustomFields) => {
+        state.cache.customFieldDefinitions = {
+          ...(state.cache.customFieldDefinitions || {}),
+          items: itemCustomFields
+        };
+      })
+    );
+  }
+
+  if (page === "customer-groups" && needsCustomerGroups) {
+    requests.push(
+      api("/customer-groups").then((customerGroups) => {
+        state.cache.customerGroups = customerGroups;
+      })
+    );
+  }
+  if (page === "customer-groups" && needsCustomerGroupFields) {
+    requests.push(
+      api("/custom-fields/customer-group").then((customerGroupCustomFields) => {
+        state.cache.customFieldDefinitions = {
+          ...(state.cache.customFieldDefinitions || {}),
+          "customer-groups": customerGroupCustomFields
+        };
+      })
+    );
+  }
+
+  await Promise.all(requests);
+  renderMasterData(state.cache.paymentTerms || []);
 }
 
 async function loadDeals() {
@@ -11165,21 +10083,45 @@ const DEFAULT_MASTER_API_LOCK = {
   manageCustomerGroupsByApi: false
 };
 
-async function loadSettings(page = state.settingsPage || "my-profile") {
+async function loadSettings(page = state.settingsPage || "my-profile", options = {}) {
+  const force = options.force ?? arguments.length === 0;
   const tenantId = state.user?.tenantId;
   if (!tenantId) return;
   state.settingsPage = page;
+  if (page === "company" || page === "branding") await ensureSettingsAdminModule();
+  if (page === "roles") await ensureDelegationsModule();
+  if (page === "cron-jobs") await ensureCronPickerModule();
+  if (page === "branding") await ensureThemePresetsModule();
   const role = state.user?.role || "REP";
   const isAdmin = role === "ADMIN";
   const isManager = role === "ADMIN" || role === "DIRECTOR" || role === "MANAGER";
-  const needsBranding = page === "company" || page === "branding" || page === "kpi-targets";
-  const needsCompanyConfig = page === "company" && isAdmin;
-  const needsKpiTargets = page === "kpi-targets";
-  const needsSalesReps = page === "kpi-targets" && role !== "REP";
-  const needsTeams = page === "my-profile" || page === "team-structure" || page === "roles";
-  const needsTenantSummary = isAdmin && (page === "company" || page === "roles");
-  const needsIntegrationCredentials = page === "integrations" && isManager;
-  const needsDelegationData = page === "roles" && isAdmin;
+  const wantsBranding = page === "company" || page === "branding" || page === "kpi-targets";
+  const needsBranding = wantsBranding && (force || !state.cache.branding);
+  const needsCompanyConfig = page === "company" && isAdmin && (
+    force ||
+    !state.cache.taxConfig ||
+    !state.cache.visitConfig ||
+    !state.cache.masterApiLock
+  );
+  const needsKpiTargets = page === "kpi-targets" && (force || !Array.isArray(state.cache.kpiTargets));
+  const needsSalesReps = page === "kpi-targets" && role !== "REP" && (force || !Array.isArray(state.cache.salesReps));
+  const needsTeams = (page === "my-profile" || page === "team-structure" || page === "roles") && (force || !Array.isArray(state.cache.teams));
+  const needsTenantSummary = isAdmin && (page === "company" || page === "roles") && (
+    force ||
+    !Array.isArray(state.cache.allUsers) ||
+    !state.cache.tenantInfo
+  );
+  const needsIntegrationCredentials = page === "integrations" && isManager && (
+    force ||
+    !Array.isArray(state.cache.integrationCredentials)
+  );
+  const needsDelegationData = page === "roles" && isAdmin && (force || !state.cache.delegationsLoaded);
+  const needsSyncData = isAdmin && page === "data-sync" && (
+    force ||
+    !Array.isArray(state.cache.syncApiKeys) ||
+    !Array.isArray(state.cache.syncSources) ||
+    !Array.isArray(state.cache.syncJobs)
+  );
 
   const requests = [];
   if (needsBranding) {
@@ -11251,13 +10193,17 @@ async function loadSettings(page = state.settingsPage || "my-profile") {
   }
 
   await Promise.all(requests);
+  if (wantsBranding && state.cache.branding) {
+    applyBrandingTheme(state.cache.branding);
+  }
   if (!state.cache.masterApiLock) {
     state.cache.masterApiLock = { ...DEFAULT_MASTER_API_LOCK };
   }
   if (needsDelegationData) {
     await loadDelegations();
+    state.cache.delegationsLoaded = true;
   }
-  if (isAdmin && page === "data-sync") {
+  if (needsSyncData) {
     await loadSyncData();
   }
   renderSettings();
@@ -11336,7 +10282,7 @@ loginForm.addEventListener("submit", async (event) => {
     } else if (onSimpleViewRoute) {
       switchView(onSimpleViewRoute);
       if (onSimpleViewRoute === "repHub") paintRepHubFull();
-      if (onSimpleViewRoute === "dashboard") await loadOnboardingWizardLazy();
+      if (onSimpleViewRoute === "dashboard") scheduleAdminChromeRefresh({ delayMs: 250 });
       if (onSimpleViewRoute === "superAdmin" && window._loadSuperAdmin) window._loadSuperAdmin();
     } else {
       window.history.replaceState({ view: "repHub" }, "", "/task");
@@ -11344,8 +10290,7 @@ loginForm.addEventListener("submit", async (event) => {
       paintRepHubFull();
     }
     hideAppLoading();
-    await loadDemoDataStatusLazy();
-    await renderDemoDataBannerLazy();
+    scheduleAdminChromeRefresh();
     startIdleWatch();
   } catch (error) {
     hideAppLoading();
@@ -11701,12 +10646,6 @@ loginForm.addEventListener("submit", async (event) => {
     }
   });
 })();
-
-setDelegationsDeps({
-  setStatus,
-  escHtml,
-  renderSettings
-});
 
 // ── Customer autocomplete for modal forms ─────────────────────────────────────
 async function searchCustomers(query, limit = 8) {
@@ -12096,12 +11035,14 @@ masterMenu?.querySelectorAll(".nav-dropdown-item").forEach((item) => {
     closeMasterDropdown();
     navigateToMasterPage(page);
     switchView("master");
-    renderMasterData(state.cache.paymentTerms);
     updateMasterDropdownActive();
     try {
-      await loadMaster();
+      setStatus("Loading…");
+      await loadMaster(page);
     } catch (error) {
       setStatus(error.message, true);
+    } finally {
+      setStatus("");
     }
   });
 });
@@ -12135,7 +11076,7 @@ document.querySelectorAll(".nav-btn").forEach((btn) => {
       }
       if (target === "dashboard") {
         await Promise.all([loadDashboardContext(), loadDashboard()]);
-        await loadOnboardingWizardLazy();
+        scheduleAdminChromeRefresh({ delayMs: 250 });
       }
       if (target === "deals") await loadDeals();
       if (target === "visits") await loadVisits();
@@ -12295,7 +11236,7 @@ window.addEventListener("popstate", async () => {
       }
       if (simpleView === "dashboard") {
         await Promise.all([loadDashboardContext(), loadDashboard()]);
-        await loadOnboardingWizardLazy();
+        scheduleAdminChromeRefresh({ delayMs: 250 });
       }
       if (simpleView === "deals") await loadDeals();
       if (simpleView === "visits") await loadVisits();
@@ -12354,7 +11295,7 @@ async function bootstrap() {
     } else if (onSimpleViewRoute) {
       switchView(onSimpleViewRoute);
       if (onSimpleViewRoute === "repHub") paintRepHubFull();
-      if (onSimpleViewRoute === "dashboard") await loadOnboardingWizardLazy();
+      if (onSimpleViewRoute === "dashboard") scheduleAdminChromeRefresh({ delayMs: 250 });
       if (onSimpleViewRoute === "superAdmin" && window._loadSuperAdmin) window._loadSuperAdmin();
     } else {
       window.history.replaceState({ view: "repHub" }, "", "/task");
@@ -12362,8 +11303,7 @@ async function bootstrap() {
       paintRepHubFull();
     }
     hideAppLoading();
-    await loadDemoDataStatusLazy();
-    await renderDemoDataBannerLazy();
+    scheduleAdminChromeRefresh();
     startIdleWatch();
   } catch {
     clearTokens();

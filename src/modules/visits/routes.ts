@@ -122,6 +122,8 @@ type TodoEvent = {
   id: string;
   type: "visit" | "deal";
   entityId: string;
+  customerId?: string | null;
+  dealId?: string | null;
   at: string;
   title: string;
   bucket: TodoBucketKey;
@@ -1258,6 +1260,8 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
         id: `visit:${visit.id}`,
         type: "visit",
         entityId: visit.id,
+        customerId: visit.customerId,
+        dealId: visit.dealId ?? null,
         at: visit.plannedAt.toISOString(),
         title: `Visit: ${visit.customer.name}`,
         bucket: resolveTodoBucket(visit.plannedAt, now),
@@ -1288,6 +1292,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
       id: `deal:${deal.id}`,
       type: "deal",
       entityId: deal.id,
+      customerId: deal.customer.id,
       at: deal.followUpAt.toISOString(),
       title: `Deal follow-up: ${deal.dealName}`,
       bucket: resolveTodoBucket(deal.followUpAt, now),

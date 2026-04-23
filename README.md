@@ -4,7 +4,7 @@ Multi-tenant Sales CRM backend scaffold built in one-shot MVP mode.
 
 ## Stack
 - Fastify + TypeScript
-- Prisma + SQLite (local dev)
+- Prisma + PostgreSQL
 - Zod validation
 - OpenAPI via Swagger
 
@@ -13,9 +13,9 @@ Multi-tenant Sales CRM backend scaffold built in one-shot MVP mode.
    - `npm install`
 2. Prepare environment:
    - `cp .env.example .env`
-3. Generate client + sync database:
+3. Apply database migrations:
    - `npm run prisma:generate`
-   - `npm run prisma:push`
+   - `npm run prisma:migrate:deploy`
 4. Start API:
    - `npm run dev`
 5. Seed demo data (recommended for first run):

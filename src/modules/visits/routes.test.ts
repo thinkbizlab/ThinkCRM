@@ -427,6 +427,8 @@ describe("sales rep todo home", () => {
     expect(payload.pinned.checkedInWaitingCheckout.length).toBe(1);
     expect(payload.pinned.checkedInWaitingCheckout[0].nextAction.type).toBe("CHECK_OUT");
     expect(payload.pinned.checkedInWaitingCheckout[0].nextAction.label).toBe("Check-out");
+    expect(payload.pinned.checkedInWaitingCheckout[0].customerId).toBe(fixture.customerId);
+    expect(payload.pinned.checkedInWaitingCheckout[0].dealId).toBeNull();
 
     expect(payload.buckets.today.length).toBeGreaterThanOrEqual(1);
     expect(payload.buckets.tomorrow.length).toBeGreaterThanOrEqual(1);

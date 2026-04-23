@@ -4462,6 +4462,8 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 
 .c360-deal-row:last-child { border-bottom: none; }
 .c360-deal-row:hover { background: var(--surface-soft); }
+.c360-deal-row--clickable { cursor: pointer; }
+.c360-deal-row--clickable:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
 
 .c360-deal-num {
   font-size: 0.75rem;
@@ -4516,6 +4518,8 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 
 .c360-visit-row:last-child { border-bottom: none; }
 .c360-visit-row:hover { background: var(--surface-soft); }
+.c360-visit-row--clickable { cursor: pointer; }
+.c360-visit-row--clickable:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
 
 .c360-visit-date {
   font-size: 0.8rem;

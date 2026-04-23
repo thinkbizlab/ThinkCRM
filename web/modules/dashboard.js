@@ -409,5 +409,7 @@ export async function loadDashboard(month = state.dashboardMonth) {
   if (state.dashboardRepId) params.set("repId", state.dashboardRepId);
   const query = params.size ? `?${params}` : "";
   const data = await api(`/dashboard/overview${query}`);
+  state.cache.dashboard = data;
   renderDashboard(data);
+  return data;
 }

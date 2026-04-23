@@ -5,7 +5,7 @@
 import { qs, views } from "./dom.js";
 import { state } from "./state.js";
 import { api } from "./api.js";
-import { escHtml, shiftAnchorDate } from "./utils.js";
+import { escHtml, shiftAnchorDate, debounce } from "./utils.js";
 import { icon } from "./icons.js";
 
 let deps = {
@@ -17,6 +17,17 @@ let deps = {
 
 export function setCalendarDeps(d) {
   deps = { ...deps, ...d };
+}
+
+async function searchCustomers(query, limit = 8) {
+  const q = String(query || "").trim();
+  if (q.length < 2) return [];
+  const params = new URLSearchParams({
+    q,
+    limit: String(limit)
+  });
+  if (state.customerScope) params.set("scope", state.customerScope);
+  return api(`/customers/search?${params.toString()}`);
 }
 
 export async function loadCalendar(nextFilters = {}) {
@@ -346,13 +357,20 @@ export function renderCalendar(calendarData) {
   const customerList  = qs("#cal-customer-list");
   const customerIdEl  = qs("#cal-customer-id");
   const customerClear = qs("#cal-customer-clear");
+  let activeCustomerSearch = 0;
 
-  customerInput?.addEventListener("input", () => {
-    const q = customerInput.value.trim().toLowerCase();
-    if (!q) { customerList.hidden = true; return; }
-    const matches = state.cache.customers.filter(
-      (c) => c.name.toLowerCase().includes(q) || (c.customerCode || "").toLowerCase().includes(q)
-    ).slice(0, 8);
+  const updateCustomerMatches = debounce(async () => {
+    const q = customerInput?.value.trim() || "";
+    if (q.length < 2) { customerList.hidden = true; return; }
+    const reqId = ++activeCustomerSearch;
+    let matches = [];
+    try {
+      matches = await searchCustomers(q);
+    } catch {
+      if (reqId === activeCustomerSearch) customerList.hidden = true;
+      return;
+    }
+    if (reqId !== activeCustomerSearch || customerInput?.value.trim() !== q) return;
     if (!matches.length) { customerList.hidden = true; return; }
     customerList.innerHTML = matches.map((c) =>
       `<button type="button" class="cal-autocomplete-item" data-id="${c.id}" data-name="${escHtml(c.name)}">
@@ -361,6 +379,10 @@ export function renderCalendar(calendarData) {
        </button>`
     ).join("");
     customerList.hidden = false;
+  }, 180);
+
+  customerInput?.addEventListener("input", () => {
+    updateCustomerMatches();
   });
 
   customerList?.addEventListener("click", (e) => {

@@ -95,6 +95,12 @@ const customerUpdateSchema = customerSchema.omit({ customerCode: true }).partial
   disabled: z.boolean().optional()
 });
 
+const customerSearchQuerySchema = z.object({
+  q: z.string().trim().min(2).max(120),
+  limit: z.coerce.number().int().min(1).max(20).optional().default(8),
+  scope: z.enum(["mine", "team", "all"]).optional().default("mine")
+});
+
 const itemSchema = z.object({
   itemCode: z.string().min(1).max(40),
   name: z.string().min(2).max(200),
@@ -401,6 +407,44 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
         owner: { select: { id: true, fullName: true } }
       },
       orderBy: { createdAt: "desc" }
+    });
+  });
+
+  app.get("/customers/search", async (request) => {
+    const tenantId = requireTenantId(request);
+    const requesterId = requireUserId(request);
+    const visibleUserIdList = [...(await listVisibleUserIds(request))];
+    const parsed = customerSearchQuerySchema.safeParse(request.query ?? {});
+    if (!parsed.success) {
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
+    }
+    const query = parsed.data;
+    const ownerFilter =
+      query.scope === "team" || query.scope === "all"
+        ? { in: visibleUserIdList }
+        : requesterId;
+
+    return prisma.customer.findMany({
+      where: {
+        tenantId,
+        ownerId: ownerFilter,
+        disabled: false,
+        OR: [
+          { name: { contains: query.q, mode: "insensitive" } },
+          { customerCode: { contains: query.q, mode: "insensitive" } }
+        ]
+      },
+      select: {
+        id: true,
+        name: true,
+        customerCode: true,
+        owner: { select: { id: true, fullName: true } }
+      },
+      orderBy: [
+        { name: "asc" },
+        { createdAt: "desc" }
+      ],
+      take: query.limit
     });
   });
 

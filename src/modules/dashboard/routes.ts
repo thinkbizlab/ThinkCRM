@@ -62,11 +62,12 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
       })
     ]);
 
+    const userById = new Map(users.map((user) => [user.id, user]));
     const visibleUserIds = resolveVisibleUserIds(users, requesterId, requesterRole ?? undefined);
     // Narrow scope to a specific team if requested
     if (teamId) {
       for (const id of [...visibleUserIds]) {
-        const user = users.find((u) => u.id === id);
+        const user = userById.get(id);
         if (!user || user.teamId !== teamId) visibleUserIds.delete(id);
       }
     }
@@ -78,42 +79,137 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
     }
     const visibleUserIdList = [...visibleUserIds];
 
-    const [scopedDeals, scopedVisits, scopedTargets] = await Promise.all([
-      prisma.deal.findMany({ where: { tenantId, ownerId: { in: visibleUserIdList } } }),
-      prisma.visit.findMany({ where: { tenantId, repId: { in: visibleUserIdList } } }),
+    const [scopedTargets, openDealsByOwner, createdDealsByOwner, wonDealsByOwner, lostDealsByOwner, visitsByRepStatus] = await Promise.all([
       prisma.salesKpiTarget.findMany({
         where: {
           tenantId,
           targetMonth: monthKey,
           userId: { in: visibleUserIdList }
         }
+      }),
+      prisma.deal.groupBy({
+        by: ["ownerId"],
+        where: {
+          tenantId,
+          ownerId: { in: visibleUserIdList },
+          status: DealStatus.OPEN
+        },
+        _count: { _all: true },
+        _sum: { estimatedValue: true }
+      }),
+      prisma.deal.groupBy({
+        by: ["ownerId"],
+        where: {
+          tenantId,
+          ownerId: { in: visibleUserIdList },
+          createdAt: { gte: dateFrom, lt: dateTo }
+        },
+        _count: { _all: true },
+        _sum: { estimatedValue: true }
+      }),
+      prisma.deal.groupBy({
+        by: ["ownerId"],
+        where: {
+          tenantId,
+          ownerId: { in: visibleUserIdList },
+          status: DealStatus.WON,
+          closedAt: { gte: dateFrom, lt: dateTo }
+        },
+        _count: { _all: true },
+        _sum: { estimatedValue: true }
+      }),
+      prisma.deal.groupBy({
+        by: ["ownerId"],
+        where: {
+          tenantId,
+          ownerId: { in: visibleUserIdList },
+          status: DealStatus.LOST,
+          closedAt: { gte: dateFrom, lt: dateTo }
+        },
+        _count: { _all: true },
+        _sum: { estimatedValue: true }
+      }),
+      prisma.visit.groupBy({
+        by: ["repId", "status"],
+        where: {
+          tenantId,
+          repId: { in: visibleUserIdList },
+          plannedAt: { gte: dateFrom, lt: dateTo }
+        },
+        _count: { _all: true }
       })
     ]);
     const scopedUsers = users.filter((user) => visibleUserIds.has(user.id));
 
-    const periodVisits = scopedVisits.filter((visit) => visit.plannedAt >= dateFrom && visit.plannedAt < dateTo);
-    const periodCreatedDeals = scopedDeals.filter((deal) => deal.createdAt >= dateFrom && deal.createdAt < dateTo);
-    const periodClosedWonDeals = scopedDeals.filter(
-      (deal) => deal.status === DealStatus.WON && deal.closedAt && deal.closedAt >= dateFrom && deal.closedAt < dateTo
-    );
-    const periodClosedLostDeals = scopedDeals.filter(
-      (deal) => deal.status === DealStatus.LOST && deal.closedAt && deal.closedAt >= dateFrom && deal.closedAt < dateTo
-    );
+    type UserMetrics = {
+      activeDeals: number;
+      pipelineValue: number;
+      wonValue: number;
+      lostValue: number;
+      checkedOutVisits: number;
+      plannedVisits: number;
+      newDealValue: number;
+      teamId: string | null;
+    };
 
-    const activeDeals = scopedDeals.filter((d) => d.status === DealStatus.OPEN).length;
-    const wonValue = scopedDeals
-      .filter((d) => d.status === DealStatus.WON && d.closedAt && d.closedAt >= dateFrom && d.closedAt < dateTo)
-      .reduce((sum, d) => sum + d.estimatedValue, 0);
-    const lostValue = scopedDeals
-      .filter((d) => d.status === DealStatus.LOST && d.closedAt && d.closedAt >= dateFrom && d.closedAt < dateTo)
-      .reduce((sum, d) => sum + d.estimatedValue, 0);
-    const pipelineValue = scopedDeals
-      .filter((d) => d.status === DealStatus.OPEN)
-      .reduce((sum, d) => sum + d.estimatedValue, 0);
-    const visitCompletion =
-      periodVisits.length === 0
-        ? 0
-        : periodVisits.filter((v) => v.status === VisitStatus.CHECKED_OUT).length / periodVisits.length;
+    const metricsByUser = scopedUsers.reduce<Record<string, UserMetrics>>((acc, user) => {
+      acc[user.id] = {
+        activeDeals: 0,
+        pipelineValue: 0,
+        wonValue: 0,
+        lostValue: 0,
+        checkedOutVisits: 0,
+        plannedVisits: 0,
+        newDealValue: 0,
+        teamId: user.teamId
+      };
+      return acc;
+    }, {});
+
+    for (const row of openDealsByOwner) {
+      const metrics = metricsByUser[row.ownerId];
+      if (!metrics) continue;
+      metrics.activeDeals = row._count._all;
+      metrics.pipelineValue = row._sum.estimatedValue ?? 0;
+    }
+
+    for (const row of createdDealsByOwner) {
+      const metrics = metricsByUser[row.ownerId];
+      if (!metrics) continue;
+      metrics.newDealValue = row._sum.estimatedValue ?? 0;
+    }
+
+    for (const row of wonDealsByOwner) {
+      const metrics = metricsByUser[row.ownerId];
+      if (!metrics) continue;
+      metrics.wonValue = row._sum.estimatedValue ?? 0;
+    }
+
+    for (const row of lostDealsByOwner) {
+      const metrics = metricsByUser[row.ownerId];
+      if (!metrics) continue;
+      metrics.lostValue = row._sum.estimatedValue ?? 0;
+    }
+
+    for (const row of visitsByRepStatus) {
+      const metrics = metricsByUser[row.repId];
+      if (!metrics) continue;
+      metrics.plannedVisits += row._count._all;
+      if (row.status === VisitStatus.CHECKED_OUT) {
+        metrics.checkedOutVisits += row._count._all;
+      }
+    }
+
+    const activeDeals = openDealsByOwner.reduce((sum, row) => sum + row._count._all, 0);
+    const pipelineValue = openDealsByOwner.reduce((sum, row) => sum + (row._sum.estimatedValue ?? 0), 0);
+    const wonValue = wonDealsByOwner.reduce((sum, row) => sum + (row._sum.estimatedValue ?? 0), 0);
+    const lostValue = lostDealsByOwner.reduce((sum, row) => sum + (row._sum.estimatedValue ?? 0), 0);
+    const dealsCreatedInPeriod = createdDealsByOwner.reduce((sum, row) => sum + row._count._all, 0);
+    const visitsPlannedInPeriod = visitsByRepStatus.reduce((sum, row) => sum + row._count._all, 0);
+    const checkedOutVisitsInPeriod = visitsByRepStatus
+      .filter((row) => row.status === VisitStatus.CHECKED_OUT)
+      .reduce((sum, row) => sum + row._count._all, 0);
+    const visitCompletion = visitsPlannedInPeriod === 0 ? 0 : checkedOutVisitsInPeriod / visitsPlannedInPeriod;
 
     const actualByUser = scopedUsers.reduce<
       Record<
@@ -126,15 +222,12 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
         }
       >
     >((acc, user) => {
+      const metrics = metricsByUser[user.id];
       acc[user.id] = {
-        visits: periodVisits.filter((visit) => visit.repId === user.id && visit.status === VisitStatus.CHECKED_OUT).length,
-        newDealValue: periodCreatedDeals
-          .filter((deal) => deal.ownerId === user.id)
-          .reduce((sum, deal) => sum + deal.estimatedValue, 0),
-        revenue: periodClosedWonDeals
-          .filter((deal) => deal.ownerId === user.id)
-          .reduce((sum, deal) => sum + deal.estimatedValue, 0),
-        teamId: user.teamId
+        visits: metrics?.checkedOutVisits ?? 0,
+        newDealValue: metrics?.newDealValue ?? 0,
+        revenue: metrics?.wonValue ?? 0,
+        teamId: metrics?.teamId ?? user.teamId
       };
       return acc;
     }, {});
@@ -210,20 +303,15 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
       const row = teamPerformanceMap.get(teamId);
       if (!row) continue;
       row.memberCount += 1;
+      const metrics = metricsByUser[user.id];
+      if (!metrics) continue;
 
-      const userDeals = scopedDeals.filter((deal) => deal.ownerId === user.id);
-      row.activeDeals += userDeals.filter((deal) => deal.status === DealStatus.OPEN).length;
-      row.pipelineValue += userDeals.filter((deal) => deal.status === DealStatus.OPEN).reduce((sum, deal) => sum + deal.estimatedValue, 0);
-      row.wonValue += userDeals
-        .filter((deal) => deal.status === DealStatus.WON && deal.closedAt && deal.closedAt >= dateFrom && deal.closedAt < dateTo)
-        .reduce((sum, deal) => sum + deal.estimatedValue, 0);
-      row.lostValue += userDeals
-        .filter((deal) => deal.status === DealStatus.LOST && deal.closedAt && deal.closedAt >= dateFrom && deal.closedAt < dateTo)
-        .reduce((sum, deal) => sum + deal.estimatedValue, 0);
-
-      const userPeriodVisits = periodVisits.filter((visit) => visit.repId === user.id);
-      row.plannedVisits += userPeriodVisits.length;
-      row.checkedOutVisits += userPeriodVisits.filter((visit) => visit.status === VisitStatus.CHECKED_OUT).length;
+      row.activeDeals += metrics.activeDeals;
+      row.pipelineValue += metrics.pipelineValue;
+      row.wonValue += metrics.wonValue;
+      row.lostValue += metrics.lostValue;
+      row.plannedVisits += metrics.plannedVisits;
+      row.checkedOutVisits += metrics.checkedOutVisits;
     }
 
     const teamPerformance = [...teamPerformanceMap.values()]
@@ -274,8 +362,8 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
         wonValue,
         lostValue,
         visitCompletionRate: Number((visitCompletion * 100).toFixed(2)),
-        dealsCreatedInPeriod: periodCreatedDeals.length,
-        visitsPlannedInPeriod: periodVisits.length,
+        dealsCreatedInPeriod,
+        visitsPlannedInPeriod,
         usersInScope: visibleUserIdList.length
       },
       targetVsActual,

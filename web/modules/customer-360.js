@@ -16,7 +16,9 @@ let deps = {
   navigateToMasterPage: () => {},
   renderMasterData: () => {},
   openVisitCreateModal: () => {},
-  openDealCreateModal: () => {}
+  openDealCreateModal: () => {},
+  openDeal360: () => {},
+  openVisitDetail: () => {}
 };
 
 export function setCustomer360Deps(d) {
@@ -33,13 +35,10 @@ export async function openCustomer360(customerIdOrCode, customerCode) {
   try {
     const customer = await api(`/customers/${encodeURIComponent(customerIdOrCode)}`);
     const [deals, visits] = await Promise.all([
-      api("/deals"),
+      api(`/deals?customerId=${encodeURIComponent(customer.id)}`),
       api(`/visits?customerId=${encodeURIComponent(customer.id)}`)
     ]);
-    const customerDeals = deals.filter(
-      (d) => d.customerId === customer.id || d.customer?.id === customer.id
-    );
-    state.c360 = { customer, deals: customerDeals, visits, activeTab: "deals" };
+    state.c360 = { customer, deals, visits, activeTab: "deals" };
     setStatus("");
     renderCustomer360();
   } catch (error) {
@@ -85,7 +84,7 @@ function renderC360TabContent(c360) {
     return `
       <div style="border:1px solid var(--border);border-radius:var(--r-md);overflow:hidden;margin-top:var(--sp-4)">
         ${deals.map((d, i) => `
-          <div class="c360-deal-row">
+          <div class="c360-deal-row c360-deal-row--clickable" data-deal-id="${escHtml(d.id)}" data-deal-no="${escHtml(d.dealNo ?? "")}" role="button" tabindex="0">
             <span class="c360-deal-num">${i + 1}</span>
             <div class="c360-deal-body">
               <div class="c360-deal-name">${escHtml(d.dealName)}</div>
@@ -110,7 +109,7 @@ function renderC360TabContent(c360) {
           const vDate = new Date(v.plannedAt || v.createdAt);
           const notes = v.voiceNoteTranscript || v.notes || "";
           return `
-            <div class="c360-visit-row">
+            <div class="c360-visit-row c360-visit-row--clickable" data-visit-id="${escHtml(v.id)}" role="button" tabindex="0">
               <div class="c360-visit-date">
                 <strong>${vDate.getDate()}</strong>
                 <span>${vDate.toLocaleDateString("en-GB", { month: "short", year: "2-digit" })}</span>
@@ -286,6 +285,34 @@ export function renderCustomer360() {
       if (content) content.innerHTML = renderC360TabContent(state.c360);
     });
   });
+
+  const tabContent = views.master.querySelector("#c360-tab-content");
+  if (tabContent) {
+    const handleRowActivate = (target) => {
+      const dealRow = target.closest(".c360-deal-row--clickable");
+      if (dealRow) {
+        const id = dealRow.dataset.dealId;
+        const no = dealRow.dataset.dealNo;
+        if (id) deps.openDeal360(id, no || id);
+        return;
+      }
+      const visitRow = target.closest(".c360-visit-row--clickable");
+      if (visitRow) {
+        const id = visitRow.dataset.visitId;
+        if (id) deps.openVisitDetail(id);
+      }
+    };
+    tabContent.addEventListener("click", (e) => handleRowActivate(e.target));
+    tabContent.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        const row = e.target.closest(".c360-deal-row--clickable, .c360-visit-row--clickable");
+        if (row) {
+          e.preventDefault();
+          handleRowActivate(e.target);
+        }
+      }
+    });
+  }
 
   views.master.querySelector("#c360-schedule-visit")?.addEventListener("click", async () => {
     deps.openVisitCreateModal();

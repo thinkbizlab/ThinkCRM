@@ -5,11 +5,11 @@
 import { qs } from "./dom.js";
 import { api } from "./api.js";
 import { state } from "./state.js";
-import { loadOnboardingWizard } from "./onboarding-wizard.js";
 
 let demoDataStatus = null;
 let refreshHostFn = async () => {};
 let gotoIntegrationsFn = () => {};
+let refreshOnboardingFn = async () => {};
 
 export async function loadDemoDataStatus() {
   const tenantId = state.user?.tenantId;
@@ -110,9 +110,10 @@ export function renderDemoDataBanner() {
   });
 }
 
-export function initDemoDataModals({ refreshHost, gotoIntegrations } = {}) {
+export function initDemoDataModals({ refreshHost, gotoIntegrations, refreshOnboarding } = {}) {
   refreshHostFn = refreshHost || (async () => {});
   gotoIntegrationsFn = gotoIntegrations || (() => {});
+  refreshOnboardingFn = refreshOnboarding || (async () => {});
 
   // Generate modal
   const genModal = qs("#demo-data-modal");
@@ -147,7 +148,7 @@ export function initDemoDataModals({ refreshHost, gotoIntegrations } = {}) {
       genForm.reset();
       await loadDemoDataStatus();
       await refreshHostFn();
-      loadOnboardingWizard();
+      await refreshOnboardingFn();
     } catch (err) {
       const msg = err.message || "Failed to generate demo data";
       if (msg.includes("API key") || msg.includes("free demo data")) {
@@ -184,7 +185,7 @@ export function initDemoDataModals({ refreshHost, gotoIntegrations } = {}) {
       closeDel();
       await loadDemoDataStatus();
       await refreshHostFn();
-      loadOnboardingWizard();
+      await refreshOnboardingFn();
     } catch (err) {
       alert(err.message || "Failed to delete demo data");
     } finally {

@@ -267,4 +267,27 @@ describe("dashboard overview", () => {
 
     await app.close();
   });
+
+  it("supports narrowing admin overview to a specific rep", async () => {
+    const app = await buildApp();
+    const fixture = await createFixture();
+    const headers = await authHeader(app, fixture, UserRole.ADMIN, fixture.adminId);
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/api/v1/dashboard/overview?month=${fixture.month}&repId=${fixture.repId}`,
+      headers
+    });
+
+    expect(res.statusCode).toBe(200);
+    const payload = res.json();
+    expect(payload.kpis.usersInScope).toBe(1);
+    expect(payload.kpis.wonValue).toBe(100000);
+    expect(payload.targetVsActual.length).toBe(1);
+    expect(payload.targetVsActual[0].userId).toBe(fixture.repId);
+    expect(payload.teamPerformance.length).toBe(1);
+    expect(payload.teamPerformance[0].memberCount).toBe(1);
+
+    await app.close();
+  });
 });

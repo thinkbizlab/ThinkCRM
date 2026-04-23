@@ -2,6 +2,7 @@
 // the in-memory state.cache, plus a handful of "create X" actions. Navigation
 // and helpers (`navigateToView`, `openDealCreateModal`, etc., and `asMoney`) are
 // injected so this module doesn't need to know about the host app.
+import { api } from "./api.js";
 import { qs, switchView, setStatus } from "./dom.js";
 import { state } from "./state.js";
 import { escHtml } from "./utils.js";
@@ -42,7 +43,8 @@ export function initQuickSearch({
   navigateToMasterPage,
   openDealCreateModal,
   openVisitCreateModal,
-  asMoney
+  asMoney,
+  attachGlobalTriggers = true
 } = {}) {
   const modal    = qs("#quick-search-modal");
   const backdrop = qs("#qs-backdrop");
@@ -52,18 +54,27 @@ export function initQuickSearch({
   if (!modal || !input || !results) return;
 
   let activeIdx = -1;
+  let renderRequestId = 0;
 
   function openSearch() {
     modal.hidden = false;
     activeIdx = -1;
     input.value = "";
-    renderResults("");
+    void renderResults("");
     requestAnimationFrame(() => input.focus());
   }
 
   function closeSearch() {
     modal.hidden = true;
   }
+
+  quickSearchControls = {
+    open: openSearch,
+    close: closeSearch,
+    toggle: () => {
+      modal.hidden ? openSearch() : closeSearch();
+    }
+  };
 
   function dealStageOf(dealId) {
     return (state.cache.dealStages || []).find((s) =>
@@ -75,7 +86,36 @@ export function initQuickSearch({
     return terms.filter(Boolean).some((t) => String(t).toLowerCase().includes(q));
   }
 
-  function buildIndex(query) {
+  async function resolveCustomerMatches(query) {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+
+    const cachedCustomers = state.cache.customers || [];
+    if (cachedCustomers.length) {
+      return cachedCustomers.filter((c) =>
+        matchesAny(q, c.name, c.code, c.customerCode, c.email, c.phone)
+      );
+    }
+
+    if (q.length < 2) return [];
+
+    try {
+      const params = new URLSearchParams({
+        q,
+        limit: "6"
+      });
+      if (state.customerScope) params.set("scope", state.customerScope);
+      const rows = await api(`/customers/search?${params.toString()}`);
+      return rows.map((customer) => ({
+        ...customer,
+        code: customer.customerCode
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  function buildIndex(query, customerMatches = null) {
     const q = query.trim().toLowerCase();
     const groups = [];
 
@@ -146,9 +186,8 @@ export function initQuickSearch({
     if (q) {
       const allDeals = (state.cache.dealStages || []).flatMap((s) => s.deals || []);
       const allVisits = state.cache.visits || [];
-
-      const matchedCustomers = (state.cache.customers || []).filter((c) =>
-        matchesAny(q, c.name, c.code, c.email, c.phone)
+      const matchedCustomers = customerMatches ?? (state.cache.customers || []).filter((c) =>
+        matchesAny(q, c.name, c.code, c.customerCode, c.email, c.phone)
       );
 
       matchedCustomers.slice(0, 2).forEach((customer) => {
@@ -219,9 +258,11 @@ export function initQuickSearch({
       }
     }
 
-    const customers = (state.cache.customers || []).filter((c) =>
-      !q || matchesAny(q, c.name, c.code, c.email, c.phone)
-    );
+    const customers = q
+      ? (customerMatches ?? (state.cache.customers || []).filter((c) =>
+          matchesAny(q, c.name, c.code, c.customerCode, c.email, c.phone)
+        ))
+      : (state.cache.customers || []);
     if (customers.length) {
       groups.push({
         label: "Customers",
@@ -289,8 +330,12 @@ export function initQuickSearch({
     return `<div class="qs-item-icon ${ic.cls}">${ic.svg}</div>`;
   }
 
-  function renderResults(query) {
-    const groups = buildIndex(query);
+  async function renderResults(query) {
+    const requestId = ++renderRequestId;
+    const customerMatches = await resolveCustomerMatches(query);
+    if (requestId !== renderRequestId) return;
+
+    const groups = buildIndex(query, customerMatches);
     activeIdx = -1;
 
     if (!groups.length) {
@@ -331,7 +376,7 @@ export function initQuickSearch({
     activeIdx = idx;
   }
 
-  input.addEventListener("input", () => renderResults(input.value));
+  input.addEventListener("input", () => { void renderResults(input.value); });
 
   input.addEventListener("keydown", (e) => {
     const items = getItems();
@@ -349,14 +394,33 @@ export function initQuickSearch({
     }
   });
 
-  qs("#search-btn")?.addEventListener("click", openSearch);
   backdrop?.addEventListener("click", closeSearch);
+  if (attachGlobalTriggers) {
+    qs("#search-btn")?.addEventListener("click", openSearch);
+    document.addEventListener("keydown", (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        modal.hidden ? openSearch() : closeSearch();
+      }
+      if (e.key === "Escape" && !modal.hidden) closeSearch();
+    });
+  }
+}
 
-  document.addEventListener("keydown", (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === "k") {
-      e.preventDefault();
-      modal.hidden ? openSearch() : closeSearch();
-    }
-    if (e.key === "Escape" && !modal.hidden) closeSearch();
-  });
+let quickSearchControls = {
+  open: null,
+  close: null,
+  toggle: null
+};
+
+export function openQuickSearch() {
+  quickSearchControls.open?.();
+}
+
+export function closeQuickSearch() {
+  quickSearchControls.close?.();
+}
+
+export function toggleQuickSearch() {
+  quickSearchControls.toggle?.();
 }
