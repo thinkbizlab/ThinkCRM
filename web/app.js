@@ -887,6 +887,23 @@ wireOAuthProviderButtons({
   onMissingSlug: (msg) => { authMessage.textContent = msg; }
 });
 
+// Password visibility toggle on the login screen.
+document.querySelectorAll("[data-password-toggle]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const wrap = btn.closest(".login-password-wrap");
+    const input = wrap?.querySelector("input");
+    if (!input) return;
+    const showing = input.type === "text";
+    input.type = showing ? "password" : "text";
+    btn.setAttribute("aria-pressed", String(!showing));
+    btn.setAttribute("aria-label", showing ? "Show password" : "Hide password");
+    const eye = btn.querySelector(".icon-eye");
+    const eyeOff = btn.querySelector(".icon-eye-off");
+    if (eye) eye.hidden = !showing;
+    if (eyeOff) eyeOff.hidden = showing;
+  });
+});
+
 // Login screen "Sign in with passkey" — runs the WebAuthn dance via the passkey
 // module, then funnels the result into the same post-login flow as password login.
 async function loginWithPasskey() {
