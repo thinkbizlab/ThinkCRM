@@ -97,6 +97,7 @@ model User {
   ownedVisits         Visit[]               @relation("VisitRep")
   ownedCustomers      Customer[]            @relation("CustomerOwner")
   createdCustomers    Customer[]            @relation("CustomerCreatedBy")
+  draftedCustomers    Customer[]            @relation("CustomerDraftCreatedBy")
   createdDeals        Deal[]                @relation("DealCreatedBy")
   createdVisits       Visit[]               @relation("VisitCreatedBy")
   delegatedAs         UserDelegation[]      @relation("UserDelegationDelegate")
@@ -363,40 +364,49 @@ model CustomerGroup {
 }
 
 model Customer {
-  id                String             @id @default(cuid())
-  tenantId          String
-  ownerId           String?
-  customerCode      String
-  name              String
-  externalRef       String?
-  customerType      CustomerType       @default(COMPANY)
-  taxId             String?
-  defaultTermId     String
-  customerGroupId   String?
-  siteLat           Float?
-  siteLng           Float?
-  customFields      Json?
-  disabled          Boolean            @default(false)
-  isDemo            Boolean            @default(false)
-  createdByUserId   String?
-  createdAt         DateTime           @default(now())
-  updatedAt         DateTime           @updatedAt
-  tenant            Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  paymentTerm       PaymentTerm        @relation(fields: [defaultTermId], references: [id], onDelete: Restrict)
-  customerGroup     CustomerGroup?     @relation(fields: [customerGroupId], references: [id], onDelete: SetNull)
-  owner             User?              @relation("CustomerOwner", fields: [ownerId], references: [id], onDelete: SetNull)
-  createdBy         User?              @relation("CustomerCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
-  addresses         CustomerAddress[]
-  contacts          CustomerContact[]
-  deals             Deal[]
-  visits            Visit[]
-  quotations        Quotation[]
+  id                   String             @id @default(cuid())
+  tenantId             String
+  ownerId              String?
+  customerCode         String?
+  name                 String
+  externalRef          String?
+  customerType         CustomerType       @default(COMPANY)
+  taxId                String?
+  defaultTermId        String?
+  customerGroupId      String?
+  status               CustomerStatus     @default(ACTIVE)
+  draftCreatedByUserId String?
+  promotedAt           DateTime?
+  siteLat              Float?
+  siteLng              Float?
+  customFields         Json?
+  disabled             Boolean            @default(false)
+  isDemo               Boolean            @default(false)
+  createdByUserId      String?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+  tenant               Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  paymentTerm          PaymentTerm?       @relation(fields: [defaultTermId], references: [id], onDelete: Restrict)
+  customerGroup        CustomerGroup?     @relation(fields: [customerGroupId], references: [id], onDelete: SetNull)
+  owner                User?              @relation("CustomerOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  createdBy            User?              @relation("CustomerCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  draftCreatedBy       User?              @relation("CustomerDraftCreatedBy", fields: [draftCreatedByUserId], references: [id], onDelete: SetNull)
+  addresses            CustomerAddress[]
+  contacts             CustomerContact[]
+  deals                Deal[]
+  visits               Visit[]
+  quotations           Quotation[]
 
-  @@unique([tenantId, customerCode])
   @@unique([tenantId, taxId])
   @@unique([tenantId, externalRef])
   @@index([tenantId, customerGroupId])
   @@index([tenantId, name])
+  @@index([tenantId, status])
+}
+
+enum CustomerStatus {
+  DRAFT
+  ACTIVE
 }
 
 enum CustomerDuplicateSignal {

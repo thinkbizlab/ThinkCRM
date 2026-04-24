@@ -1254,7 +1254,7 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
       }),
       prisma.customer.findFirst({
         where: { id: payload.customerId, tenantId },
-        select: { id: true }
+        select: { id: true, status: true }
       }),
       resolveQuotationItems(app, tenantId, payload.items),
       prisma.tenantTaxConfig.findUnique({ where: { tenantId } })
@@ -1264,6 +1264,11 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
     }
     if (!customer) {
       throw app.httpErrors.badRequest("customerId is invalid for this tenant.");
+    }
+    if (customer.status === "DRAFT") {
+      throw app.httpErrors.badRequest(
+        "Customer is still DRAFT. Promote it (or wait for ERP sync) before creating quotations."
+      );
     }
 
     if (payload.billingAddressId) {

@@ -432,4 +432,30 @@ describe("quotation routes", () => {
     expect(saveConfig.json().header[0].fieldKey).toBe("customerId");
     expect(saveConfig.json().item[1].fieldKey).toBe("quantity");
   });
+
+  it("blocks quotation creation for DRAFT customers with a guiding error message", async () => {
+    const fixture = await setupFixture();
+
+    await prisma.customer.update({
+      where: { id: fixture.customerId },
+      data: { status: "DRAFT", customerCode: null, defaultTermId: null }
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/deals/${fixture.dealId}/quotations`,
+      headers: { authorization: `Bearer ${fixture.repToken}` },
+      payload: {
+        quotationNo: "QT-DRAFT",
+        customerId: fixture.customerId,
+        paymentTermId: fixture.paymentTermId,
+        validTo: new Date(Date.now() + 5 * 86400000).toISOString(),
+        items: [
+          { itemId: fixture.itemAId, unitPrice: 100, discountPercent: 0, quantity: 1 }
+        ]
+      }
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().message).toMatch(/DRAFT/i);
+  });
 });

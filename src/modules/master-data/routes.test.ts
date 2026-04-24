@@ -1,4 +1,4 @@
-import { UserRole } from "@prisma/client";
+import { CustomerStatus, UserRole } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../../build-app.js";
@@ -180,5 +180,166 @@ describe("customer search", () => {
       "Acme HQ",
       "Acme Retail"
     ]);
+  });
+});
+
+describe("draft customer workflow", () => {
+  const createdTenantIds: string[] = [];
+  let app: Awaited<ReturnType<typeof buildApp>>;
+
+  beforeAll(async () => {
+    app = await buildApp();
+  });
+
+  afterAll(async () => {
+    if (createdTenantIds.length > 0) {
+      const scope = { tenantId: { in: createdTenantIds } };
+      await prisma.entityChangelog.deleteMany({ where: scope });
+      await prisma.auditLog.deleteMany({ where: scope });
+      await prisma.customerContact.deleteMany({
+        where: { customer: { tenantId: { in: createdTenantIds } } }
+      });
+      await prisma.customerAddress.deleteMany({
+        where: { customer: { tenantId: { in: createdTenantIds } } }
+      });
+      await prisma.customer.deleteMany({ where: scope });
+      await prisma.paymentTerm.deleteMany({ where: scope });
+      await prisma.user.deleteMany({ where: scope });
+      await prisma.tenant.deleteMany({ where: { id: { in: createdTenantIds } } });
+    }
+    await app.close();
+  });
+
+  async function setupErpLockedTenant() {
+    const suffix = randomUUID().replace(/-/g, "").slice(0, 12);
+    const tenantId = `tenant_draft_${suffix}`;
+    const adminId = `admin_draft_${suffix}`;
+    const termId = `term_draft_${suffix}`;
+    createdTenantIds.push(tenantId);
+
+    await prisma.tenant.create({
+      data: {
+        id: tenantId,
+        name: `Draft Tenant ${suffix}`,
+        slug: `draft-tenant-${suffix}`,
+        manageCustomersByApi: true
+      }
+    });
+    await prisma.user.create({
+      data: {
+        id: adminId,
+        tenantId,
+        email: `admin-${suffix}@example.com`,
+        passwordHash: "not-used",
+        fullName: "Admin Draft",
+        role: UserRole.ADMIN
+      }
+    });
+    await prisma.paymentTerm.create({
+      data: { id: termId, tenantId, code: `NET-${suffix}`, name: "Net 30", dueDays: 30 }
+    });
+
+    const token = await app.jwt.sign({
+      tenantId, userId: adminId, role: UserRole.ADMIN, email: `admin-${suffix}@example.com`
+    });
+    return { tenantId, adminId, termId, auth: { authorization: `Bearer ${token}` } };
+  }
+
+  it("lets reps capture a DRAFT customer even when manageCustomersByApi is ON", async () => {
+    const fixture = await setupErpLockedTenant();
+
+    const blocked = await app.inject({
+      method: "POST",
+      url: "/api/v1/customers",
+      headers: fixture.auth,
+      payload: {
+        customerCode: "CUST-SHOULD-FAIL",
+        name: "Regular Create",
+        customerType: "COMPANY",
+        defaultTermId: fixture.termId
+      }
+    });
+    expect(blocked.statusCode).toBe(403);
+
+    const draft = await app.inject({
+      method: "POST",
+      url: "/api/v1/customers",
+      headers: fixture.auth,
+      payload: {
+        status: "DRAFT",
+        name: "Field Prospect Co",
+        customerType: "COMPANY",
+        taxId: "0999999999999"
+      }
+    });
+    expect(draft.statusCode).toBe(201);
+    const created = draft.json();
+    expect(created.status).toBe(CustomerStatus.DRAFT);
+    expect(created.customerCode).toBeNull();
+    expect(created.defaultTermId).toBeNull();
+    expect(created.draftCreatedByUserId).toBe(fixture.adminId);
+  });
+
+  it("reuses an existing customer when a DRAFT is created with a matching taxId", async () => {
+    const fixture = await setupErpLockedTenant();
+
+    const original = await prisma.customer.create({
+      data: {
+        tenantId: fixture.tenantId,
+        ownerId: fixture.adminId,
+        name: "Existing ERP Customer",
+        customerCode: `ERP-${randomUUID().slice(0, 8)}`,
+        customerType: "COMPANY",
+        taxId: "0105555123456",
+        defaultTermId: fixture.termId,
+        status: CustomerStatus.ACTIVE
+      }
+    });
+
+    const attempt = await app.inject({
+      method: "POST",
+      url: "/api/v1/customers",
+      headers: fixture.auth,
+      payload: {
+        status: "DRAFT",
+        name: "Prospect that collides with ERP",
+        customerType: "COMPANY",
+        taxId: "0105555123456"
+      }
+    });
+
+    expect(attempt.statusCode).toBe(200);
+    const body = attempt.json();
+    expect(body.reusedExisting).toBe(true);
+    expect(body.id).toBe(original.id);
+  });
+
+  it("promotes a DRAFT to ACTIVE with a customer code and payment term", async () => {
+    const fixture = await setupErpLockedTenant();
+
+    const draft = await prisma.customer.create({
+      data: {
+        tenantId: fixture.tenantId,
+        ownerId: fixture.adminId,
+        draftCreatedByUserId: fixture.adminId,
+        name: "Awaiting Promotion",
+        customerType: "COMPANY",
+        status: CustomerStatus.DRAFT
+      }
+    });
+
+    const code = `PROMO-${randomUUID().slice(0, 8)}`;
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/v1/customers/${draft.id}/promote`,
+      headers: fixture.auth,
+      payload: { customerCode: code, defaultTermId: fixture.termId }
+    });
+    expect(res.statusCode).toBe(200);
+    const promoted = res.json();
+    expect(promoted.status).toBe(CustomerStatus.ACTIVE);
+    expect(promoted.customerCode).toBe(code);
+    expect(promoted.defaultTermId).toBe(fixture.termId);
+    expect(promoted.promotedAt).toBeTruthy();
   });
 });

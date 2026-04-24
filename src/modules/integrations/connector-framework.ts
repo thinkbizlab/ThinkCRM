@@ -392,19 +392,76 @@ async function upsertEntity(
       validatedCf = validateCustomFields(connectorAppShim, cfDefs, payload.customFields as Record<string, unknown>);
     }
 
-    // Same uniqueness rule the create/edit form enforces.
+    // Field-prospect auto-promotion: if a rep previously created a DRAFT for
+    // this prospect with the same Tax ID, ERP is now confirming it. Fill in
+    // the missing code/term/ref and flip to ACTIVE instead of inserting a new
+    // row — visits and deals already point at this id.
     if (payload.taxId) {
-      const taxIdDuplicate = await prisma.customer.findFirst({
+      const draftMatch = await prisma.customer.findFirst({
+        where: { tenantId, taxId: payload.taxId, status: "DRAFT" },
+        select: {
+          id: true,
+          customerCode: true,
+          name: true,
+          defaultTermId: true,
+          status: true,
+          externalRef: true,
+          customerType: true
+        }
+      });
+      if (draftMatch) {
+        await prisma.customer.update({
+          where: { id: draftMatch.id },
+          data: {
+            status: "ACTIVE",
+            promotedAt: new Date(),
+            customerCode: payload.customerCode,
+            name: payload.name,
+            customerType: payload.customerType ?? undefined,
+            ownerId: resolvedOwnerId,
+            siteLat: payload.siteLat ?? undefined,
+            siteLng: payload.siteLng ?? undefined,
+            externalRef: payload.externalRef ?? undefined,
+            disabled: payload.disabled ?? undefined,
+            defaultTermId,
+            customFields: validatedCf ?? undefined
+          }
+        });
+        await prisma.entityChangelog.create({
+          data: {
+            tenantId,
+            entityType: EntityType.CUSTOMER,
+            entityId: draftMatch.id,
+            action: "UPDATE",
+            beforeJson: draftMatch as unknown as Prisma.InputJsonValue,
+            afterJson: {
+              status: "ACTIVE",
+              customerCode: payload.customerCode,
+              name: payload.name
+            } as Prisma.InputJsonValue,
+            contextJson: {
+              reason: "promoted_via_sync",
+              taxId: payload.taxId
+            } as Prisma.InputJsonValue
+          }
+        });
+        return;
+      }
+
+      // No DRAFT match — keep the friendly pre-check against ACTIVE customers
+      // so we return a clear error message before the unique constraint fires.
+      const activeTaxIdDuplicate = await prisma.customer.findFirst({
         where: {
           tenantId,
           taxId: payload.taxId,
+          status: "ACTIVE",
           NOT: { customerCode: payload.customerCode }
         },
         select: { customerCode: true, name: true }
       });
-      if (taxIdDuplicate) {
+      if (activeTaxIdDuplicate) {
         throw new Error(
-          `Tax ID "${payload.taxId}" is already registered to customer "${taxIdDuplicate.name}" (${taxIdDuplicate.customerCode}).`
+          `Tax ID "${payload.taxId}" is already registered to customer "${activeTaxIdDuplicate.name}" (${activeTaxIdDuplicate.customerCode}).`
         );
       }
     }
@@ -418,6 +475,7 @@ async function upsertEntity(
         await prisma.customer.update({
           where: { id: existing.id },
           data: {
+            status: "ACTIVE",
             customerCode: payload.customerCode,
             name: payload.name,
             customerType: payload.customerType ?? undefined,
@@ -434,40 +492,47 @@ async function upsertEntity(
       }
     }
 
-    await prisma.customer.upsert({
-      where: {
-        tenantId_customerCode: {
-          tenantId,
-          customerCode: payload.customerCode
-        }
-      },
-      update: {
-        name: payload.name,
-        customerType: payload.customerType ?? undefined,
-        taxId: payload.taxId ?? undefined,
-        ownerId: resolvedOwnerId,
-        siteLat: payload.siteLat ?? undefined,
-        siteLng: payload.siteLng ?? undefined,
-        externalRef: payload.externalRef ?? undefined,
-        disabled: payload.disabled ?? undefined,
-        defaultTermId,
-        customFields: validatedCf ?? undefined
-      },
-      create: {
-        tenantId,
-        customerCode: payload.customerCode,
-        name: payload.name,
-        customerType: payload.customerType ?? undefined,
-        taxId: payload.taxId ?? undefined,
-        ownerId: resolvedOwnerId,
-        siteLat: payload.siteLat ?? undefined,
-        siteLng: payload.siteLng ?? undefined,
-        externalRef: payload.externalRef ?? undefined,
-        disabled: payload.disabled ?? false,
-        defaultTermId,
-        customFields: validatedCf ?? undefined
-      }
+    // customerCode uniqueness is now a partial index on ACTIVE rows, so an
+    // upsert against a compound unique no longer fits — use findFirst + branch.
+    const existingByCode = await prisma.customer.findFirst({
+      where: { tenantId, customerCode: payload.customerCode, status: "ACTIVE" },
+      select: { id: true }
     });
+    if (existingByCode) {
+      await prisma.customer.update({
+        where: { id: existingByCode.id },
+        data: {
+          name: payload.name,
+          customerType: payload.customerType ?? undefined,
+          taxId: payload.taxId ?? undefined,
+          ownerId: resolvedOwnerId,
+          siteLat: payload.siteLat ?? undefined,
+          siteLng: payload.siteLng ?? undefined,
+          externalRef: payload.externalRef ?? undefined,
+          disabled: payload.disabled ?? undefined,
+          defaultTermId,
+          customFields: validatedCf ?? undefined
+        }
+      });
+    } else {
+      await prisma.customer.create({
+        data: {
+          tenantId,
+          status: "ACTIVE",
+          customerCode: payload.customerCode,
+          name: payload.name,
+          customerType: payload.customerType ?? undefined,
+          taxId: payload.taxId ?? undefined,
+          ownerId: resolvedOwnerId,
+          siteLat: payload.siteLat ?? undefined,
+          siteLng: payload.siteLng ?? undefined,
+          externalRef: payload.externalRef ?? undefined,
+          disabled: payload.disabled ?? false,
+          defaultTermId,
+          customFields: validatedCf ?? undefined
+        }
+      });
+    }
     return;
   }
 

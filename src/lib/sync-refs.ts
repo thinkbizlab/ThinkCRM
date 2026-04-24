@@ -84,8 +84,10 @@ async function resolveEntityId(
   if (entityType === EntityType.CUSTOMER) {
     const code = record.customerCode;
     if (typeof code !== "string") return null;
-    const entity = await prisma.customer.findUnique({
-      where: { tenantId_customerCode: { tenantId, customerCode: code } },
+    // customerCode is unique only among ACTIVE rows (partial index) — DRAFT
+    // customers have NULL codes so findFirst is correct here.
+    const entity = await prisma.customer.findFirst({
+      where: { tenantId, customerCode: code, status: "ACTIVE" },
       select: { id: true },
     });
     return entity?.id ?? null;

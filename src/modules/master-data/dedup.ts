@@ -59,7 +59,10 @@ function pairKey(a: string, b: string): [string, string] {
 
 type CustomerRow = {
   id: string;
-  customerCode: string;
+  // DRAFT customers have no ERP code yet, so this can be null. Dedup still
+  // runs across DRAFT and ACTIVE rows together so we can catch no-Tax-ID
+  // drafts that resemble an incoming ERP record.
+  customerCode: string | null;
   name: string;
   taxId: string | null;
   contacts: Array<{ tel: string | null; email: string | null }>;
@@ -322,8 +325,8 @@ export async function scanDuplicatesForTenant(tenantId: string): Promise<DedupSc
 // ── Merge logic ─────────────────────────────────────────────────────────────
 
 export type MergePreview = {
-  keeper: { id: string; customerCode: string; name: string };
-  losers: Array<{ id: string; customerCode: string; name: string }>;
+  keeper: { id: string; customerCode: string | null; name: string };
+  losers: Array<{ id: string; customerCode: string | null; name: string }>;
   counts: {
     addresses: number;
     contacts: number;
@@ -338,7 +341,7 @@ export type MergePreview = {
   };
 };
 
-async function assertCustomersInTenant(tenantId: string, ids: string[]): Promise<Array<{ id: string; customerCode: string; name: string; taxId: string | null; externalRef: string | null }>> {
+async function assertCustomersInTenant(tenantId: string, ids: string[]): Promise<Array<{ id: string; customerCode: string | null; name: string; taxId: string | null; externalRef: string | null }>> {
   const rows = await prisma.customer.findMany({
     where: { tenantId, id: { in: ids } },
     select: { id: true, customerCode: true, name: true, taxId: true, externalRef: true }

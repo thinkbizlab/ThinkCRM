@@ -19,6 +19,11 @@ import {
 } from "./modules/dom.js";
 import { loadOAuthProviderButtons, wireOAuthProviderButtons, consumeOAuthCallback } from "./modules/oauth.js";
 import { icon } from "./modules/icons.js";
+import { openDraftCustomerModal, openPromoteDraftModal, draftBadgeHtml, setDraftCustomerDeps } from "./modules/customer-drafts.js";
+
+setDraftCustomerDeps({
+  getCustomerGroups: () => state.cache.customerGroups || []
+});
 
 const loginForm = qs("#login-form");
 const authMessage = qs("#auth-message");
@@ -8304,22 +8309,26 @@ function buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk
               || ownerNameById.get(c.ownerId)
               || (c.ownerId === state.user?.id ? currentUserOwnerName : null);
             const isChecked = selected.has(c.id);
+            const isDraft = c.status === "DRAFT";
+            const canPromoteDraft = isDraft && (isAdmin || c.draftCreatedByUserId === state.user?.id);
+            const codeLabel = isDraft ? "—" : (c.customerCode || "—");
             return `
-            <tr class="cust-row${isChecked ? " cust-row-selected" : ""}" data-id="${c.id}">
-              ${canBulk ? `<td class="cust-check-col"><input type="checkbox" class="cust-check-row" data-id="${c.id}" ${isChecked ? "checked" : ""} /></td>` : ""}
+            <tr class="cust-row${isChecked ? " cust-row-selected" : ""}${isDraft ? " cust-row-draft" : ""}" data-id="${c.id}">
+              ${canBulk ? `<td class="cust-check-col"><input type="checkbox" class="cust-check-row" data-id="${c.id}" ${isChecked ? "checked" : ""} ${isDraft ? "disabled" : ""} /></td>` : ""}
               <td>${start + i + 1}</td>
-              <td><button class="cust-code-btn" data-id="${c.id}" data-code="${escHtml(c.customerCode)}">${escHtml(c.customerCode)}</button></td>
-              <td><button class="cust-name-btn" data-id="${c.id}" data-code="${escHtml(c.customerCode)}">${escHtml(c.name)}</button>${c.customerGroup ? ` <span class="cust-group-pill" title="Customer group">${escHtml(c.customerGroup.name)}</span>` : ""}${c.disabled ? ' <span class="cust-disabled-pill" title="Disabled — cannot be used for new deals/visits/quotations">Disabled</span>' : ""}</td>
+              <td>${isDraft ? `<span class="muted small">—</span>` : `<button class="cust-code-btn" data-id="${c.id}" data-code="${escHtml(c.customerCode || "")}">${escHtml(c.customerCode || "")}</button>`}</td>
+              <td><button class="cust-name-btn" data-id="${c.id}" data-code="${escHtml(c.customerCode || "")}">${escHtml(c.name)}</button>${isDraft ? ` ${draftBadgeHtml()}` : ""}${c.customerGroup ? ` <span class="cust-group-pill" title="Customer group">${escHtml(c.customerGroup.name)}</span>` : ""}${c.disabled ? ' <span class="cust-disabled-pill" title="Disabled — cannot be used for new deals/visits/quotations">Disabled</span>' : ""}</td>
               <td>${ownerName ? escHtml(ownerName) : '<span class="muted small">—</span>'}</td>
               <td>${c.contacts?.length
                 ? `<button class="cust-badge-contact cust-contacts-btn" data-id="${c.id}" title="View contacts"><svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>${c.contacts.length}</button>`
                 : '<span class="muted small">—</span>'}</td>
               <td><div class="cust-actions-cell">
-                <button class="cust-action-btn cust-360-btn" data-id="${c.id}" data-code="${escHtml(c.customerCode)}">360°</button>
-                ${!apiLocked && canReassign ? `<button class="cust-action-btn cust-reassign-btn" data-id="${c.id}" data-name="${escHtml(c.name)}" title="Reassign owner">Reassign</button>` : ""}
-                ${!apiLocked ? `<button class="cust-action-btn cust-edit-btn" data-id="${c.id}">Edit</button>` : ""}
-                ${!apiLocked ? `<button class="cust-action-btn cust-toggle-btn" data-id="${c.id}" data-disabled="${!!c.disabled}">${c.disabled ? "Activate" : "Deactivate"}</button>` : ""}
-                ${!apiLocked && isAdmin ? `<button class="cust-action-btn cust-delete-btn danger" data-id="${c.id}" data-name="${escHtml(c.name)}">Delete</button>` : ""}
+                <button class="cust-action-btn cust-360-btn" data-id="${c.id}" data-code="${escHtml(c.customerCode || "")}">360°</button>
+                ${canPromoteDraft ? `<button class="cust-action-btn cust-promote-btn" data-id="${c.id}" data-name="${escHtml(c.name)}" title="Assign an ERP code and promote this draft to active.">Promote</button>` : ""}
+                ${!apiLocked && !isDraft && canReassign ? `<button class="cust-action-btn cust-reassign-btn" data-id="${c.id}" data-name="${escHtml(c.name)}" title="Reassign owner">Reassign</button>` : ""}
+                ${!apiLocked && !isDraft ? `<button class="cust-action-btn cust-edit-btn" data-id="${c.id}">Edit</button>` : ""}
+                ${!apiLocked && !isDraft ? `<button class="cust-action-btn cust-toggle-btn" data-id="${c.id}" data-disabled="${!!c.disabled}">${c.disabled ? "Activate" : "Deactivate"}</button>` : ""}
+                ${(!apiLocked || isDraft) && isAdmin ? `<button class="cust-action-btn cust-delete-btn danger" data-id="${c.id}" data-name="${escHtml(c.name)}">Delete</button>` : ""}
               </div></td>
             </tr>`;
           }).join("")}
@@ -8434,6 +8443,24 @@ function attachCustBodyDelegation(bodyEl) {
       openBulkReassignOwnerModal({
         ids: [reassignBtn.dataset.id],
         titleSuffix: reassignBtn.dataset.name || "Customer"
+      });
+      return;
+    }
+
+    const promoteBtn = t.closest(".cust-promote-btn");
+    if (promoteBtn) {
+      e.stopPropagation();
+      const customer = getCachedCustomerById(promoteBtn.dataset.id);
+      if (!customer) return;
+      const termOptionsHtml = bodyEl._custCtx?.termOptions || "";
+      openPromoteDraftModal({
+        customer,
+        termOptionsHtml,
+        onPromoted: async () => {
+          setStatus("Loading…");
+          await loadMaster();
+          setStatus("");
+        }
       });
       return;
     }
@@ -8866,8 +8893,14 @@ function renderCustomerListSection(container, termOptions) {
         ${showCfFilters ? `
           <button class="ghost small" id="cust-filter-toggle">${state.masterFiltersOpen ? "Hide" : "Show"} filters${activeCfFilterCount ? ` (${activeCfFilterCount})` : ""}</button>
         ` : ""}
-        ${isAdmin && !apiLocked ? `<button class="ghost small" id="cust-find-dupes-btn" title="Scan for duplicate customers in this tenant">Find duplicates</button>` : ""}
-        ${apiLocked ? `<span class="muted small" title="Manage by API is ON for Customer — UI changes are disabled in Settings.">🔒 API-managed (read-only)</span>` : `
+        ${isAdmin ? `<button class="ghost small" id="cust-find-dupes-btn" title="Scan for duplicate customers in this tenant">Find duplicates</button>` : ""}
+        ${apiLocked ? `
+          <span class="muted small" title="Manage by API is ON for Customer — regular creates come from the ERP sync.">🔒 ERP-managed</span>
+          <button class="cust-create-btn" id="cust-open-draft-modal" title="Capture a prospect you met in the field. ERP sync will auto-link it when it assigns a real code.">
+            <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Capture Prospect
+          </button>
+        ` : `
         <button class="cust-create-btn" id="cust-open-modal">
           <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           New Customer
@@ -8913,6 +8946,16 @@ function renderCustomerListSection(container, termOptions) {
   // New Customer modal
   container.querySelector("#cust-open-modal")?.addEventListener("click", () => {
     openNewCustomerModal(termOptions);
+  });
+  // Draft (field prospect) modal — available when ERP-managed
+  container.querySelector("#cust-open-draft-modal")?.addEventListener("click", () => {
+    openDraftCustomerModal({
+      onCreated: async () => {
+        setStatus("Loading…");
+        await loadMaster();
+        setStatus("");
+      }
+    });
   });
 
   // Find duplicates
@@ -10748,8 +10791,9 @@ function initCustomerAutocomplete(inputEl, listEl, hiddenEl, onSelect) {
     if (reqId !== activeRequest || inputEl.value.trim() !== q) return;
     if (!matches.length) { closeList(); return; }
     listEl.innerHTML = matches.map((c) =>
-      `<button type="button" class="ac-item" data-id="${c.id}" data-name="${escHtml(c.name)}">
+      `<button type="button" class="ac-item" data-id="${c.id}" data-name="${escHtml(c.name)}" data-status="${escHtml(c.status || "ACTIVE")}">
          <span class="ac-item-name">${escHtml(c.name)}</span>
+         ${c.status === "DRAFT" ? `<span class="cust-draft-pill" title="Draft — quotations blocked until promoted">DRAFT</span>` : ""}
          ${c.customerCode ? `<span class="ac-item-code">${escHtml(c.customerCode)}</span>` : ""}
        </button>`
     ).join("");

@@ -76,20 +76,43 @@ const customerGroupSchema = z.object({
 });
 const customerGroupUpdateSchema = customerGroupSchema.partial();
 
-const customerSchema = z.object({
-  customerCode: z.string().min(2).max(40),
+const customerSchemaBase = z.object({
+  // customerCode is required for ACTIVE customers (real ERP code) but optional
+  // for DRAFTs captured in the field before ERP sync.
+  customerCode: z.string().min(2).max(40).optional(),
   name: z.string().min(2).max(200),
   customerType: z.nativeEnum(CustomerType).optional(),
   taxId: z.string().max(20).optional(),
-  defaultTermId: z.string().min(1),
+  // Payment term is likewise optional for DRAFTs — chosen at promotion.
+  defaultTermId: z.string().min(1).optional(),
   customerGroupId: z.string().min(1).nullable().optional(),
   ownerId: z.string().optional(),
   siteLat: z.number().min(-90).max(90).optional(),
   siteLng: z.number().min(-180).max(180).optional(),
   externalRef: z.string().trim().max(100).optional(),
+  status: z.enum(["DRAFT", "ACTIVE"]).optional(),
   customFields: customFieldValuesSchema.optional()
 });
-const customerUpdateSchema = customerSchema.omit({ customerCode: true }).partial().extend({
+const customerSchema = customerSchemaBase.superRefine((data, ctx) => {
+  const status = data.status ?? "ACTIVE";
+  if (status === "ACTIVE") {
+    if (!data.customerCode) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["customerCode"],
+        message: "customerCode is required for ACTIVE customers."
+      });
+    }
+    if (!data.defaultTermId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["defaultTermId"],
+        message: "defaultTermId is required for ACTIVE customers."
+      });
+    }
+  }
+});
+const customerUpdateSchema = customerSchemaBase.omit({ customerCode: true, status: true }).partial().extend({
   defaultTermId: z.string().min(1).optional(),
   customerGroupId: z.string().min(1).nullable().optional(),
   disabled: z.boolean().optional()
@@ -438,6 +461,8 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
         id: true,
         name: true,
         customerCode: true,
+        status: true,
+        draftCreatedByUserId: true,
         owner: { select: { id: true, fullName: true } }
       },
       orderBy: [
@@ -473,19 +498,27 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
 
   app.post("/customers", async (request, reply) => {
     const tenantId = requireTenantId(request);
-    await assertMasterWritable(tenantId, "customer");
     const changedById = requireUserId(request);
     const visibleUserIds = await listVisibleUserIds(request);
     const parsed = customerSchema.safeParse(request.body);
     if (!parsed.success) {
       throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
-    const paymentTerm = await prisma.paymentTerm.findFirst({
-      where: { id: parsed.data.defaultTermId, tenantId, isActive: true },
-      select: { id: true }
-    });
-    if (!paymentTerm) {
-      throw app.httpErrors.badRequest("defaultTermId is invalid or inactive for this tenant.");
+    const isDraft = parsed.data.status === "DRAFT";
+    // DRAFT creation is the one path that bypasses `manageCustomersByApi` —
+    // the whole point is to let reps capture prospects before ERP sync runs.
+    if (!isDraft) {
+      await assertMasterWritable(tenantId, "customer");
+    }
+
+    if (parsed.data.defaultTermId) {
+      const paymentTerm = await prisma.paymentTerm.findFirst({
+        where: { id: parsed.data.defaultTermId, tenantId, isActive: true },
+        select: { id: true }
+      });
+      if (!paymentTerm) {
+        throw app.httpErrors.badRequest("defaultTermId is invalid or inactive for this tenant.");
+      }
     }
 
     const ownerId = parsed.data.ownerId ?? changedById;
@@ -496,11 +529,17 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     if (parsed.data.taxId) {
       const taxIdDuplicate = await prisma.customer.findFirst({
         where: { tenantId, taxId: parsed.data.taxId },
-        select: { customerCode: true, name: true }
+        select: { id: true, customerCode: true, name: true, status: true }
       });
       if (taxIdDuplicate) {
+        // DRAFT creators who hit an existing customer should land on that
+        // customer instead of getting blocked — that's the point of reusing
+        // the tenant Tax ID uniqueness as a routing mechanism.
+        if (isDraft) {
+          return reply.code(200).send({ ...taxIdDuplicate, reusedExisting: true });
+        }
         throw app.httpErrors.conflict(
-          `Tax ID "${parsed.data.taxId}" is already registered to customer "${taxIdDuplicate.name}" (${taxIdDuplicate.customerCode}).`
+          `Tax ID "${parsed.data.taxId}" is already registered to customer "${taxIdDuplicate.name}" (${taxIdDuplicate.customerCode ?? "DRAFT"}).`
         );
       }
     }
@@ -523,14 +562,16 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       const row = await tx.customer.create({
         data: {
           tenantId,
-          customerCode: parsed.data.customerCode,
+          status: isDraft ? "DRAFT" : "ACTIVE",
+          customerCode: parsed.data.customerCode ?? null,
           name: parsed.data.name,
           customerType: parsed.data.customerType ?? CustomerType.COMPANY,
           taxId: parsed.data.taxId,
-          defaultTermId: parsed.data.defaultTermId,
+          defaultTermId: parsed.data.defaultTermId ?? null,
           customerGroupId: parsed.data.customerGroupId ?? null,
           ownerId,
           createdByUserId: changedById,
+          draftCreatedByUserId: isDraft ? changedById : null,
           customFields
         }
       });
@@ -541,7 +582,8 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
         entityId: row.id,
         action: "CREATE",
         changedById,
-        after: row
+        after: row,
+        context: isDraft ? { reason: "draft_created_in_field" } : undefined
       });
       return row;
     });
@@ -568,12 +610,16 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.forbidden("customer owner must be within your hierarchy scope.");
     }
     const nextDefaultTermId = parsed.data.defaultTermId ?? existing.defaultTermId;
-    const paymentTerm = await prisma.paymentTerm.findFirst({
-      where: { id: nextDefaultTermId, tenantId, isActive: true },
-      select: { id: true }
-    });
-    if (!paymentTerm) {
-      throw app.httpErrors.badRequest("defaultTermId is invalid or inactive for this tenant.");
+    // Payment term may legitimately be null on a DRAFT customer — only validate
+    // when the caller is providing or keeping a concrete term id.
+    if (nextDefaultTermId) {
+      const paymentTerm = await prisma.paymentTerm.findFirst({
+        where: { id: nextDefaultTermId, tenantId, isActive: true },
+        select: { id: true }
+      });
+      if (!paymentTerm) {
+        throw app.httpErrors.badRequest("defaultTermId is invalid or inactive for this tenant.");
+      }
     }
 
     if (parsed.data.taxId) {
@@ -843,10 +889,9 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.post("/customers/:keeperId/merge", async (request) => {
-    requireRoleAtLeast(request, UserRole.ADMIN);
     const tenantId = requireTenantId(request);
-    await assertMasterWritable(tenantId, "customer");
     const changedById = requireUserId(request);
+    const role = request.requestContext.role;
     const params = request.params as { keeperId: string };
     const query = request.query as { dryRun?: string };
     const parsed = mergeBodySchema.safeParse(request.body);
@@ -857,6 +902,29 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     if (loserIds.length === 0) {
       throw app.httpErrors.badRequest("At least one loser customer is required.");
     }
+
+    // Determine whether this is a DRAFT cleanup (rep merging their own prospect
+    // into the ACTIVE customer that just arrived from ERP) or a normal admin
+    // merge. DRAFT cleanups bypass both the tenant API-lock and the admin gate.
+    const loserRows = await prisma.customer.findMany({
+      where: { tenantId, id: { in: loserIds } },
+      select: { id: true, status: true, draftCreatedByUserId: true }
+    });
+    if (loserRows.length !== loserIds.length) {
+      throw app.httpErrors.notFound("One or more loser customers not found in this tenant.");
+    }
+    const allLosersAreOwnDrafts = loserRows.every(
+      (r) => r.status === "DRAFT" && r.draftCreatedByUserId === changedById
+    );
+    const hasAdminTier = role ? (role === UserRole.ADMIN || role === UserRole.DIRECTOR || role === UserRole.MANAGER || role === UserRole.ASSISTANT_MANAGER) : false;
+    if (!hasAdminTier && !allLosersAreOwnDrafts) {
+      throw app.httpErrors.forbidden("Only admins/managers or the draft's creator may merge customers.");
+    }
+    const allLosersDraft = loserRows.every((r) => r.status === "DRAFT");
+    if (!allLosersDraft) {
+      await assertMasterWritable(tenantId, "customer");
+    }
+
     if (query.dryRun === "true" || query.dryRun === "1") {
       return { dryRun: true, preview: await buildMergePreview(tenantId, params.keeperId, loserIds) };
     }
@@ -869,9 +937,98 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     await logAuditEvent(tenantId, changedById, "CUSTOMER_MERGE", {
       keeperId: params.keeperId,
       loserIds,
-      counts: preview.counts
+      counts: preview.counts,
+      draftCleanup: allLosersDraft
     }, request.ip);
     return { dryRun: false, preview };
+  });
+
+  const promoteBodySchema = z.object({
+    customerCode: z.string().trim().min(2).max(40),
+    defaultTermId: z.string().trim().min(1)
+  });
+
+  // Manual promotion: admin (or the rep who drafted it, for their own prospect)
+  // fills in the ERP customerCode + payment term that ERP sync hasn't delivered
+  // yet, flipping the DRAFT to ACTIVE in place.
+  app.post("/customers/:id/promote", async (request, reply) => {
+    const tenantId = requireTenantId(request);
+    const changedById = requireUserId(request);
+    const role = request.requestContext.role;
+    const params = request.params as { id: string };
+    const parsed = promoteBodySchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
+    }
+
+    const draft = await prisma.customer.findFirst({
+      where: { tenantId, id: params.id },
+      select: {
+        id: true,
+        status: true,
+        customerCode: true,
+        defaultTermId: true,
+        name: true,
+        taxId: true,
+        draftCreatedByUserId: true
+      }
+    });
+    if (!draft) throw app.httpErrors.notFound("Customer not found.");
+    if (draft.status !== "DRAFT") {
+      throw app.httpErrors.badRequest("Customer is already ACTIVE; nothing to promote.");
+    }
+
+    const hasAdminTier = role ? (role === UserRole.ADMIN || role === UserRole.DIRECTOR || role === UserRole.MANAGER || role === UserRole.ASSISTANT_MANAGER) : false;
+    const isOwnDraft = draft.draftCreatedByUserId === changedById;
+    if (!hasAdminTier && !isOwnDraft) {
+      throw app.httpErrors.forbidden("Only admins/managers or the draft's creator may promote.");
+    }
+
+    const paymentTerm = await prisma.paymentTerm.findFirst({
+      where: { id: parsed.data.defaultTermId, tenantId, isActive: true },
+      select: { id: true }
+    });
+    if (!paymentTerm) {
+      throw app.httpErrors.badRequest("defaultTermId is invalid or inactive for this tenant.");
+    }
+
+    // Enforce the partial-unique rule explicitly so the error is clear rather
+    // than a raw constraint violation from Postgres.
+    const codeClash = await prisma.customer.findFirst({
+      where: { tenantId, customerCode: parsed.data.customerCode, status: "ACTIVE" },
+      select: { id: true, name: true }
+    });
+    if (codeClash) {
+      throw app.httpErrors.conflict(
+        `customerCode "${parsed.data.customerCode}" already belongs to customer "${codeClash.name}".`
+      );
+    }
+
+    const updated = await prisma.customer.update({
+      where: { id: draft.id },
+      data: {
+        status: "ACTIVE",
+        customerCode: parsed.data.customerCode,
+        defaultTermId: parsed.data.defaultTermId,
+        promotedAt: new Date()
+      }
+    });
+    await writeEntityChangelog({
+      db: prisma,
+      tenantId,
+      entityType: EntityType.CUSTOMER,
+      entityId: draft.id,
+      action: "UPDATE",
+      changedById,
+      before: draft,
+      after: updated,
+      context: { reason: "draft_promoted_manually" }
+    });
+    await logAuditEvent(tenantId, changedById, "CUSTOMER_PROMOTE", {
+      customerId: draft.id,
+      customerCode: parsed.data.customerCode
+    }, request.ip);
+    return reply.code(200).send(updated);
   });
 
   app.post("/customers/:id/addresses", async (request, reply) => {
@@ -1158,7 +1315,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       })
     ]);
     const inUse = new Set<string>([
-      ...customerUsage.map((r) => r.defaultTermId),
+      ...customerUsage.map((r) => r.defaultTermId).filter((v): v is string => v != null),
       ...quotationUsage.map((r) => r.paymentTermId).filter((v): v is string => v != null)
     ]);
     if (inUse.size > 0) {
@@ -1644,34 +1801,45 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
         continue;
       }
       try {
-        await prisma.customer.upsert({
-          where: { tenantId_customerCode: { tenantId, customerCode: row.customerCode } },
-          update: {
-            name: row.name,
-            defaultTermId,
-            customerType: row.customerType,
-            ...(row.customerGroupCode !== undefined ? { customerGroupId } : {}),
-            taxId: row.taxId || null,
-            externalRef: row.externalRef || null,
-            siteLat: row.siteLat,
-            siteLng: row.siteLng,
-            ...(customFields !== undefined ? { customFields } : {})
-          },
-          create: {
-            tenantId,
-            ownerId,
-            customerCode: row.customerCode,
-            name: row.name,
-            defaultTermId,
-            customerGroupId,
-            customerType: row.customerType ?? CustomerType.COMPANY,
-            taxId: row.taxId || null,
-            externalRef: row.externalRef || null,
-            siteLat: row.siteLat,
-            siteLng: row.siteLng,
-            customFields
-          }
+        // customerCode uniqueness is partial (ACTIVE only) so we branch instead
+        // of using a compound-unique upsert.
+        const existing = await prisma.customer.findFirst({
+          where: { tenantId, customerCode: row.customerCode, status: "ACTIVE" },
+          select: { id: true }
         });
+        if (existing) {
+          await prisma.customer.update({
+            where: { id: existing.id },
+            data: {
+              name: row.name,
+              defaultTermId,
+              customerType: row.customerType,
+              ...(row.customerGroupCode !== undefined ? { customerGroupId } : {}),
+              taxId: row.taxId || null,
+              externalRef: row.externalRef || null,
+              siteLat: row.siteLat,
+              siteLng: row.siteLng,
+              ...(customFields !== undefined ? { customFields } : {})
+            }
+          });
+        } else {
+          await prisma.customer.create({
+            data: {
+              tenantId,
+              ownerId,
+              customerCode: row.customerCode,
+              name: row.name,
+              defaultTermId,
+              customerGroupId,
+              customerType: row.customerType ?? CustomerType.COMPANY,
+              taxId: row.taxId || null,
+              externalRef: row.externalRef || null,
+              siteLat: row.siteLat,
+              siteLng: row.siteLng,
+              customFields
+            }
+          });
+        }
         imported += 1;
       } catch (error) {
         errors.push({ row: i + 1, customerCode: row.customerCode, error: (error as Error).message });
