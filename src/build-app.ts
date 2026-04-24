@@ -68,6 +68,16 @@ export async function buildApp() {
   // from fonts.googleapis.com (CSS) and fonts.gstatic.com (font files). styleSrc keeps
   // 'unsafe-inline' only because web/app.js still sets a handful of inline style attrs
   // (el.style.x = ...) that browsers evaluate under styleSrc-attr.
+  // Direct browser → R2 uploads (presigned PUT for voice notes / attachments) need
+  // connect-src coverage for the tenant's R2 endpoint.
+  const r2ConnectSrc: string[] = [];
+  if (config.R2_ACCOUNT_ID && config.R2_ACCOUNT_ID !== "local-account") {
+    r2ConnectSrc.push(`https://${config.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`);
+  }
+  if (config.R2_PUBLIC_URL) {
+    try { r2ConnectSrc.push(new URL(config.R2_PUBLIC_URL).origin); } catch { /* ignore */ }
+  }
+
   await app.register(helmet, {
     contentSecurityPolicy: {
       directives: {
@@ -76,7 +86,7 @@ export async function buildApp() {
         styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
         fontSrc: ["'self'", "https://fonts.gstatic.com", "data:"],
         imgSrc: ["'self'", "data:", "https:"],
-        connectSrc: ["'self'", "https://maps.googleapis.com"],
+        connectSrc: ["'self'", "https://maps.googleapis.com", ...r2ConnectSrc],
         frameSrc: ["'none'"],
         objectSrc: ["'none'"],
         upgradeInsecureRequests: config.NODE_ENV === "production" ? [] : null,
