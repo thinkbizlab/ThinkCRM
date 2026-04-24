@@ -6634,6 +6634,14 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 .vn-ai-warning[hidden] { display: none; }
 .vn-ai-warning strong { color: oklch(30% 0.1 50); }
 
+.vn-ai-warning--info {
+  background: oklch(97% 0.025 230);
+  border-color: oklch(80% 0.08 230);
+  border-left-color: oklch(60% 0.15 230);
+  color: oklch(35% 0.06 230);
+}
+.vn-ai-warning--info strong { color: oklch(30% 0.08 230); }
+
 .voice-note-actions { display: flex; gap: var(--sp-2); margin-bottom: var(--sp-4); flex-wrap: wrap; }
 
 .voice-note-file-label {

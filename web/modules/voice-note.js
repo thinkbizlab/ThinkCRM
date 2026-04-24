@@ -26,6 +26,7 @@ function getVoiceNoteEls() {
     root,
     subtitle: qs("#voice-note-modal-subtitle"),
     aiWarning: qs("#voice-note-ai-warning"),
+    summaryWarning: qs("#voice-note-summary-warning"),
     recordBtn: qs("#voice-note-record"),
     stopBtn: qs("#voice-note-stop"),
     status: qs("#voice-note-status"),
@@ -96,16 +97,25 @@ export async function openVoiceNoteModal(entityType, entityId, subtitle) {
   els.subtitle.textContent = subtitle ? `${entityType} · ${subtitle}` : entityType;
   els.root.hidden = false;
 
-  // Always re-check so admin config changes (adding OpenAI key) take effect
+  // Always re-check so admin config changes (adding OpenAI/Anthropic keys) take effect
   // without a page reload.
+  let summaryAvailable = false;
   try {
     const status = await api("/ai/status");
     voiceNoteState.aiAvailable = status.transcriptionAvailable === true;
+    summaryAvailable = status.summaryAvailable === true;
   } catch {
     voiceNoteState.aiAvailable = false;
+    summaryAvailable = false;
   }
   const transcriptionDisabled = voiceNoteState.aiAvailable === false;
   els.aiWarning.hidden = !transcriptionDisabled;
+  // Show summary warning when transcription works but summarization doesn't
+  // (OpenAI configured, Anthropic missing) — otherwise the user sees an empty
+  // Summary field with no explanation.
+  if (els.summaryWarning) {
+    els.summaryWarning.hidden = transcriptionDisabled || summaryAvailable;
+  }
   els.recordBtn.disabled = transcriptionDisabled;
   els.fileInput.disabled = transcriptionDisabled;
   // Dim the "Upload file" label visually when the hidden input is disabled.
