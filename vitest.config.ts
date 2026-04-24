@@ -7,6 +7,7 @@ export default defineConfig({
     env: {
       SUPER_ADMIN_EMAILS: "super@thinkcrm.test",
       OPENAI_API_KEY: "sk-test-voice-notes-stub",
+      ANTHROPIC_API_KEY: "sk-ant-test-voice-notes-stub",
     },
   },
 });

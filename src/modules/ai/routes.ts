@@ -1053,12 +1053,20 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
     // S7: check voice notes feature gate before doing any file work
     const limits = await getPlanLimits(tenantId);
     assertVoiceNotesAvailable(limits, app.httpErrors);
-    // Require OpenAI — Claude cannot transcribe audio, and browser
-    // SpeechRecognition is too unreliable (Firefox/iOS Safari/Samsung Internet).
-    const openaiApiKeyEarly = await resolveOpenAIApiKey(tenantId);
+    // Voice notes require BOTH keys: OpenAI for transcription (Claude cannot process audio),
+    // and Anthropic for the bullet-point summary saved to CRM.
+    const [openaiApiKeyEarly, anthropicApiKeyEarly] = await Promise.all([
+      resolveOpenAIApiKey(tenantId),
+      resolveAnthropicApiKey(tenantId)
+    ]);
     if (!openaiApiKeyEarly) {
       throw app.httpErrors.forbidden(
         "Voice notes require an OpenAI API key. Ask your workspace admin to configure it in Settings → Integrations → OpenAI."
+      );
+    }
+    if (!anthropicApiKeyEarly) {
+      throw app.httpErrors.forbidden(
+        "Voice notes require an Anthropic API key for summaries. Ask your workspace admin to configure it in Settings → Integrations → Anthropic."
       );
     }
     const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { slug: true } });
@@ -1126,7 +1134,7 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
       if (!deal) throw app.httpErrors.notFound("Deal not found in tenant.");
     }
 
-    const anthropicApiKey = await resolveAnthropicApiKey(tenantId);
+    const anthropicApiKey = anthropicApiKeyEarly;
     const browserTranscript = multipartResult?.transcriptText ?? jsonTranscriptText;
     const outputLang = multipartResult?.outputLang ?? jsonOutputLang;
 

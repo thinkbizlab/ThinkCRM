@@ -98,26 +98,25 @@ export async function openVoiceNoteModal(entityType, entityId, subtitle) {
   els.root.hidden = false;
 
   // Always re-check so admin config changes (adding OpenAI/Anthropic keys) take effect
-  // without a page reload.
+  // without a page reload. Both keys are required to start a voice note.
+  let transcriptionAvailable = false;
   let summaryAvailable = false;
   try {
     const status = await api("/ai/status");
-    voiceNoteState.aiAvailable = status.transcriptionAvailable === true;
+    transcriptionAvailable = status.transcriptionAvailable === true;
     summaryAvailable = status.summaryAvailable === true;
   } catch {
-    voiceNoteState.aiAvailable = false;
+    transcriptionAvailable = false;
     summaryAvailable = false;
   }
-  const transcriptionDisabled = voiceNoteState.aiAvailable === false;
-  els.aiWarning.hidden = !transcriptionDisabled;
-  // Show summary warning when transcription works but summarization doesn't
-  // (OpenAI configured, Anthropic missing) — otherwise the user sees an empty
-  // Summary field with no explanation.
+  voiceNoteState.aiAvailable = transcriptionAvailable && summaryAvailable;
+  const disabled = !voiceNoteState.aiAvailable;
+  els.aiWarning.hidden = transcriptionAvailable;
   if (els.summaryWarning) {
-    els.summaryWarning.hidden = transcriptionDisabled || summaryAvailable;
+    els.summaryWarning.hidden = !transcriptionAvailable || summaryAvailable;
   }
-  els.recordBtn.disabled = transcriptionDisabled;
-  els.fileInput.disabled = transcriptionDisabled;
+  els.recordBtn.disabled = disabled;
+  els.fileInput.disabled = disabled;
   // Dim the "Upload file" label visually when the hidden input is disabled.
   const fileLabel = els.fileInput.closest("label");
   if (fileLabel) fileLabel.classList.toggle("voice-note-file-label--disabled", transcriptionDisabled);
