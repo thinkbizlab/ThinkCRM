@@ -119,7 +119,7 @@ export async function openVoiceNoteModal(entityType, entityId, subtitle) {
   els.fileInput.disabled = disabled;
   // Dim the "Upload file" label visually when the hidden input is disabled.
   const fileLabel = els.fileInput.closest("label");
-  if (fileLabel) fileLabel.classList.toggle("voice-note-file-label--disabled", transcriptionDisabled);
+  if (fileLabel) fileLabel.classList.toggle("voice-note-file-label--disabled", disabled);
 }
 
 function closeVoiceNoteModal() {
