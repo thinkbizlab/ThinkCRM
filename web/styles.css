@@ -3596,6 +3596,15 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 .cust-row:hover { background: var(--surface-soft); }
 .cust-row:last-child { border-bottom: none; }
 
+/* Native browser-level row virtualization for large customer lists.
+   Rows outside the viewport skip paint + layout; rendering time becomes
+   roughly constant instead of linear in row count. Falls back gracefully
+   on browsers without support (row just paints normally). */
+.cust-table-heavy .cust-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 48px;
+}
+
 .cust-row td {
   padding: var(--sp-3) var(--sp-3);
   vertical-align: middle;

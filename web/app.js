@@ -8255,6 +8255,8 @@ function openContactsPopup(contacts) {
   overlay.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
 }
 
+const CUST_ROWS_VIRTUAL_THRESHOLD = 200;
+
 function buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk, canReassign, apiLocked = false) {
   const selected = state.customerSelectedIds || new Set();
   const pageIds = slice.map((c) => c.id);
@@ -8264,11 +8266,13 @@ function buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk
     user.fullName || user.email || user.id
   ]));
   const currentUserOwnerName = state.user?.fullName || state.user?.email || null;
+  const heavy = slice.length > CUST_ROWS_VIRTUAL_THRESHOLD;
+  const tableClass = `cust-table${heavy ? " cust-table-heavy" : ""}`;
   const tableHtml = all.length === 0 && state.customerListQuery
     ? `<div class="cust-empty">No customers match "<strong>${escHtml(state.customerListQuery)}</strong>"</div>`
     : all.length === 0
     ? `<div class="cust-empty">No customers yet. Click <strong>New Customer</strong> to add one.</div>`
-    : `<table class="cust-table">
+    : `<table class="${tableClass}">
         <thead>
           <tr>
             ${canBulk ? `<th class="cust-check-col"><input type="checkbox" class="cust-check-all" ${allOnPageSelected ? "checked" : ""} title="Select all on this page" /></th>` : ""}
@@ -8321,22 +8325,37 @@ function buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk
   return `<div class="cust-table-wrap">${tableHtml}</div>${paginationHtml}`;
 }
 
-function attachCustBodyListeners(container, totalPages, termOptions) {
-  // Contacts popup
-  container.querySelectorAll(".cust-contacts-btn").forEach((btn) => {
-    btn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const contacts = getCachedCustomerById(btn.dataset.id)?.contacts || [];
-      openContactsPopup(contacts);
-    });
-  });
+// One delegated click + change listener on #cust-body. Routes every row
+// button via closest() so listener count stays O(1) regardless of row count.
+// refreshCustBody() only rewrites innerHTML — listeners stay attached.
+function attachCustBodyDelegation(bodyEl) {
+  if (!bodyEl || bodyEl.dataset.custDelegated === "1") return;
+  bodyEl.dataset.custDelegated = "1";
 
-  // Edit customer
-  container.querySelectorAll(".cust-edit-btn").forEach((btn) => {
-    btn.addEventListener("click", (e) => {
+  bodyEl.addEventListener("click", (e) => {
+    const t = e.target;
+    if (!(t instanceof Element)) return;
+
+    // Checkbox clicks: don't let them bubble as row-clicks.
+    if (t.closest(".cust-check-row, .cust-check-all")) {
       e.stopPropagation();
-      const customer = getCachedCustomerById(btn.dataset.id);
+      return;
+    }
+
+    const contactsBtn = t.closest(".cust-contacts-btn");
+    if (contactsBtn) {
+      e.stopPropagation();
+      const contacts = getCachedCustomerById(contactsBtn.dataset.id)?.contacts || [];
+      openContactsPopup(contacts);
+      return;
+    }
+
+    const editBtn = t.closest(".cust-edit-btn");
+    if (editBtn) {
+      e.stopPropagation();
+      const customer = getCachedCustomerById(editBtn.dataset.id);
       if (!customer) return;
+      const termOptions = bodyEl._custCtx?.termOptions || "";
       openEditCustomerModal({
         id: customer.id,
         customerCode: customer.customerCode,
@@ -8348,124 +8367,131 @@ function attachCustBodyListeners(container, totalPages, termOptions) {
         disabled: !!customer.disabled,
         customerGroupId: customer.customerGroup?.id || ""
       }, termOptions);
-    });
-  });
+      return;
+    }
 
-  container.querySelectorAll(".cust-toggle-btn").forEach((btn) => {
-    btn.addEventListener("click", async (e) => {
+    const toggleBtn = t.closest(".cust-toggle-btn");
+    if (toggleBtn) {
       e.stopPropagation();
-      try {
-        await api(`/customers/${btn.dataset.id}`, {
-          method: "PATCH",
-          body: { disabled: btn.dataset.disabled !== "true" }
+      (async () => {
+        try {
+          await api(`/customers/${toggleBtn.dataset.id}`, {
+            method: "PATCH",
+            body: { disabled: toggleBtn.dataset.disabled !== "true" }
+          });
+          await loadMaster();
+        } catch (error) {
+          setStatus(error.message, true);
+        }
+      })();
+      return;
+    }
+
+    const deleteBtn = t.closest(".cust-delete-btn");
+    if (deleteBtn) {
+      e.stopPropagation();
+      (async () => {
+        const confirmed = await openConfirmPopup({
+          title: "Delete Customer",
+          message: `Delete <strong>${escHtml(deleteBtn.dataset.name || "this customer")}</strong>? This cannot be undone and will remove all associated addresses, contacts, and history.`,
+          confirmLabel: "Delete",
+          danger: true,
         });
-        await loadMaster();
-      } catch (error) {
-        setStatus(error.message, true);
-      }
-    });
-  });
+        if (!confirmed) return;
+        try {
+          await api(`/customers/${deleteBtn.dataset.id}`, { method: "DELETE" });
+          setStatus("Customer deleted.");
+          await loadMaster();
+        } catch (error) {
+          setStatus(error.message, true);
+        }
+      })();
+      return;
+    }
 
-  // Delete (ADMIN only)
-  container.querySelectorAll(".cust-delete-btn").forEach((btn) => {
-    btn.addEventListener("click", async (e) => {
-      e.stopPropagation();
-      const confirmed = await openConfirmPopup({
-        title: "Delete Customer",
-        message: `Delete <strong>${escHtml(btn.dataset.name || "this customer")}</strong>? This cannot be undone and will remove all associated addresses, contacts, and history.`,
-        confirmLabel: "Delete",
-        danger: true,
-      });
-      if (!confirmed) return;
-      try {
-        await api(`/customers/${btn.dataset.id}`, { method: "DELETE" });
-        setStatus("Customer deleted.");
-        await loadMaster();
-      } catch (error) {
-        setStatus(error.message, true);
-      }
-    });
-  });
+    const openBtn = t.closest(".cust-code-btn, .cust-name-btn, .cust-360-btn");
+    if (openBtn) {
+      openCustomer360(openBtn.dataset.id, openBtn.dataset.code);
+      return;
+    }
 
-  // Open 360
-  container.querySelectorAll(".cust-code-btn, .cust-name-btn, .cust-360-btn").forEach((btn) => {
-    btn.addEventListener("click", () => openCustomer360(btn.dataset.id, btn.dataset.code));
-  });
-
-  // Per-row Reassign Owner (>= SUPERVISOR)
-  container.querySelectorAll(".cust-reassign-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
+    const reassignBtn = t.closest(".cust-reassign-btn");
+    if (reassignBtn) {
       openBulkReassignOwnerModal({
-        ids: [btn.dataset.id],
-        titleSuffix: btn.dataset.name || "Customer"
+        ids: [reassignBtn.dataset.id],
+        titleSuffix: reassignBtn.dataset.name || "Customer"
       });
-    });
+      return;
+    }
+
+    const prevBtn = t.closest('[data-page-prev="customer"]');
+    if (prevBtn) {
+      state.customerListPage = Math.max(1, state.customerListPage - 1);
+      refreshCustBody(bodyEl, bodyEl._custCtx?.termOptions || "");
+      return;
+    }
+    const nextBtn = t.closest('[data-page-next="customer"]');
+    if (nextBtn) {
+      const totalPages = bodyEl._custCtx?.totalPages || 1;
+      state.customerListPage = Math.min(totalPages, state.customerListPage + 1);
+      refreshCustBody(bodyEl, bodyEl._custCtx?.termOptions || "");
+      return;
+    }
   });
 
-  // Row checkbox
-  container.querySelectorAll(".cust-check-row").forEach((cb) => {
-    cb.addEventListener("click", (e) => e.stopPropagation());
-    cb.addEventListener("change", () => {
-      const id = cb.dataset.id;
+  bodyEl.addEventListener("change", (e) => {
+    const t = e.target;
+    if (!(t instanceof Element)) return;
+
+    if (t.matches(".cust-check-row")) {
+      const id = t.dataset.id;
       if (!id) return;
       if (!state.customerSelectedIds) state.customerSelectedIds = new Set();
-      if (cb.checked) state.customerSelectedIds.add(id);
+      if (t.checked) state.customerSelectedIds.add(id);
       else state.customerSelectedIds.delete(id);
-      const row = cb.closest(".cust-row");
-      if (row) row.classList.toggle("cust-row-selected", cb.checked);
-      const allCb = container.querySelector(".cust-check-all");
+      const row = t.closest(".cust-row");
+      if (row) row.classList.toggle("cust-row-selected", t.checked);
+      const allCb = bodyEl.querySelector(".cust-check-all");
       if (allCb) {
-        const pageIds = Array.from(container.querySelectorAll(".cust-check-row")).map((x) => x.dataset.id);
+        const pageIds = Array.from(bodyEl.querySelectorAll(".cust-check-row")).map((x) => x.dataset.id);
         allCb.checked = pageIds.length > 0 && pageIds.every((i) => state.customerSelectedIds.has(i));
       }
       updateCustBulkToolbar();
-    });
-  });
+      return;
+    }
 
-  // Header "select all on page"
-  container.querySelector(".cust-check-all")?.addEventListener("change", (e) => {
-    if (!state.customerSelectedIds) state.customerSelectedIds = new Set();
-    const check = e.target.checked;
-    container.querySelectorAll(".cust-check-row").forEach((cb) => {
-      cb.checked = check;
-      const id = cb.dataset.id;
-      if (!id) return;
-      if (check) state.customerSelectedIds.add(id);
-      else state.customerSelectedIds.delete(id);
-      const row = cb.closest(".cust-row");
-      if (row) row.classList.toggle("cust-row-selected", check);
-    });
-    updateCustBulkToolbar();
-  });
+    if (t.matches(".cust-check-all")) {
+      if (!state.customerSelectedIds) state.customerSelectedIds = new Set();
+      const check = t.checked;
+      bodyEl.querySelectorAll(".cust-check-row").forEach((cb) => {
+        cb.checked = check;
+        const id = cb.dataset.id;
+        if (!id) return;
+        if (check) state.customerSelectedIds.add(id);
+        else state.customerSelectedIds.delete(id);
+        const row = cb.closest(".cust-row");
+        if (row) row.classList.toggle("cust-row-selected", check);
+      });
+      updateCustBulkToolbar();
+      return;
+    }
 
-  // Pagination
-  const bodyEl = container.querySelector("#cust-body");
-  container.querySelector('[data-page-prev="customer"]')?.addEventListener("click", () => {
-    state.customerListPage = Math.max(1, state.customerListPage - 1);
-    refreshCustBody(bodyEl, termOptions);
-  });
-  container.querySelector('[data-page-next="customer"]')?.addEventListener("click", () => {
-    state.customerListPage = Math.min(totalPages, state.customerListPage + 1);
-    refreshCustBody(bodyEl, termOptions);
-  });
-  // Direct change handler on the page-size select (in addition to body
-  // delegation) so the list reliably refreshes even if delegation is
-  // bypassed by some other handler.
-  container.querySelectorAll('select[data-page-size-key="customer"]').forEach((sel) => {
-    sel.addEventListener("change", () => {
-      const v = sel.value === "all" ? "all" : Number(sel.value);
+    // Safety-net local page-size handler — global delegation at
+    // installMasterPageSizeDelegation() normally catches this first.
+    if (t.matches('select[data-page-size-key="customer"]')) {
+      const v = t.value === "all" ? "all" : Number(t.value);
       setMasterPageSize("customer", v);
       state.customerListPage = 1;
       setStatus("Loading…");
-      if (bodyEl) bodyEl.classList.add("master-list-loading");
+      bodyEl.classList.add("master-list-loading");
       requestAnimationFrame(() => {
-        try { refreshCustBody(bodyEl, termOptions); }
+        try { refreshCustBody(bodyEl, bodyEl._custCtx?.termOptions || ""); }
         finally {
-          if (bodyEl) bodyEl.classList.remove("master-list-loading");
+          bodyEl.classList.remove("master-list-loading");
           setStatus("");
         }
       });
-    });
+    }
   });
 }
 
@@ -8779,7 +8805,8 @@ function refreshCustBody(bodyEl, termOptions) {
   const canBulk = !apiLocked && ["ADMIN", "DIRECTOR", "MANAGER", "SUPERVISOR"].includes(role);
   const canReassign = canBulk;
   bodyEl.innerHTML = buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk, canReassign, apiLocked);
-  attachCustBodyListeners(bodyEl.closest(".cust-list-wrap")?.parentElement ?? bodyEl, totalPages, termOptions);
+  bodyEl._custCtx = { totalPages, termOptions };
+  attachCustBodyDelegation(bodyEl);
   updateCustBulkToolbar();
 }
 
@@ -8905,7 +8932,10 @@ function renderCustomerListSection(container, termOptions) {
     renderCustomerListSection(container, termOptions);
   });
 
-  attachCustBodyListeners(container, totalPages, termOptions);
+  if (bodyEl) {
+    bodyEl._custCtx = { totalPages, termOptions };
+    attachCustBodyDelegation(bodyEl);
+  }
 }
 
 // ── Duplicate Detection + Merge Modals ────────────────────────────────────
