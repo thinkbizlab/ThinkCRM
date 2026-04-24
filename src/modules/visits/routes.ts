@@ -1057,15 +1057,21 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
     });
     const now = new Date();
 
+    // Checked-in visits move to the calendar slot of their check-in time (users want
+    // to see what actually happened on that day, not what was planned). Query matches
+    // either plannedAt or checkInAt in range; mapping below picks the effective date.
     const visitPromise = !includeVisits
       ? Promise.resolve([] as VisitWithCustomerRep[])
       : prisma.visit.findMany({
           where: {
             tenantId,
-            plannedAt: { gte: dateFrom, lt: dateTo },
             repId: ownerFilter,
             customerId: query.customerId,
-            ...(visitStatuses.length ? { status: { in: visitStatuses } } : {})
+            ...(visitStatuses.length ? { status: { in: visitStatuses } } : {}),
+            OR: [
+              { plannedAt: { gte: dateFrom, lt: dateTo } },
+              { checkInAt: { gte: dateFrom, lt: dateTo } }
+            ]
           },
           include: {
             customer: { select: { id: true, name: true } },
@@ -1098,6 +1104,8 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
 
     const visitEvents = visits
       .map((visit) => {
+        // Once a visit is checked in, the calendar shows it on the check-in date.
+        const displayAt = visit.checkInAt ?? visit.plannedAt;
         const color =
           visit.status === VisitStatus.CHECKED_OUT
             ? "green"
@@ -1113,7 +1121,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
           type: "visit" as const,
           color,
           eventTypeColor: "blue",
-          at: visit.plannedAt.toISOString(),
+          at: displayAt.toISOString(),
           title: `Visit: ${visit.customer.name}`,
           status: visit.status,
           owner: { id: visit.rep.id, name: visit.rep.fullName },
@@ -1121,6 +1129,10 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
         };
       })
       .filter((event) => {
+        // Drop events whose effective date falls outside the requested range (the
+        // OR query above can return rows where only the *other* timestamp matches).
+        const at = new Date(event.at);
+        if (at < dateFrom || at >= dateTo) return false;
         if (!queryText) return true;
         return (
           event.title.toLowerCase().includes(queryText) ||
