@@ -145,6 +145,27 @@ export async function deleteR2Object(tenantSlug: string, objectKeyOrRef: string)
   await r2Client.send(new DeleteObjectCommand({ Bucket: config.R2_BUCKET, Key: objectKey }));
 }
 
+export async function fetchR2ObjectBuffer(
+  tenantSlug: string,
+  objectKeyOrRef: string
+): Promise<{ buffer: Buffer; contentType: string | null }> {
+  if (!isR2Configured) {
+    throw new Error("R2 is not configured.");
+  }
+  const objectKey = parseObjectKeyInput(tenantSlug, objectKeyOrRef);
+  const response = await r2Client.send(
+    new GetObjectCommand({ Bucket: config.R2_BUCKET, Key: objectKey })
+  );
+  if (!response.Body) {
+    throw new Error("R2 object has no body.");
+  }
+  const chunks: Buffer[] = [];
+  for await (const chunk of response.Body as AsyncIterable<Uint8Array>) {
+    chunks.push(Buffer.from(chunk));
+  }
+  return { buffer: Buffer.concat(chunks), contentType: response.ContentType ?? null };
+}
+
 export async function uploadBufferToR2(input: {
   tenantSlug: string;
   objectKeyOrRef: string;

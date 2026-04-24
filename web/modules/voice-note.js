@@ -151,13 +151,35 @@ async function uploadVoiceNoteAudio(blob, filename) {
   lockVoiceNoteModal();
   setVoiceNoteStatus(aiReady && hasTranscript ? "Uploading and summarizing…" : "Uploading audio…");
   try {
-    const form = new FormData();
-    form.append("entityType", voiceNoteState.entityType);
-    form.append("entityId", voiceNoteState.entityId);
-    form.append("audio", blob, filename || "voice-note.webm");
-    if (voiceNoteState.transcript) form.append("transcriptText", voiceNoteState.transcript);
-    form.append("outputLang", voiceNoteState.outputLang);
-    const job = await api("/voice-notes", { method: "POST", body: form });
+    // Upload directly to R2 via presigned URL so large audio files (>4.5 MB) bypass
+    // Vercel's serverless body limit. Then POST JSON metadata to /voice-notes.
+    const contentType = blob.type || "audio/webm";
+    const presign = await api("/storage/r2/presign-upload", {
+      method: "POST",
+      body: {
+        entityType: voiceNoteState.entityType,
+        entityId: voiceNoteState.entityId,
+        filename: filename || "voice-note.webm",
+        contentType
+      }
+    });
+    const putRes = await fetch(presign.uploadUrl, {
+      method: "PUT",
+      headers: { "content-type": contentType },
+      body: blob
+    });
+    if (!putRes.ok) throw new Error(`Upload failed (${putRes.status}).`);
+
+    const job = await api("/voice-notes", {
+      method: "POST",
+      body: {
+        entityType: voiceNoteState.entityType,
+        entityId: voiceNoteState.entityId,
+        audioObjectKey: presign.objectRef,
+        ...(voiceNoteState.transcript ? { transcriptText: voiceNoteState.transcript } : {}),
+        outputLang: voiceNoteState.outputLang
+      }
+    });
     const els2 = getVoiceNoteEls();
     if (els2) {
       voiceNoteState.jobId = job.id;

@@ -20,7 +20,7 @@ type UserLite = UserHierarchyNode & { role: UserRole; teamId: string | null };
 import { prisma } from "../../lib/prisma.js";
 import { getPlanLimits, assertVoiceNotesAvailable } from "../../lib/plan-limits.js";
 import { decryptField } from "../../lib/secrets.js";
-import { uploadBufferToR2, createR2PresignedDownload } from "../../lib/r2-storage.js";
+import { uploadBufferToR2, createR2PresignedDownload, fetchR2ObjectBuffer } from "../../lib/r2-storage.js";
 import { config } from "../../config.js";
 import { convertToMp4, isFfmpegAvailable } from "../../lib/audio-convert.js";
 
@@ -51,7 +51,9 @@ const jsonVoiceNoteCreateSchema = z
   .object({
     entityType: z.enum(["VISIT", "DEAL", "QUOTATION"]),
     entityId: z.string().trim().min(1),
-    audioObjectKey: z.string().trim().min(1)
+    audioObjectKey: z.string().trim().min(1),
+    transcriptText: z.preprocess(v => (v === "" ? undefined : v), z.string().trim().min(1).optional()),
+    outputLang: z.enum(["TH", "EN"]).optional()
   })
   .strict();
 
@@ -1065,6 +1067,8 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
     let audioMimeType = "audio/webm";
     let payload: { entityType: "VISIT" | "DEAL" | "QUOTATION"; entityId: string; audioObjectKey: string };
     let multipartResult: Awaited<ReturnType<typeof createAudioObjectFromMultipart>> | null = null;
+    let jsonTranscriptText: string | null = null;
+    let jsonOutputLang: "TH" | "EN" = "TH";
 
     if (request.isMultipart()) {
       multipartResult = await createAudioObjectFromMultipart({ request, tenantId, tenantSlug: tenant.slug, app });
@@ -1080,7 +1084,26 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
       if (!parsed.success) {
         throw app.httpErrors.badRequest(zodMsg(parsed.error));
       }
-      payload = parsed.data;
+      payload = {
+        entityType: parsed.data.entityType,
+        entityId: parsed.data.entityId,
+        audioObjectKey: parsed.data.audioObjectKey
+      };
+      jsonTranscriptText = parsed.data.transcriptText ?? null;
+      jsonOutputLang = parsed.data.outputLang ?? "TH";
+
+      // Audio was uploaded directly to R2 via presigned URL (bypasses Vercel's 4.5 MB body limit).
+      // Fetch it so we can transcribe server-side. parseObjectKeyInput enforces tenant scope.
+      // Non-fatal on failure — user can still type notes manually in the review step.
+      if (!jsonTranscriptText) {
+        try {
+          const fetched = await fetchR2ObjectBuffer(tenant.slug, payload.audioObjectKey);
+          audioBuffer = fetched.buffer;
+          audioMimeType = fetched.contentType ?? "audio/webm";
+        } catch (error) {
+          request.log.warn({ err: error }, "Failed to fetch voice-note audio from R2");
+        }
+      }
     }
 
     if (payload.entityType === "VISIT") {
@@ -1104,8 +1127,8 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const anthropicApiKey = await resolveAnthropicApiKey(tenantId);
-    const browserTranscript = multipartResult?.transcriptText ?? null;
-    const outputLang = multipartResult?.outputLang ?? "TH";
+    const browserTranscript = multipartResult?.transcriptText ?? jsonTranscriptText;
+    const outputLang = multipartResult?.outputLang ?? jsonOutputLang;
 
     // OpenAI key is guaranteed here (checked at top of handler). Use browser
     // transcript when present; otherwise transcribe server-side.
