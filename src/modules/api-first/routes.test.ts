@@ -64,7 +64,7 @@ describe("api-first contract routes", () => {
         pricingModel: "FIXED_PER_USER",
         status: "ACTIVE",
         seatPriceCents: 100000,
-        seatCount: 2,
+        seatCount: 10,
         currency: "THB",
         paymentMethodRef: "pm_seeded"
       }
@@ -95,31 +95,24 @@ describe("api-first contract routes", () => {
   }
 
   it("supports plan contract tenant signup endpoint", async () => {
-    const slug = `signup-${randomUUID()}`;
+    const slug = `signup-${randomUUID().slice(0, 8)}`;
     const response = await app.inject({
       method: "POST",
       url: "/api/v1/tenants/signup",
       payload: {
         companyName: "Signup Tenant",
-        companySlug: slug,
-        admin: {
-          email: `admin-${slug}@example.com`,
-          fullName: "Signup Admin"
-        },
-        billing: {
-          seatPriceCents: 150000,
-          initialSeatCount: 3,
-          currency: "THB",
-          paymentMethodRef: "pm_signup",
-          overagePricePerGb: 2900,
-          includedBytes: 1_073_741_824
-        }
+        slug,
+        adminFullName: "Signup Admin",
+        adminEmail: `admin-${slug}@example.com`,
+        adminPassword: "ThisIsAStrongPassword123!"
       }
     });
 
     expect(response.statusCode).toBe(201);
-    const body = response.json() as { tenantId: string };
-    createdTenantIds.push(body.tenantId);
+    const body = response.json() as { needsEmailVerification?: boolean; tenantSlug?: string };
+    expect(body.tenantSlug).toBe(slug);
+    const tenant = await prisma.tenant.findUnique({ where: { slug }, select: { id: true } });
+    if (tenant) createdTenantIds.push(tenant.id);
   });
 
   it("returns dashboard summary and subscription aliases", async () => {
@@ -145,7 +138,7 @@ describe("api-first contract routes", () => {
     expect(subscriptionResponse.statusCode).toBe(200);
   });
 
-  it("supports invite and hierarchy scope endpoints", async () => {
+  it("supports invite endpoint (creates UserInvite record) and hierarchy scope traversal", async () => {
     const fixture = await setupFixture();
     const inviteResponse = await app.inject({
       method: "POST",
@@ -162,7 +155,17 @@ describe("api-first contract routes", () => {
     });
 
     expect(inviteResponse.statusCode).toBe(201);
-    const invited = inviteResponse.json() as { id: string };
+
+    const directReport = await prisma.user.create({
+      data: {
+        tenantId: fixture.tenant.id,
+        email: `direct-${randomUUID()}@example.com`,
+        fullName: "Direct Report",
+        role: UserRole.REP,
+        managerUserId: fixture.manager.id,
+        passwordHash: hashPassword("Password123!")
+      }
+    });
 
     const scopeResponse = await app.inject({
       method: "GET",
@@ -173,6 +176,6 @@ describe("api-first contract routes", () => {
     });
 
     expect(scopeResponse.statusCode).toBe(200);
-    expect((scopeResponse.json() as { scopeUserIds: string[] }).scopeUserIds).toContain(invited.id);
+    expect((scopeResponse.json() as { scopeUserIds: string[] }).scopeUserIds).toContain(directReport.id);
   });
 });

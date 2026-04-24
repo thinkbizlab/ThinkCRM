@@ -167,7 +167,7 @@ describe("profile integration binding routes", () => {
     });
     expect(list.statusCode).toBe(200);
     const payload = list.json();
-    expect(payload).toHaveLength(3);
+    expect(payload).toHaveLength(5);
 
     const ms365 = payload.find((item: { provider: string }) => item.provider === "MS365");
     const google = payload.find((item: { provider: string }) => item.provider === "GOOGLE");

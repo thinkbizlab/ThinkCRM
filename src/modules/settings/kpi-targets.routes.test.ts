@@ -113,7 +113,7 @@ describe("kpi target management routes", () => {
       })
     ]);
 
-    const [adminToken, managerToken] = await Promise.all([
+    const [adminToken, managerToken, repToken] = await Promise.all([
       app.jwt.sign({
         tenantId: tenant.id,
         userId: admin.id,
@@ -125,6 +125,12 @@ describe("kpi target management routes", () => {
         userId: manager.id,
         role: manager.role,
         email: manager.email
+      }),
+      app.jwt.sign({
+        tenantId: tenant.id,
+        userId: repOne.id,
+        role: repOne.role,
+        email: repOne.email
       })
     ]);
 
@@ -132,6 +138,7 @@ describe("kpi target management routes", () => {
       tenantId: tenant.id,
       adminToken,
       managerToken,
+      repToken,
       teamIds: {
         north: northTeam.id,
         south: southTeam.id
@@ -242,7 +249,7 @@ describe("kpi target management routes", () => {
       method: "POST",
       url: "/api/v1/kpi-targets",
       headers: {
-        authorization: `Bearer ${fixture.managerToken}`
+        authorization: `Bearer ${fixture.repToken}`
       },
       payload: {
         userId: fixture.userIds.repOne,

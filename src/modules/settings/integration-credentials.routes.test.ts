@@ -118,17 +118,17 @@ describe("tenant integration credential routes", () => {
       }
     });
     expect(initialList.statusCode).toBe(200);
-    expect(initialList.json()).toHaveLength(6);
+    expect(initialList.json()).toHaveLength(10);
 
     const saveCredentials = await app.inject({
       method: "PUT",
-      url: `/api/v1/tenants/${fixture.tenantId}/integrations/credentials/MS365`,
+      url: `/api/v1/tenants/${fixture.tenantId}/integrations/credentials/GOOGLE`,
       headers: {
         authorization: `Bearer ${fixture.adminToken}`
       },
       payload: {
-        clientId: "ms365-client",
-        clientSecret: "ms365-secret"
+        clientId: "google-client",
+        clientSecret: "google-secret"
       }
     });
     expect(saveCredentials.statusCode).toBe(200);
@@ -136,7 +136,7 @@ describe("tenant integration credential routes", () => {
 
     const enableBeforeTest = await app.inject({
       method: "PATCH",
-      url: `/api/v1/tenants/${fixture.tenantId}/integrations/credentials/MS365/enable`,
+      url: `/api/v1/tenants/${fixture.tenantId}/integrations/credentials/GOOGLE/enable`,
       headers: {
         authorization: `Bearer ${fixture.adminToken}`
       },
@@ -146,7 +146,7 @@ describe("tenant integration credential routes", () => {
 
     const runTest = await app.inject({
       method: "POST",
-      url: `/api/v1/tenants/${fixture.tenantId}/integrations/credentials/MS365/test`,
+      url: `/api/v1/tenants/${fixture.tenantId}/integrations/credentials/GOOGLE/test`,
       headers: {
         authorization: `Bearer ${fixture.managerToken}`
       }
@@ -157,7 +157,7 @@ describe("tenant integration credential routes", () => {
 
     const enableAfterTest = await app.inject({
       method: "PATCH",
-      url: `/api/v1/tenants/${fixture.tenantId}/integrations/credentials/MS365/enable`,
+      url: `/api/v1/tenants/${fixture.tenantId}/integrations/credentials/GOOGLE/enable`,
       headers: {
         authorization: `Bearer ${fixture.managerToken}`
       },

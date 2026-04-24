@@ -21,6 +21,20 @@ async function createAiFixture() {
   });
   createdTenantIds.push(tenant.id);
 
+  const nowPlus30 = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  await prisma.subscription.create({
+    data: {
+      tenantId: tenant.id,
+      status: "TRIALING",
+      seatCount: 5,
+      seatPriceCents: 1500,
+      currency: "THB",
+      pricingModel: "FIXED_PER_USER",
+      provider: "STRIPE",
+      billingPeriodEnd: nowPlus30
+    }
+  });
+
   const rep = await prisma.user.create({
     data: {
       tenantId: tenant.id,
@@ -206,6 +220,9 @@ afterAll(async () => {
     where: { tenantId: { in: createdTenantIds } }
   });
   await prisma.paymentTerm.deleteMany({
+    where: { tenantId: { in: createdTenantIds } }
+  });
+  await prisma.subscription.deleteMany({
     where: { tenantId: { in: createdTenantIds } }
   });
   await prisma.user.deleteMany({

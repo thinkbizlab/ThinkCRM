@@ -112,7 +112,7 @@ describe("visit lifecycle", () => {
       }
     });
     expect(checkInRes.statusCode).toBe(200);
-    expect(checkInRes.json().status).toBe(VisitStatus.CHECKED_IN);
+    expect(checkInRes.json().visit.status).toBe(VisitStatus.CHECKED_IN);
 
     const checkOutRes = await app.inject({
       method: "POST",
@@ -125,8 +125,8 @@ describe("visit lifecycle", () => {
       }
     });
     expect(checkOutRes.statusCode).toBe(200);
-    expect(checkOutRes.json().status).toBe(VisitStatus.CHECKED_OUT);
-    expect(checkOutRes.json().checkOutAt).toBeTruthy();
+    expect(checkOutRes.json().visit.status).toBe(VisitStatus.CHECKED_OUT);
+    expect(checkOutRes.json().visit.checkOutAt).toBeTruthy();
 
     const invalidCheckInRes = await app.inject({
       method: "POST",
@@ -185,7 +185,7 @@ describe("visit lifecycle", () => {
       }
     });
     expect(firstCheckInRes.statusCode).toBe(200);
-    expect(firstCheckInRes.json().status).toBe(VisitStatus.CHECKED_IN);
+    expect(firstCheckInRes.json().visit.status).toBe(VisitStatus.CHECKED_IN);
 
     const blockedCheckInRes = await app.inject({
       method: "POST",
@@ -235,6 +235,7 @@ describe("sales calendar events", () => {
       }
     });
 
+    const calendarToken = randomUUID().slice(0, 8);
     await prisma.visit.createMany({
       data: [
         {
@@ -242,6 +243,7 @@ describe("sales calendar events", () => {
           repId: fixture.repId,
           customerId: fixture.customerId,
           dealId: deal.id,
+          visitNo: `V-${calendarToken}-1`,
           visitType: VisitType.PLANNED,
           status: VisitStatus.CHECKED_OUT,
           plannedAt: twoHoursAgo,
@@ -252,6 +254,7 @@ describe("sales calendar events", () => {
           tenantId: fixture.tenantId,
           repId: fixture.repId,
           customerId: fixture.customerId,
+          visitNo: `V-${calendarToken}-2`,
           visitType: VisitType.PLANNED,
           status: VisitStatus.CHECKED_IN,
           plannedAt: oneHourAgo,
@@ -261,6 +264,7 @@ describe("sales calendar events", () => {
           tenantId: fixture.tenantId,
           repId: fixture.repId,
           customerId: fixture.customerId,
+          visitNo: `V-${calendarToken}-3`,
           visitType: VisitType.PLANNED,
           status: VisitStatus.PLANNED,
           plannedAt: nextHour
@@ -333,7 +337,7 @@ describe("sales calendar events", () => {
 
     const dealOnly = await app.inject({
       method: "GET",
-      url: "/api/v1/calendar/events?eventType=deal&query=mega",
+      url: "/api/v1/calendar/events?eventTypes=deal&query=mega",
       headers
     });
     expect(dealOnly.statusCode).toBe(200);
@@ -374,12 +378,14 @@ describe("sales rep todo home", () => {
       }
     });
 
+    const todoToken = randomUUID().slice(0, 8);
     await prisma.visit.createMany({
       data: [
         {
           tenantId: fixture.tenantId,
           repId: fixture.repId,
           customerId: fixture.customerId,
+          visitNo: `V-${todoToken}-1`,
           visitType: VisitType.PLANNED,
           status: VisitStatus.CHECKED_IN,
           plannedAt: new Date(now.getTime() - 2 * 60 * 60 * 1000),
@@ -389,6 +395,7 @@ describe("sales rep todo home", () => {
           tenantId: fixture.tenantId,
           repId: fixture.repId,
           customerId: fixture.customerId,
+          visitNo: `V-${todoToken}-2`,
           visitType: VisitType.PLANNED,
           status: VisitStatus.PLANNED,
           plannedAt: new Date(now.getTime() + 2 * 60 * 60 * 1000),
@@ -398,6 +405,7 @@ describe("sales rep todo home", () => {
           tenantId: fixture.tenantId,
           repId: fixture.repId,
           customerId: fixture.customerId,
+          visitNo: `V-${todoToken}-3`,
           visitType: VisitType.PLANNED,
           status: VisitStatus.PLANNED,
           plannedAt: new Date(now.getTime() + 26 * 60 * 60 * 1000),
@@ -407,6 +415,7 @@ describe("sales rep todo home", () => {
           tenantId: fixture.tenantId,
           repId: fixture.repId,
           customerId: fixture.customerId,
+          visitNo: `V-${todoToken}-4`,
           visitType: VisitType.PLANNED,
           status: VisitStatus.PLANNED,
           plannedAt: new Date(now.getTime() + 12 * 86400000),
@@ -453,12 +462,14 @@ describe("sales rep todo home", () => {
     const headers = await createAuthHeader(app, fixture);
     const now = new Date();
 
+    const filterToken = randomUUID().slice(0, 8);
     await prisma.visit.createMany({
       data: [
         {
           tenantId: fixture.tenantId,
           repId: fixture.repId,
           customerId: fixture.customerId,
+          visitNo: `V-${filterToken}-1`,
           visitType: VisitType.PLANNED,
           status: VisitStatus.CHECKED_IN,
           plannedAt: new Date(now.getTime() - 2 * 60 * 60 * 1000),
@@ -468,6 +479,7 @@ describe("sales rep todo home", () => {
           tenantId: fixture.tenantId,
           repId: fixture.repId,
           customerId: fixture.customerId,
+          visitNo: `V-${filterToken}-2`,
           visitType: VisitType.PLANNED,
           status: VisitStatus.PLANNED,
           plannedAt: new Date(now.getTime() + 2 * 60 * 60 * 1000),
@@ -566,7 +578,9 @@ describe("visit check-in/out evidence", () => {
         visitType: VisitType.PLANNED,
         status: VisitStatus.PLANNED,
         plannedAt: new Date(Date.now() + 3600000),
-        objective: "Demo visit"
+        objective: "Demo visit",
+        siteLat: withCoordinates ? 13.7563 : null,
+        siteLng: withCoordinates ? 100.5018 : null
       }
     });
 
@@ -599,7 +613,7 @@ describe("visit check-in/out evidence", () => {
     expect(res.json().message).toContain("outside onsite range");
   });
 
-  it("requires customer coordinates to perform onsite check-in validation", async () => {
+  it("allows unrestricted check-in when visit has no site coordinates (open meeting)", async () => {
     const { accessToken, visitId } = await setupVisit({ withCoordinates: false });
     const res = await app.inject({
       method: "POST",
@@ -614,8 +628,9 @@ describe("visit check-in/out evidence", () => {
       }
     });
 
-    expect(res.statusCode).toBe(400);
-    expect(res.json().message).toContain("Customer site coordinates are not configured");
+    expect(res.statusCode).toBe(200);
+    expect(res.json().visit.status).toBe(VisitStatus.CHECKED_IN);
+    expect(res.json().visit.checkInDistanceM).toBeNull();
   });
 
   it("rejects client-supplied checkout timestamps and stores server timestamp", async () => {
@@ -668,9 +683,9 @@ describe("visit check-in/out evidence", () => {
 
     expect(checkout.statusCode).toBe(200);
     const payload = checkout.json();
-    expect(payload.status).toBe(VisitStatus.CHECKED_OUT);
-    expect(payload.result).toBe("Completed meeting");
-    expect(new Date(payload.checkOutAt).getTime()).toBeGreaterThanOrEqual(beforeCheckout);
-    expect(new Date(payload.checkOutAt).getTime()).toBeLessThanOrEqual(afterCheckout);
+    expect(payload.visit.status).toBe(VisitStatus.CHECKED_OUT);
+    expect(payload.visit.result).toBe("Completed meeting");
+    expect(new Date(payload.visit.checkOutAt).getTime()).toBeGreaterThanOrEqual(beforeCheckout);
+    expect(new Date(payload.visit.checkOutAt).getTime()).toBeLessThanOrEqual(afterCheckout);
   });
 });

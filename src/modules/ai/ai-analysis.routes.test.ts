@@ -77,11 +77,13 @@ describe("ai analysis endpoint", () => {
     const headers = await authHeader(app, fixture.tenantId, fixture.repId);
     const now = new Date();
 
+    const visitToken = randomUUID().slice(0, 8);
     await prisma.visit.createMany({
       data: Array.from({ length: 7 }).map((_, index) => ({
         tenantId: fixture.tenantId,
         repId: fixture.repId,
         customerId: fixture.customerId,
+        visitNo: `V-${visitToken}-${index}`,
         visitType: VisitType.PLANNED,
         status: index < 2 ? VisitStatus.CHECKED_OUT : VisitStatus.CHECKED_IN,
         plannedAt: new Date(now.getTime() - (index + 1) * 3600000),

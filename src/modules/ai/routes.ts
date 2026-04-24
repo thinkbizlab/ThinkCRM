@@ -1249,7 +1249,7 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
             dealId: job.entityId,
             createdById: confirmedById,
             note: normalizedSummary,
-            attachmentUrl: job.audioObjectKey
+            attachmentUrls: [job.audioObjectKey]
           }
         });
 
