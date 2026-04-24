@@ -3783,7 +3783,7 @@ function openCheckOutModal(visitId, customerName) {
     locEl.className = "mt-checkin-status mt-checkin-status--warn";
   }
 
-  function closeModal() { modal.remove(); }
+  function closeModal() { qs("#mt-checkout-modal")?.remove(); }
 
   qs("#mt-checkout-close").addEventListener("click", closeModal);
   qs("#mt-checkout-cancel").addEventListener("click", closeModal);
@@ -3813,19 +3813,32 @@ function openCheckOutModal(visitId, customerName) {
     }
     confirmBtn.disabled = true;
     confirmBtn.textContent = "Saving…";
+
+    let checkoutRes;
     try {
-      const checkoutRes = await api(`/visits/${visitId}/checkout`, {
+      checkoutRes = await api(`/visits/${visitId}/checkout`, {
         method: "POST",
         body: { lat: checkoutCoords?.lat ?? 0, lng: checkoutCoords?.lng ?? 0, result }
       });
+    } catch (e) {
+      setStatus(e.message, true);
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = "Confirm Check-Out";
+      return;
+    }
 
-      showNotifWarnings(checkoutRes?.notifWarnings);
+    // Primary checkout succeeded — close modal immediately so post-checkout
+    // side-effects (follow-up, reload) can't keep the modal open.
+    setStatus("Visit checked out successfully.");
+    closeModal();
+    showNotifWarnings(checkoutRes?.notifWarnings);
 
-      // Create follow-up visit if requested
-      if (hasNextChk.checked) {
-        const nextDate = (qs("#mt-checkout-next-date")?.value || "").trim();
-        const nextObj  = (qs("#mt-checkout-next-objective")?.value || "").trim();
-        if (nextDate) {
+    // Follow-up visit is best-effort — errors surface as a toast only.
+    if (hasNextChk.checked) {
+      const nextDate = (qs("#mt-checkout-next-date")?.value || "").trim();
+      const nextObj  = (qs("#mt-checkout-next-objective")?.value || "").trim();
+      if (nextDate) {
+        try {
           const todoEvents = [
             ...(state.cache.myTasks?.pinned?.checkedInWaitingCheckout || []),
             ...(state.cache.myTasks?.buckets?.overdue || []),
@@ -3850,17 +3863,13 @@ function openCheckOutModal(visitId, customerName) {
               objective: nextObj || "Follow-up visit"
             }
           });
+        } catch (e) {
+          setStatus(`Checked out, but follow-up visit failed: ${e.message}`, true);
         }
       }
-
-      setStatus("Visit checked out successfully.");
-      closeModal();
-      await loadMyTasks();
-    } catch (e) {
-      setStatus(e.message, true);
-      confirmBtn.disabled = false;
-      confirmBtn.textContent = "Confirm Check-Out";
     }
+
+    try { await loadMyTasks(); } catch (e) { setStatus(e.message, true); }
   });
 }
 
