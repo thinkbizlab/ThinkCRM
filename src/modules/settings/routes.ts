@@ -278,10 +278,13 @@ const tenantIntegrationPlatforms = [
   IntegrationPlatform.OPENAI
 ] as const;
 
-const AI_PLATFORMS = new Set<IntegrationPlatform>([
+// Summary/analysis providers are mutually exclusive per tenant — enabling one
+// disables the others. OpenAI is intentionally excluded: it is used only for
+// voice-note transcription (a separate capability) and can run alongside whichever
+// summary provider the tenant has enabled.
+const AI_SUMMARY_PLATFORMS = new Set<IntegrationPlatform>([
   IntegrationPlatform.ANTHROPIC,
-  IntegrationPlatform.GEMINI,
-  IntegrationPlatform.OPENAI
+  IntegrationPlatform.GEMINI
 ]);
 
 type TenantIntegrationPlatform = (typeof tenantIntegrationPlatforms)[number];
@@ -1619,13 +1622,14 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
 
     const nextStatus = parsed.data.enabled ? SourceStatus.ENABLED : SourceStatus.DISABLED;
 
-    // If enabling an AI platform, disable all other AI platforms for this tenant first
-    if (parsed.data.enabled && AI_PLATFORMS.has(platform)) {
-      const otherAiPlatforms = [...AI_PLATFORMS].filter((p) => p !== platform);
+    // If enabling an AI summary provider, disable the other summary providers for this
+    // tenant first (mutex). OpenAI is transcription-only and is not part of this group.
+    if (parsed.data.enabled && AI_SUMMARY_PLATFORMS.has(platform)) {
+      const otherSummaryPlatforms = [...AI_SUMMARY_PLATFORMS].filter((p) => p !== platform);
       await prisma.tenantIntegrationCredential.updateMany({
         where: {
           tenantId: params.id,
-          platform: { in: otherAiPlatforms },
+          platform: { in: otherSummaryPlatforms },
           status: SourceStatus.ENABLED
         },
         data: { status: SourceStatus.DISABLED }

@@ -4852,8 +4852,10 @@ function renderSettings() {
       `;
     }
 
-    const aiPlatforms = ["ANTHROPIC", "GEMINI", "OPENAI"];
-    const activeAiPlatform = aiPlatforms.find(p => credByPlatform[p]?.isEnabled);
+    const summaryPlatforms = ["ANTHROPIC", "GEMINI"];
+    const activeSummaryPlatform = summaryPlatforms.find(p => credByPlatform[p]?.isEnabled);
+    const openaiEnabled = Boolean(credByPlatform["OPENAI"]?.isEnabled);
+    const summaryLabel = (p) => p === "GEMINI" ? "Gemini (Google)" : "Claude (Anthropic)";
 
     const aiSectionKey = "ai-services";
     const aiCollapsed = !state.openIntgSections.has(aiSectionKey);
@@ -4867,8 +4869,11 @@ function renderSettings() {
           </svg>
         </button>
         <div class="intg-section-body"><div class="intg-section-inner">
-          <p class="intg-section-desc muted">API keys for AI-powered features. <strong>Only one provider can be active at a time.</strong></p>
-          ${activeAiPlatform ? `<p class="intg-ai-active-hint">Active provider: <span class="chip chip-success" style="vertical-align:middle">${activeAiPlatform === "OPENAI" ? "ChatGPT (OpenAI)" : activeAiPlatform === "GEMINI" ? "Gemini (Google)" : "Claude (Anthropic)"}</span></p>` : `<p class="intg-ai-active-hint muted small">No AI provider enabled. Configure and enable one below.</p>`}
+          <p class="intg-section-desc muted">API keys for AI-powered features. <strong>Only one summary provider (Anthropic or Gemini) can be active at a time.</strong> OpenAI powers voice-note transcription and runs alongside whichever summary provider is enabled.</p>
+          <p class="intg-ai-active-hint">
+            ${activeSummaryPlatform ? `Summary provider: <span class="chip chip-success" style="vertical-align:middle">${summaryLabel(activeSummaryPlatform)}</span>` : `<span class="muted small">No summary provider enabled. Enable Anthropic or Gemini below.</span>`}
+            ${openaiEnabled ? ` &nbsp; Transcription: <span class="chip chip-success" style="vertical-align:middle">ChatGPT (OpenAI)</span>` : ""}
+          </p>
           <div class="intg-cards">
           ${[
             {
