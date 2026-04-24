@@ -1221,12 +1221,18 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
     }
     const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { slug: true } });
     if (!tenant) throw app.httpErrors.notFound("Tenant not found.");
-    const { downloadUrl } = await createR2PresignedDownload({
-      tenantSlug: tenant.slug,
-      objectKeyOrRef: job.audioObjectKey,
-      expiresInSeconds: 3600
-    });
-    return { url: downloadUrl };
+    try {
+      const { downloadUrl } = await createR2PresignedDownload({
+        tenantSlug: tenant.slug,
+        objectKeyOrRef: job.audioObjectKey,
+        expiresInSeconds: 3600
+      });
+      return { url: downloadUrl };
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "Unable to generate audio URL.";
+      request.log.warn({ err: error, jobId: job.id }, "voice-note audio-url presign failed");
+      return { url: null, reason };
+    }
   });
 
   app.post("/voice-notes/:jobId/confirm", async (request) => {

@@ -745,15 +745,16 @@ function renderVisitDetailContent(visit, changelogs) {
       const audioEl = item.querySelector(".vd-vn-audio");
       const loadingEl = item.querySelector(".vd-vn-loading");
       try {
-        const { url } = await api(`/voice-notes/${jobId}/audio-url`);
+        const { url, reason } = await api(`/voice-notes/${jobId}/audio-url`);
         if (url) {
           audioEl.src = url;
+          audioEl.load();
           loadingEl.hidden = true;
         } else {
-          loadingEl.textContent = "Audio not available in dev mode.";
+          loadingEl.textContent = reason || "Audio not available.";
         }
-      } catch {
-        loadingEl.textContent = "Could not load audio.";
+      } catch (err) {
+        loadingEl.textContent = err?.message || "Could not load audio.";
       }
     });
   }
