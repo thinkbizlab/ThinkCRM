@@ -3622,8 +3622,11 @@ function openCheckInModal(visitId, customerName) {
       video.srcObject = s;
     })
     .catch(() => {
-      qs("#mt-checkin-camera-wrap").innerHTML =
-        `<div class="mt-checkin-status mt-checkin-status--warn">Camera unavailable — check-in will proceed without selfie.</div>`;
+      const wrap = qs("#mt-checkin-camera-wrap");
+      if (wrap) {
+        wrap.innerHTML =
+          `<div class="mt-checkin-status mt-checkin-status--warn">Camera unavailable — check-in will proceed without selfie.</div>`;
+      }
       selfieDataUrl = "no-selfie";
       checkReady();
     });
