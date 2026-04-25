@@ -33,11 +33,7 @@ export async function openCustomer360(customerIdOrCode, customerCode) {
   switchView("master");
   setStatus("Loading customer…");
   try {
-    const customer = await api(`/customers/${encodeURIComponent(customerIdOrCode)}`);
-    const [deals, visits] = await Promise.all([
-      api(`/deals?customerId=${encodeURIComponent(customer.id)}`),
-      api(`/visits?customerId=${encodeURIComponent(customer.id)}`)
-    ]);
+    const { customer, deals, visits } = await api(`/customers/${encodeURIComponent(customerIdOrCode)}/360`);
     state.c360 = { customer, deals, visits, activeTab: "deals" };
     setStatus("");
     renderCustomer360();

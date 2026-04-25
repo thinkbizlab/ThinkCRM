@@ -496,6 +496,58 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     return customer;
   });
 
+  // Unified Customer 360 payload — single round-trip + single hierarchy-scope check.
+  // Replaces the customer/deals/visits trio that the C360 page used to fetch separately.
+  app.get("/customers/:id/360", async (request) => {
+    const tenantId = requireTenantId(request);
+    const visibleUserIdList = [...(await listVisibleUserIds(request))];
+    const params = request.params as { id: string };
+    const isCode = /^[A-Za-z]+-\d+$/.test(params.id);
+    const customerWhere = isCode
+      ? { customerCode: params.id, tenantId, ownerId: { in: visibleUserIdList } }
+      : { id: params.id, tenantId, ownerId: { in: visibleUserIdList } };
+    const customer = await prisma.customer.findFirst({
+      where: customerWhere,
+      include: {
+        addresses: true,
+        contacts: true,
+        paymentTerm: true,
+        customerGroup: { select: { id: true, code: true, name: true } }
+      }
+    });
+    if (!customer) {
+      throw app.httpErrors.notFound("Customer not found.");
+    }
+    const [deals, visits] = await Promise.all([
+      prisma.deal.findMany({
+        where: { tenantId, customerId: customer.id, ownerId: { in: visibleUserIdList } },
+        select: {
+          id: true,
+          dealNo: true,
+          dealName: true,
+          followUpAt: true,
+          closedAt: true,
+          estimatedValue: true,
+          status: true,
+          stage: { select: { id: true, stageName: true } }
+        },
+        orderBy: { createdAt: "desc" }
+      }),
+      prisma.visit.findMany({
+        where: { tenantId, customerId: customer.id, repId: { in: visibleUserIdList } },
+        select: {
+          id: true,
+          status: true,
+          plannedAt: true,
+          createdAt: true,
+          rep: { select: { id: true, fullName: true } }
+        },
+        orderBy: { plannedAt: "desc" }
+      })
+    ]);
+    return { customer, deals, visits };
+  });
+
   app.post("/customers", async (request, reply) => {
     const tenantId = requireTenantId(request);
     const changedById = requireUserId(request);
