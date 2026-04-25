@@ -11849,7 +11849,19 @@ applyThemeMode("LIGHT");
             <div class="sa-detail-item"><span class="sa-detail-label">Status</span><span class="sa-badge ${t.isActive ? "sa-badge--green" : "sa-badge--red"}">${t.isActive ? "Active" : "Inactive"}</span></div>
             <div class="sa-detail-item"><span class="sa-detail-label">Timezone</span>${escHtml(t.timezone)}</div>
             <div class="sa-detail-item"><span class="sa-detail-label">Created</span>${new Date(t.createdAt).toLocaleString()}</div>
-            <div class="sa-detail-item"><span class="sa-detail-label">Subscription</span>${sub ? `${sub.status} / ${sub.seatCount} seats / ${sub.billingCycle}` : "None"}</div>
+            <div class="sa-detail-item sa-detail-item--wide">
+              <span class="sa-detail-label">Subscription</span>
+              ${sub ? `
+                <div class="sa-sub-edit">
+                  <select class="sa-sub-status">
+                    ${["TRIALING","ACTIVE","PAST_DUE","CANCELED"].map(s => `<option value="${s}" ${sub.status === s ? "selected" : ""}>${s}</option>`).join("")}
+                  </select>
+                  <input class="sa-sub-seats" type="number" min="1" max="10000" step="1" value="${sub.seatCount}" />
+                  <span class="muted small">seats / ${escHtml(sub.billingCycle || "—")}</span>
+                  <button class="sa-btn sa-btn--sm sa-btn--primary sa-sub-save">Save</button>
+                </div>
+              ` : "None"}
+            </div>
             <div class="sa-detail-item"><span class="sa-detail-label">Custom Domain</span>${domain ? `${escHtml(domain.domain)} (${domain.status})` : "None"}</div>
             <div class="sa-detail-item"><span class="sa-detail-label">Deals</span>${t._count.deals}</div>
             <div class="sa-detail-item"><span class="sa-detail-label">Customers</span>${t._count.customers}</div>
@@ -11874,6 +11886,34 @@ applyThemeMode("LIGHT");
         </div>`;
       content.querySelectorAll(".sa-modal-close").forEach(b => b.addEventListener("click", closeSAModal));
       content.querySelector("[data-sa-action=impersonate]")?.addEventListener("click", () => { closeSAModal(); impersonateTenant(tenantId); });
+      content.querySelector(".sa-sub-save")?.addEventListener("click", async (e) => {
+        const btn = e.currentTarget;
+        const statusSel = content.querySelector(".sa-sub-status");
+        const seatsInput = content.querySelector(".sa-sub-seats");
+        if (!statusSel || !seatsInput) return;
+        const seatCount = Number(seatsInput.value);
+        if (!Number.isFinite(seatCount) || seatCount < 1) {
+          alert("Seat count must be at least 1");
+          return;
+        }
+        btn.disabled = true;
+        const originalText = btn.textContent;
+        btn.textContent = "Saving…";
+        try {
+          await api(`/super-admin/tenants/${tenantId}/subscription`, {
+            method: "PATCH",
+            body: { status: statusSel.value, seatCount }
+          });
+          btn.textContent = "Saved";
+          loaded = false;
+          loadSuperAdminDashboard();
+          setTimeout(() => { btn.textContent = originalText; btn.disabled = false; }, 1200);
+        } catch (err) {
+          alert("Failed: " + (err && err.message ? err.message : err));
+          btn.disabled = false;
+          btn.textContent = originalText;
+        }
+      });
     } catch (err) {
       content.innerHTML = `<div style="padding:24px;color:#ef4444">${escHtml(err.message)}</div>`;
     }

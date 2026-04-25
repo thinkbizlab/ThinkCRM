@@ -10078,7 +10078,11 @@ button.cust-badge-contact:hover { opacity: 0.7; }
 .sa-detail-header h3 { margin: 0; font-size: 18px; }
 .sa-detail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin-bottom: 16px; }
 .sa-detail-item { display: flex; flex-direction: column; gap: 2px; }
+.sa-detail-item--wide { grid-column: 1 / -1; }
 .sa-detail-label { font-size: 11px; color: var(--text-muted, #64748b); text-transform: uppercase; letter-spacing: 0.04em; }
+.sa-sub-edit { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sa-sub-status, .sa-sub-seats { padding: 4px 8px; border: 1px solid var(--border, #e2e8f0); border-radius: 6px; background: var(--surface, #fff); color: inherit; font-size: 13px; }
+.sa-sub-seats { width: 80px; }
 .sa-detail-footer { display: flex; gap: 8px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border, #e2e8f0); }
 .sa-modal-close { background: none; border: none; font-size: 22px; cursor: pointer; color: var(--text-muted, #64748b); padding: 0 4px; }
 

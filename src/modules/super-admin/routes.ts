@@ -16,6 +16,14 @@ const tenantUpdateSchema = z.object({
   timezone: z.string().optional(),
 });
 
+const subscriptionPatchSchema = z.object({
+  status: z.enum(["TRIALING", "ACTIVE", "PAST_DUE", "CANCELED"]).optional(),
+  seatCount: z.number().int().min(1).max(10000).optional(),
+  trialEndsAt: z.string().datetime().nullable().optional(),
+}).refine((d) => d.status !== undefined || d.seatCount !== undefined || d.trialEndsAt !== undefined, {
+  message: "Provide at least one of: status, seatCount, trialEndsAt"
+});
+
 export const superAdminRoutes: FastifyPluginAsync = async (app) => {
   // All routes require super admin
   app.addHook("onRequest", async (request) => {
@@ -145,6 +153,49 @@ export const superAdminRoutes: FastifyPluginAsync = async (app) => {
     });
 
     await logAuditEvent(tenantId, request.requestContext.userId, "SUPER_ADMIN_TENANT_UPDATE", { changes: data }, request.ip);
+
+    return updated;
+  });
+
+  // ── Update tenant subscription (seats, status, trial) ───────────────────
+  // Lets a platform operator raise seat caps or flip status without
+  // impersonating the tenant or running raw SQL on the DB.
+  app.patch("/super-admin/tenants/:tenantId/subscription", async (request) => {
+    const { tenantId } = request.params as { tenantId: string };
+    const parsed = subscriptionPatchSchema.safeParse(request.body);
+    if (!parsed.success) throw app.httpErrors.badRequest(parsed.error.issues[0]?.message ?? "Invalid input");
+
+    const subscription = await prisma.subscription.findFirst({
+      where: { tenantId },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, status: true, seatCount: true, trialEndsAt: true },
+    });
+    if (!subscription) throw app.httpErrors.notFound("Subscription not found for this tenant.");
+
+    const data = parsed.data;
+    const updateData: Prisma.SubscriptionUpdateInput = {};
+    if (data.status !== undefined) updateData.status = data.status;
+    if (data.seatCount !== undefined) updateData.seatCount = data.seatCount;
+    if (data.trialEndsAt !== undefined) {
+      updateData.trialEndsAt = data.trialEndsAt === null ? null : new Date(data.trialEndsAt);
+    }
+
+    const updated = await prisma.subscription.update({
+      where: { id: subscription.id },
+      data: updateData,
+      select: { id: true, status: true, seatCount: true, trialEndsAt: true, billingCycle: true, currency: true },
+    });
+
+    await logAuditEvent(
+      tenantId,
+      request.requestContext.userId,
+      "SUPER_ADMIN_SUBSCRIPTION_UPDATE",
+      {
+        before: { status: subscription.status, seatCount: subscription.seatCount, trialEndsAt: subscription.trialEndsAt },
+        after: { status: updated.status, seatCount: updated.seatCount, trialEndsAt: updated.trialEndsAt },
+      },
+      request.ip
+    );
 
     return updated;
   });
