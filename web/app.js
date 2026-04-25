@@ -10324,6 +10324,12 @@ loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   authMessage.textContent = "";
 
+  const submitBtn = loginForm.querySelector('button[type="submit"]');
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.classList.add("is-loading");
+  }
+
   const formData = new FormData(loginForm);
   const payload = Object.fromEntries(formData.entries());
   try {
@@ -10382,6 +10388,11 @@ loginForm.addEventListener("submit", async (event) => {
   } catch (error) {
     hideAppLoading();
     authMessage.textContent = error.message;
+  } finally {
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.classList.remove("is-loading");
+    }
   }
 });
 
