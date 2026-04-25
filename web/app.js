@@ -11863,15 +11863,49 @@ applyThemeMode("LIGHT");
             <div class="sa-detail-item sa-detail-item--wide">
               <span class="sa-detail-label">Subscription</span>
               ${sub ? `
-                <div class="sa-sub-edit">
-                  <select class="sa-sub-status">
-                    ${["TRIALING","ACTIVE","PAST_DUE","CANCELED"].map(s => `<option value="${s}" ${sub.status === s ? "selected" : ""}>${s}</option>`).join("")}
-                  </select>
-                  <input class="sa-sub-seats" type="number" min="1" max="10000" step="1" value="${sub.seatCount}" />
-                  <span class="muted small">seats / ${escHtml(sub.billingCycle || "—")}</span>
-                  <button class="sa-btn sa-btn--sm sa-btn--primary sa-sub-save">Save</button>
+                <div class="sa-sub-form">
+                  <label class="sa-sub-field">
+                    <span class="sa-sub-fieldlabel">Status</span>
+                    <select class="sa-sub-status" data-sub-field="status">
+                      ${["TRIALING","ACTIVE","PAST_DUE","CANCELED"].map(s => `<option value="${s}" ${sub.status === s ? "selected" : ""}>${s}</option>`).join("")}
+                    </select>
+                  </label>
+                  <label class="sa-sub-field">
+                    <span class="sa-sub-fieldlabel">Seats</span>
+                    <input type="number" min="1" max="10000" step="1" value="${sub.seatCount}" data-sub-field="seatCount" />
+                  </label>
+                  <label class="sa-sub-field">
+                    <span class="sa-sub-fieldlabel">Seat price</span>
+                    <input type="number" min="0" step="0.01" value="${(sub.seatPriceCents ?? 0) / 100}" data-sub-field="seatPrice" />
+                  </label>
+                  <label class="sa-sub-field">
+                    <span class="sa-sub-fieldlabel">Currency</span>
+                    <input type="text" maxlength="3" value="${escHtml(sub.currency || "THB")}" data-sub-field="currency" style="text-transform:uppercase" />
+                  </label>
+                  <label class="sa-sub-field">
+                    <span class="sa-sub-fieldlabel">Billing cycle</span>
+                    <select data-sub-field="billingCycle">
+                      ${["MONTHLY","YEARLY"].map(c => `<option value="${c}" ${sub.billingCycle === c ? "selected" : ""}>${c}</option>`).join("")}
+                    </select>
+                  </label>
+                  <label class="sa-sub-field">
+                    <span class="sa-sub-fieldlabel">Trial ends at</span>
+                    <input type="date" value="${sub.trialEndsAt ? new Date(sub.trialEndsAt).toISOString().slice(0,10) : ""}" data-sub-field="trialEndsAt" />
+                  </label>
+                  <label class="sa-sub-field">
+                    <span class="sa-sub-fieldlabel">Period start</span>
+                    <input type="date" value="${sub.billingPeriodStart ? new Date(sub.billingPeriodStart).toISOString().slice(0,10) : ""}" data-sub-field="billingPeriodStart" />
+                  </label>
+                  <label class="sa-sub-field">
+                    <span class="sa-sub-fieldlabel">Period end</span>
+                    <input type="date" value="${sub.billingPeriodEnd ? new Date(sub.billingPeriodEnd).toISOString().slice(0,10) : ""}" data-sub-field="billingPeriodEnd" />
+                  </label>
+                  <div class="sa-sub-actions">
+                    <button class="sa-btn sa-btn--sm" data-sub-action="extend30">+30 days trial</button>
+                    <button class="sa-btn sa-btn--sm sa-btn--primary sa-sub-save">Save subscription</button>
+                  </div>
                 </div>
-              ` : "None"}
+              ` : '<div class="muted small">No subscription on this tenant.</div>'}
             </div>
             <div class="sa-detail-item"><span class="sa-detail-label">Custom Domain</span>${domain ? `${escHtml(domain.domain)} (${domain.status})` : "None"}</div>
             <div class="sa-detail-item"><span class="sa-detail-label">Deals</span>${t._count.deals}</div>
@@ -11897,24 +11931,47 @@ applyThemeMode("LIGHT");
         </div>`;
       content.querySelectorAll(".sa-modal-close").forEach(b => b.addEventListener("click", closeSAModal));
       content.querySelector("[data-sa-action=impersonate]")?.addEventListener("click", () => { closeSAModal(); impersonateTenant(tenantId); });
+      const subForm = content.querySelector(".sa-sub-form");
+      const fieldEl = (key) => subForm?.querySelector(`[data-sub-field="${key}"]`);
+      function buildSubPayload() {
+        if (!subForm) return null;
+        const dateOrNull = (v) => (v ? new Date(`${v}T00:00:00.000Z`).toISOString() : null);
+        const dateOrUndef = (v) => (v ? new Date(`${v}T00:00:00.000Z`).toISOString() : undefined);
+        const seatPriceVal = Number(fieldEl("seatPrice")?.value);
+        const seatCountVal = Number(fieldEl("seatCount")?.value);
+        const currencyVal = (fieldEl("currency")?.value || "").trim().toUpperCase();
+        if (!Number.isFinite(seatCountVal) || seatCountVal < 1) {
+          alert("Seat count must be at least 1");
+          return null;
+        }
+        if (!Number.isFinite(seatPriceVal) || seatPriceVal < 0) {
+          alert("Seat price must be 0 or greater");
+          return null;
+        }
+        if (currencyVal && currencyVal.length !== 3) {
+          alert("Currency must be a 3-letter code (e.g. THB)");
+          return null;
+        }
+        return {
+          status: fieldEl("status")?.value,
+          seatCount: seatCountVal,
+          seatPriceCents: Math.round(seatPriceVal * 100),
+          currency: currencyVal || undefined,
+          billingCycle: fieldEl("billingCycle")?.value,
+          trialEndsAt: dateOrNull(fieldEl("trialEndsAt")?.value),
+          billingPeriodStart: dateOrUndef(fieldEl("billingPeriodStart")?.value),
+          billingPeriodEnd: dateOrUndef(fieldEl("billingPeriodEnd")?.value),
+        };
+      }
       content.querySelector(".sa-sub-save")?.addEventListener("click", async (e) => {
         const btn = e.currentTarget;
-        const statusSel = content.querySelector(".sa-sub-status");
-        const seatsInput = content.querySelector(".sa-sub-seats");
-        if (!statusSel || !seatsInput) return;
-        const seatCount = Number(seatsInput.value);
-        if (!Number.isFinite(seatCount) || seatCount < 1) {
-          alert("Seat count must be at least 1");
-          return;
-        }
+        const payload = buildSubPayload();
+        if (!payload) return;
         btn.disabled = true;
         const originalText = btn.textContent;
         btn.textContent = "Saving…";
         try {
-          await api(`/super-admin/tenants/${tenantId}/subscription`, {
-            method: "PATCH",
-            body: { status: statusSel.value, seatCount }
-          });
+          await api(`/super-admin/tenants/${tenantId}/subscription`, { method: "PATCH", body: payload });
           btn.textContent = "Saved";
           loaded = false;
           loadSuperAdminDashboard();
@@ -11924,6 +11981,15 @@ applyThemeMode("LIGHT");
           btn.disabled = false;
           btn.textContent = originalText;
         }
+      });
+      content.querySelector('[data-sub-action="extend30"]')?.addEventListener("click", () => {
+        const trialField = fieldEl("trialEndsAt");
+        const periodField = fieldEl("billingPeriodEnd");
+        const target = (sub?.status === "TRIALING" ? trialField : periodField) || trialField;
+        if (!target) return;
+        const base = target.value ? new Date(`${target.value}T00:00:00.000Z`) : new Date();
+        base.setUTCDate(base.getUTCDate() + 30);
+        target.value = base.toISOString().slice(0, 10);
       });
     } catch (err) {
       content.innerHTML = `<div style="padding:24px;color:#ef4444">${escHtml(err.message)}</div>`;

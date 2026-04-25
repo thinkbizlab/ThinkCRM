@@ -19,9 +19,14 @@ const tenantUpdateSchema = z.object({
 const subscriptionPatchSchema = z.object({
   status: z.enum(["TRIALING", "ACTIVE", "PAST_DUE", "CANCELED"]).optional(),
   seatCount: z.number().int().min(1).max(10000).optional(),
+  seatPriceCents: z.number().int().min(0).max(100_000_000).optional(),
+  currency: z.string().min(3).max(3).optional(),
+  billingCycle: z.enum(["MONTHLY", "YEARLY"]).optional(),
   trialEndsAt: z.string().datetime().nullable().optional(),
-}).refine((d) => d.status !== undefined || d.seatCount !== undefined || d.trialEndsAt !== undefined, {
-  message: "Provide at least one of: status, seatCount, trialEndsAt"
+  billingPeriodStart: z.string().datetime().optional(),
+  billingPeriodEnd: z.string().datetime().optional(),
+}).refine((d) => Object.values(d).some((v) => v !== undefined), {
+  message: "Provide at least one field to update"
 });
 
 export const superAdminRoutes: FastifyPluginAsync = async (app) => {
@@ -112,7 +117,11 @@ export const superAdminRoutes: FastifyPluginAsync = async (app) => {
         subscriptions: {
           take: 1,
           orderBy: { createdAt: "desc" },
-          select: { id: true, status: true, trialEndsAt: true, seatCount: true, seatPriceCents: true, currency: true, billingCycle: true },
+          select: {
+            id: true, status: true, trialEndsAt: true, seatCount: true,
+            seatPriceCents: true, currency: true, billingCycle: true,
+            billingPeriodStart: true, billingPeriodEnd: true,
+          },
         },
         customDomain: { select: { domain: true, status: true, verifiedAt: true } },
         _count: { select: { deals: true, customers: true, visits: true, quotations: true } },
@@ -168,7 +177,11 @@ export const superAdminRoutes: FastifyPluginAsync = async (app) => {
     const subscription = await prisma.subscription.findFirst({
       where: { tenantId },
       orderBy: { createdAt: "desc" },
-      select: { id: true, status: true, seatCount: true, trialEndsAt: true },
+      select: {
+        id: true, status: true, seatCount: true, seatPriceCents: true,
+        currency: true, billingCycle: true, trialEndsAt: true,
+        billingPeriodStart: true, billingPeriodEnd: true,
+      },
     });
     if (!subscription) throw app.httpErrors.notFound("Subscription not found for this tenant.");
 
@@ -176,24 +189,30 @@ export const superAdminRoutes: FastifyPluginAsync = async (app) => {
     const updateData: Prisma.SubscriptionUpdateInput = {};
     if (data.status !== undefined) updateData.status = data.status;
     if (data.seatCount !== undefined) updateData.seatCount = data.seatCount;
+    if (data.seatPriceCents !== undefined) updateData.seatPriceCents = data.seatPriceCents;
+    if (data.currency !== undefined) updateData.currency = data.currency.toUpperCase();
+    if (data.billingCycle !== undefined) updateData.billingCycle = data.billingCycle;
     if (data.trialEndsAt !== undefined) {
       updateData.trialEndsAt = data.trialEndsAt === null ? null : new Date(data.trialEndsAt);
     }
+    if (data.billingPeriodStart !== undefined) updateData.billingPeriodStart = new Date(data.billingPeriodStart);
+    if (data.billingPeriodEnd !== undefined) updateData.billingPeriodEnd = new Date(data.billingPeriodEnd);
 
     const updated = await prisma.subscription.update({
       where: { id: subscription.id },
       data: updateData,
-      select: { id: true, status: true, seatCount: true, trialEndsAt: true, billingCycle: true, currency: true },
+      select: {
+        id: true, status: true, seatCount: true, seatPriceCents: true,
+        currency: true, billingCycle: true, trialEndsAt: true,
+        billingPeriodStart: true, billingPeriodEnd: true,
+      },
     });
 
     await logAuditEvent(
       tenantId,
       request.requestContext.userId,
       "SUPER_ADMIN_SUBSCRIPTION_UPDATE",
-      {
-        before: { status: subscription.status, seatCount: subscription.seatCount, trialEndsAt: subscription.trialEndsAt },
-        after: { status: updated.status, seatCount: updated.seatCount, trialEndsAt: updated.trialEndsAt },
-      },
+      { before: subscription, after: updated },
       request.ip
     );
 

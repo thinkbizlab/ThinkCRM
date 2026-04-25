@@ -10095,9 +10095,11 @@ button.cust-badge-contact:hover { opacity: 0.7; }
 .sa-detail-item { display: flex; flex-direction: column; gap: 2px; }
 .sa-detail-item--wide { grid-column: 1 / -1; }
 .sa-detail-label { font-size: 11px; color: var(--text-muted, #64748b); text-transform: uppercase; letter-spacing: 0.04em; }
-.sa-sub-edit { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.sa-sub-status, .sa-sub-seats { padding: 4px 8px; border: 1px solid var(--border, #e2e8f0); border-radius: 6px; background: var(--surface, #fff); color: inherit; font-size: 13px; }
-.sa-sub-seats { width: 80px; }
+.sa-sub-form { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px 12px; padding: 12px; border: 1px solid var(--border, #e2e8f0); border-radius: 8px; background: var(--surface, #fff); margin-top: 4px; }
+.sa-sub-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.sa-sub-fieldlabel { font-size: 11px; color: var(--text-muted, #64748b); text-transform: uppercase; letter-spacing: 0.04em; }
+.sa-sub-form select, .sa-sub-form input { width: 100%; padding: 6px 8px; border: 1px solid var(--border, #e2e8f0); border-radius: 6px; background: var(--surface, #fff); color: inherit; font-size: 13px; box-sizing: border-box; }
+.sa-sub-actions { grid-column: 1 / -1; display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; padding-top: 4px; }
 .sa-detail-footer { display: flex; gap: 8px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border, #e2e8f0); }
 .sa-modal-close { background: none; border: none; font-size: 22px; cursor: pointer; color: var(--text-muted, #64748b); padding: 0 4px; }
 
