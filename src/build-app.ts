@@ -72,7 +72,12 @@ export async function buildApp() {
   // connect-src coverage for the tenant's R2 endpoint.
   const r2ConnectSrc: string[] = [];
   if (config.R2_ACCOUNT_ID && config.R2_ACCOUNT_ID !== "local-account") {
+    // The S3 SDK uses virtual-hosted-style URLs (bucket as subdomain), so we
+    // need both the account host and the bucket-prefixed host in connect-src.
     r2ConnectSrc.push(`https://${config.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`);
+    if (config.R2_BUCKET) {
+      r2ConnectSrc.push(`https://${config.R2_BUCKET}.${config.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`);
+    }
   }
   if (config.R2_PUBLIC_URL) {
     try { r2ConnectSrc.push(new URL(config.R2_PUBLIC_URL).origin); } catch { /* ignore */ }
