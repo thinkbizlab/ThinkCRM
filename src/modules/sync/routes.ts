@@ -302,6 +302,7 @@ const DEFAULT_PASSTHROUGH_MAPPINGS: Array<{ entityType: EntityType; sourceField:
   { entityType: EntityType.CUSTOMER, sourceField: "name",            targetField: "name",            isRequired: true },
   { entityType: EntityType.CUSTOMER, sourceField: "customerType",    targetField: "customerType",    isRequired: false },
   { entityType: EntityType.CUSTOMER, sourceField: "taxId",           targetField: "taxId",           isRequired: false },
+  { entityType: EntityType.CUSTOMER, sourceField: "branchCode",      targetField: "branchCode",      isRequired: false },
   { entityType: EntityType.CUSTOMER, sourceField: "defaultTermCode", targetField: "defaultTermCode", isRequired: false },
   { entityType: EntityType.CUSTOMER, sourceField: "ownerId",         targetField: "ownerId",         isRequired: false },
   { entityType: EntityType.CUSTOMER, sourceField: "siteLat",         targetField: "siteLat",         isRequired: false },

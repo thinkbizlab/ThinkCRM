@@ -8300,6 +8300,7 @@ function buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk
             ${canBulk ? `<th class="cust-check-col"><input type="checkbox" class="cust-check-all" ${allOnPageSelected ? "checked" : ""} title="Select all on this page" /></th>` : ""}
             <th>#</th>
             <th>Code</th>
+            <th>Branch</th>
             <th>Name</th>
             <th>Owner</th>
             <th>Contacts</th>
@@ -8320,7 +8321,8 @@ function buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk
               ${canBulk ? `<td class="cust-check-col"><input type="checkbox" class="cust-check-row" data-id="${c.id}" ${isChecked ? "checked" : ""} ${isDraft ? "disabled" : ""} /></td>` : ""}
               <td>${start + i + 1}</td>
               <td>${isDraft ? `<span class="muted small">—</span>` : `<button class="cust-code-btn" data-id="${c.id}" data-code="${escHtml(c.customerCode || "")}">${escHtml(c.customerCode || "")}</button>`}</td>
-              <td><button class="cust-name-btn" data-id="${c.id}" data-code="${escHtml(c.customerCode || "")}">${escHtml(c.name)}</button>${isDraft ? ` ${draftBadgeHtml()}` : ""}${c.customerGroup ? ` <span class="cust-group-pill" title="Customer group">${escHtml(c.customerGroup.name)}</span>` : ""}${c.disabled ? ' <span class="cust-disabled-pill" title="Disabled — cannot be used for new deals/visits/quotations">Disabled</span>' : ""}</td>
+              <td>${c.branchCode ? `<span class="cust-branch-pill" title="Branch code (00000 = HQ)">${escHtml(c.branchCode)}</span>` : '<span class="muted small">—</span>'}</td>
+              <td><button class="cust-name-btn" data-id="${c.id}" data-code="${escHtml(c.customerCode || "")}">${escHtml(c.name)}</button>${isDraft ? ` ${draftBadgeHtml()}` : ""}${c.parentCustomerId ? ` <span class="cust-parent-pill" title="Has parent customer">child</span>` : ""}${c.customerGroup ? ` <span class="cust-group-pill" title="Customer group">${escHtml(c.customerGroup.name)}</span>` : ""}${c.disabled ? ' <span class="cust-disabled-pill" title="Disabled — cannot be used for new deals/visits/quotations">Disabled</span>' : ""}</td>
               <td>${ownerName ? escHtml(ownerName) : '<span class="muted small">—</span>'}</td>
               <td>${c.contacts?.length
                 ? `<button class="cust-badge-contact cust-contacts-btn" data-id="${c.id}" title="View contacts"><svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>${c.contacts.length}</button>`
@@ -9283,7 +9285,7 @@ function openNewCustomerModal(termOptions) {
           </div>
 
           <div class="ncm-row ncm-row--tax">
-            <div class="ncm-field" style="flex:1">
+            <div class="ncm-field" style="flex:2">
               <label class="ncm-label" for="ncm-taxid">Tax ID / Juristic No.</label>
               <div style="display:flex;gap:8px">
                 <input class="ncm-input" id="ncm-taxid" name="taxId" placeholder="13-digit Thai Tax ID" maxlength="20" style="flex:1" />
@@ -9294,12 +9296,23 @@ function openNewCustomerModal(termOptions) {
               </div>
               <span class="ncm-dbd-status" id="ncm-dbd-status"></span>
             </div>
+            <div class="ncm-field" style="flex:1">
+              <label class="ncm-label" for="ncm-branch">Branch Code</label>
+              <input class="ncm-input" id="ncm-branch" name="branchCode" placeholder="00000" maxlength="5" pattern="[0-9]{1,5}" />
+              <small class="muted">HQ = 00000. Defaults to 00000 when Tax ID is set.</small>
+            </div>
           </div>
 
-          <div class="ncm-row">
+          <div class="ncm-row ncm-row--2">
             <div class="ncm-field">
               <label class="ncm-label" for="ncm-extref">External Ref <span class="ncm-hint-label">(legacy system ID)</span></label>
               <input class="ncm-input" id="ncm-extref" name="externalRef" placeholder="e.g. ERP-00123" maxlength="100" />
+            </div>
+            <div class="ncm-field">
+              <label class="ncm-label" for="ncm-parent">Parent Customer <span class="ncm-hint-label">(optional, for corporate group)</span></label>
+              <input class="ncm-input ncm-parent-input" id="ncm-parent-input" placeholder="Type to search parent…" autocomplete="off" />
+              <input type="hidden" id="ncm-parent-id" name="parentCustomerId" />
+              <div class="ncm-parent-suggest" id="ncm-parent-suggest" hidden></div>
             </div>
           </div>
 
@@ -9603,6 +9616,54 @@ function openNewCustomerModal(termOptions) {
     });
   }
 
+  // Branch code: digits only, max 5
+  const ncmBranchInput = overlay.querySelector("#ncm-branch");
+  if (ncmBranchInput) {
+    ncmBranchInput.setAttribute("inputmode", "numeric");
+    ncmBranchInput.addEventListener("input", () => {
+      ncmBranchInput.value = ncmBranchInput.value.replace(/\D/g, "").slice(0, 5);
+    });
+  }
+
+  // Parent customer: autocomplete via /customers/search
+  const ncmParentInput   = overlay.querySelector("#ncm-parent-input");
+  const ncmParentHidden  = overlay.querySelector("#ncm-parent-id");
+  const ncmParentSuggest = overlay.querySelector("#ncm-parent-suggest");
+  if (ncmParentInput && ncmParentHidden && ncmParentSuggest) {
+    let parentDebounce;
+    const renderSuggest = (rows) => {
+      if (!rows.length) { ncmParentSuggest.hidden = true; ncmParentSuggest.innerHTML = ""; return; }
+      ncmParentSuggest.innerHTML = rows.map((r) =>
+        `<div class="ncm-parent-item" data-id="${r.id}" data-name="${escHtml(r.name)}">${escHtml(r.customerCode || "—")} — ${escHtml(r.name)}</div>`
+      ).join("");
+      ncmParentSuggest.hidden = false;
+    };
+    ncmParentInput.addEventListener("input", () => {
+      ncmParentHidden.value = "";
+      const q = ncmParentInput.value.trim();
+      clearTimeout(parentDebounce);
+      if (q.length < 2) { renderSuggest([]); return; }
+      parentDebounce = setTimeout(async () => {
+        try {
+          const rows = await api(`/customers/search?q=${encodeURIComponent(q)}&scope=all`);
+          renderSuggest(rows.slice(0, 8));
+        } catch { renderSuggest([]); }
+      }, 200);
+    });
+    ncmParentSuggest.addEventListener("click", (e) => {
+      const item = e.target.closest(".ncm-parent-item");
+      if (!item) return;
+      ncmParentHidden.value = item.dataset.id;
+      ncmParentInput.value = item.dataset.name;
+      ncmParentSuggest.hidden = true;
+    });
+    document.addEventListener("click", (e) => {
+      if (!ncmParentSuggest.contains(e.target) && e.target !== ncmParentInput) {
+        ncmParentSuggest.hidden = true;
+      }
+    });
+  }
+
   // ── Form submit ──
   overlay.querySelector("#ncm-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -9655,17 +9716,26 @@ function openNewCustomerModal(termOptions) {
       return;
     }
 
+    const branchCodeRaw = String(formData.get("branchCode") ?? "").trim();
+    if (branchCodeRaw && !/^\d{1,5}$/.test(branchCodeRaw)) {
+      setStatus("Branch code must be 1–5 digits (e.g. 00000 for HQ).", true);
+      return;
+    }
+
     const externalRefRaw = String(formData.get("externalRef") ?? "").trim();
     const customerGroupIdRaw = String(formData.get("customerGroupId") ?? "").trim();
+    const parentCustomerIdRaw = String(formData.get("parentCustomerId") ?? "").trim();
     const payload = {
       customerCode: String(formData.get("customerCode") ?? "").trim(),
       name:         String(formData.get("name") ?? "").trim(),
       customerType: String(formData.get("customerType") ?? "COMPANY"),
       taxId:        taxIdRaw || undefined,
+      branchCode:   branchCodeRaw || undefined,
       defaultTermId: String(formData.get("defaultTermId") ?? ""),
       ownerId:      String(formData.get("ownerId") ?? state.user?.id ?? ""),
       externalRef:  externalRefRaw || undefined,
       customerGroupId: customerGroupIdRaw || undefined,
+      parentCustomerId: parentCustomerIdRaw || undefined,
     };
 
     if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "Creating…"; }

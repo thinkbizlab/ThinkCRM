@@ -65,6 +65,7 @@ type CustomerRow = {
   customerCode: string | null;
   name: string;
   taxId: string | null;
+  branchCode: string | null;
   contacts: Array<{ tel: string | null; email: string | null }>;
 };
 
@@ -82,7 +83,12 @@ function buildDeterministicPairs(rows: CustomerRow[]): Pair[] {
   };
 
   for (const row of rows) {
-    addTo(byTax, normTaxId(row.taxId), row.id);
+    // Tax ID dedup keys on (taxId + branchCode) so two distinct branches of
+    // the same legal entity are NOT flagged as duplicates of each other —
+    // they're legitimately separate billable rows.
+    const taxKey = normTaxId(row.taxId);
+    const taxBranchKey = taxKey ? `${taxKey}:${row.branchCode ?? "00000"}` : null;
+    addTo(byTax, taxBranchKey, row.id);
     addTo(byName, normName(row.name), row.id);
     for (const c of row.contacts) {
       addTo(byPhone, normPhone(c.tel), row.id);
@@ -242,6 +248,7 @@ export async function scanDuplicatesForTenant(tenantId: string): Promise<DedupSc
       customerCode: true,
       name: true,
       taxId: true,
+      branchCode: true,
       contacts: { select: { tel: true, email: true } }
     }
   });

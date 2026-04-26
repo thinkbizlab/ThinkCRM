@@ -3728,6 +3728,53 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   vertical-align: middle;
 }
 
+.cust-branch-pill {
+  display: inline-block;
+  padding: 1px 8px;
+  font-family: ui-monospace, "SFMono-Regular", "Roboto Mono", monospace;
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.5;
+  color: #1e40af;
+  background: #dbeafe;
+  border: 1px solid #bfdbfe;
+  border-radius: 4px;
+  vertical-align: middle;
+}
+
+.cust-parent-pill {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 8px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.5;
+  color: #6b21a8;
+  background: #f3e8ff;
+  border: 1px solid #e9d5ff;
+  border-radius: 999px;
+  vertical-align: middle;
+}
+
+.ncm-parent-suggest {
+  position: relative;
+  margin-top: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+  z-index: 5;
+}
+.ncm-parent-item {
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.ncm-parent-item:hover {
+  background: var(--surface-soft);
+}
+
 .cust-draft-pill {
   display: inline-block;
   margin-left: 6px;
@@ -4609,6 +4656,48 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 
 .c360-contact-name { font-weight: 600; font-size: 0.9rem; color: var(--text); }
 .c360-contact-pos { font-size: 0.78rem; color: var(--muted-color); }
+
+/* Parent breadcrumb (Subsidiary of …) shown above customer name */
+.c360-parent-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: var(--muted-color);
+  background: oklch(96% 0.04 290);
+  padding: 4px 10px;
+  border-radius: 100px;
+  margin-bottom: var(--sp-2);
+  cursor: pointer;
+  border: 1px solid oklch(90% 0.05 290);
+  transition: background 0.12s, color 0.12s;
+}
+.c360-parent-link:hover, .c360-parent-link:focus-visible {
+  background: oklch(92% 0.06 290);
+  color: var(--text);
+  outline: none;
+}
+.c360-parent-link strong { color: var(--text); font-weight: 600; }
+.c360-parent-code { color: var(--muted-color); font-weight: 500; }
+
+/* Subsidiary (children) tab rows */
+.c360-child-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+}
+.c360-child-row:last-child { border-bottom: none; }
+.c360-child-row--clickable { cursor: pointer; transition: background 0.12s; }
+.c360-child-row--clickable:hover, .c360-child-row--clickable:focus-visible {
+  background: var(--hover);
+  outline: none;
+}
+.c360-child-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.c360-child-name { font-weight: 600; font-size: 0.9rem; color: var(--text); }
+.c360-child-meta { display: flex; align-items: center; gap: var(--sp-2); font-size: 0.78rem; color: var(--muted-color); flex-wrap: wrap; }
+.c360-child-code { font-family: var(--mono, ui-monospace, monospace); }
 
 /* Addresses tab */
 .c360-address-card {

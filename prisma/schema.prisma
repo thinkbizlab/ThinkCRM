@@ -372,6 +372,13 @@ model Customer {
   externalRef          String?
   customerType         CustomerType       @default(COMPANY)
   taxId                String?
+  // Thai-style branch code (e.g. "00000" = HQ, "00001" = first branch).
+  // Required whenever taxId is set so (taxId, branchCode) uniquely identifies
+  // a billable entity. NULL only when taxId is NULL.
+  branchCode           String?
+  // Optional corporate-group link to another customer in the same tenant
+  // (e.g. holding company → subsidiary). Independent of taxId/branchCode.
+  parentCustomerId     String?
   defaultTermId        String?
   customerGroupId      String?
   status               CustomerStatus     @default(ACTIVE)
@@ -391,17 +398,20 @@ model Customer {
   owner                User?              @relation("CustomerOwner", fields: [ownerId], references: [id], onDelete: SetNull)
   createdBy            User?              @relation("CustomerCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   draftCreatedBy       User?              @relation("CustomerDraftCreatedBy", fields: [draftCreatedByUserId], references: [id], onDelete: SetNull)
+  parentCustomer       Customer?          @relation("CustomerHierarchy", fields: [parentCustomerId], references: [id], onDelete: SetNull)
+  childCustomers       Customer[]         @relation("CustomerHierarchy")
   addresses            CustomerAddress[]
   contacts             CustomerContact[]
   deals                Deal[]
   visits               Visit[]
   quotations           Quotation[]
 
-  @@unique([tenantId, taxId])
+  @@unique([tenantId, taxId, branchCode])
   @@unique([tenantId, externalRef])
   @@index([tenantId, customerGroupId])
   @@index([tenantId, name])
   @@index([tenantId, status])
+  @@index([tenantId, parentCustomerId])
 }
 
 enum CustomerStatus {

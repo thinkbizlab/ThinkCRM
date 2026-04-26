@@ -83,6 +83,12 @@ const customerSchemaBase = z.object({
   name: z.string().min(2).max(200),
   customerType: z.nativeEnum(CustomerType).optional(),
   taxId: z.string().max(20).optional(),
+  // Branch code only meaningful when taxId is set; defaults to "00000" (HQ)
+  // server-side. Length capped to 5 to match the Thai tax-branch convention.
+  branchCode: z.string().regex(/^[0-9]{1,5}$/, "branchCode must be 1–5 digits").optional(),
+  // Optional corporate-group link — must be a customer in the same tenant.
+  // Cycles and depth are validated in the handler, not here.
+  parentCustomerId: z.string().min(1).nullable().optional(),
   // Payment term is likewise optional for DRAFTs — chosen at promotion.
   defaultTermId: z.string().min(1).optional(),
   customerGroupId: z.string().min(1).nullable().optional(),
@@ -201,6 +207,46 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.notFound("Customer not found.");
     }
     return customer;
+  }
+
+  // Walk up the parent chain to enforce tenant scope, no-cycle, and depth cap.
+  // `selfId` is the customer being edited (or null when creating); used to
+  // detect a cycle if the proposed parent is the customer itself or a descendant.
+  const PARENT_DEPTH_LIMIT = 5;
+  async function assertValidParent(input: {
+    tenantId: string;
+    selfId: string | null;
+    parentId: string;
+  }) {
+    if (input.selfId && input.parentId === input.selfId) {
+      throw app.httpErrors.badRequest("A customer cannot be its own parent.");
+    }
+    let cursorId: string | null = input.parentId;
+    let depth = 0;
+    while (cursorId) {
+      depth++;
+      // depth now counts ancestors including the proposed parent. The
+      // resulting customer sits at depth+1 from the root, so we cap depth
+      // at LIMIT-1 to keep total levels ≤ LIMIT.
+      if (depth >= PARENT_DEPTH_LIMIT) {
+        throw app.httpErrors.badRequest(
+          `Parent chain would exceed depth limit of ${PARENT_DEPTH_LIMIT}.`
+        );
+      }
+      const node: { id: string; parentCustomerId: string | null } | null = await prisma.customer.findFirst({
+        where: { id: cursorId, tenantId: input.tenantId },
+        select: { id: true, parentCustomerId: true }
+      });
+      if (!node) {
+        throw app.httpErrors.badRequest("parentCustomerId is invalid for this tenant.");
+      }
+      if (input.selfId && node.id === input.selfId) {
+        throw app.httpErrors.badRequest(
+          "Parent assignment would create a cycle (the proposed parent is a descendant of this customer)."
+        );
+      }
+      cursorId = node.parentCustomerId;
+    }
   }
 
   app.get("/custom-fields/:entityType", async (request) => {
@@ -512,13 +558,16 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
         addresses: true,
         contacts: true,
         paymentTerm: true,
-        customerGroup: { select: { id: true, code: true, name: true } }
+        customerGroup: { select: { id: true, code: true, name: true } },
+        parentCustomer: {
+          select: { id: true, customerCode: true, name: true, branchCode: true, status: true }
+        }
       }
     });
     if (!customer) {
       throw app.httpErrors.notFound("Customer not found.");
     }
-    const [deals, visits] = await Promise.all([
+    const [deals, visits, children] = await Promise.all([
       prisma.deal.findMany({
         where: { tenantId, customerId: customer.id, ownerId: { in: visibleUserIdList } },
         select: {
@@ -543,9 +592,23 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
           rep: { select: { id: true, fullName: true } }
         },
         orderBy: { plannedAt: "desc" }
+      }),
+      // Direct children only — the c360 page renders a flat list of subsidiaries.
+      // Children are visible regardless of owner scope so the hierarchy is intact;
+      // clicking through still hits the scoped customer endpoint.
+      prisma.customer.findMany({
+        where: { tenantId, parentCustomerId: customer.id },
+        select: {
+          id: true,
+          customerCode: true,
+          name: true,
+          branchCode: true,
+          status: true
+        },
+        orderBy: { name: "asc" }
       })
     ]);
-    return { customer, deals, visits };
+    return { customer, deals, visits, children };
   });
 
   app.post("/customers", async (request, reply) => {
@@ -578,22 +641,32 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.forbidden("customer owner must be within your hierarchy scope.");
     }
 
+    // Default branch code to "00000" (HQ) whenever a Tax ID is supplied.
+    // (taxId, branchCode) together identify the billable entity.
+    const branchCode = parsed.data.taxId
+      ? (parsed.data.branchCode ?? "00000")
+      : null;
+
     if (parsed.data.taxId) {
       const taxIdDuplicate = await prisma.customer.findFirst({
-        where: { tenantId, taxId: parsed.data.taxId },
-        select: { id: true, customerCode: true, name: true, status: true }
+        where: { tenantId, taxId: parsed.data.taxId, branchCode },
+        select: { id: true, customerCode: true, name: true, status: true, branchCode: true }
       });
       if (taxIdDuplicate) {
         // DRAFT creators who hit an existing customer should land on that
         // customer instead of getting blocked — that's the point of reusing
-        // the tenant Tax ID uniqueness as a routing mechanism.
+        // the (taxId, branchCode) uniqueness as a routing mechanism.
         if (isDraft) {
           return reply.code(200).send({ ...taxIdDuplicate, reusedExisting: true });
         }
         throw app.httpErrors.conflict(
-          `Tax ID "${parsed.data.taxId}" is already registered to customer "${taxIdDuplicate.name}" (${taxIdDuplicate.customerCode ?? "DRAFT"}).`
+          `Tax ID "${parsed.data.taxId}" branch "${branchCode}" is already registered to customer "${taxIdDuplicate.name}" (${taxIdDuplicate.customerCode ?? "DRAFT"}).`
         );
       }
+    }
+
+    if (parsed.data.parentCustomerId) {
+      await assertValidParent({ tenantId, selfId: null, parentId: parsed.data.parentCustomerId });
     }
 
     if (parsed.data.customerGroupId) {
@@ -619,6 +692,8 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
           name: parsed.data.name,
           customerType: parsed.data.customerType ?? CustomerType.COMPANY,
           taxId: parsed.data.taxId,
+          branchCode,
+          parentCustomerId: parsed.data.parentCustomerId ?? null,
           defaultTermId: parsed.data.defaultTermId ?? null,
           customerGroupId: parsed.data.customerGroupId ?? null,
           ownerId,
@@ -674,16 +749,36 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    if (parsed.data.taxId) {
+    // Resolve next (taxId, branchCode) pair for the duplicate check. Either
+    // can be unchanged from `existing` if the patch omits them.
+    const nextTaxId = parsed.data.taxId !== undefined ? parsed.data.taxId : existing.taxId;
+    const nextBranchCode = nextTaxId
+      ? (parsed.data.branchCode ?? existing.branchCode ?? "00000")
+      : null;
+
+    if (nextTaxId) {
       const taxIdDuplicate = await prisma.customer.findFirst({
-        where: { tenantId, taxId: parsed.data.taxId, id: { not: params.id } },
-        select: { customerCode: true, name: true }
+        where: {
+          tenantId,
+          taxId: nextTaxId,
+          branchCode: nextBranchCode,
+          id: { not: params.id }
+        },
+        select: { customerCode: true, name: true, branchCode: true }
       });
       if (taxIdDuplicate) {
         throw app.httpErrors.conflict(
-          `Tax ID "${parsed.data.taxId}" is already registered to customer "${taxIdDuplicate.name}" (${taxIdDuplicate.customerCode}).`
+          `Tax ID "${nextTaxId}" branch "${nextBranchCode}" is already registered to customer "${taxIdDuplicate.name}" (${taxIdDuplicate.customerCode}).`
         );
       }
+    }
+
+    if (parsed.data.parentCustomerId !== undefined && parsed.data.parentCustomerId !== null) {
+      await assertValidParent({
+        tenantId,
+        selfId: params.id,
+        parentId: parsed.data.parentCustomerId
+      });
     }
 
     if (parsed.data.customerGroupId) {
@@ -713,6 +808,14 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
           name: parsed.data.name,
           customerType: parsed.data.customerType,
           taxId: parsed.data.taxId,
+          // Persist the resolved branch code only when taxId is in play; null
+          // it out alongside taxId being cleared so the unique constraint
+          // doesn't accidentally lock a "00000" against a non-Tax customer.
+          branchCode: parsed.data.taxId !== undefined || parsed.data.branchCode !== undefined
+            ? nextBranchCode
+            : undefined,
+          parentCustomerId:
+            parsed.data.parentCustomerId === undefined ? undefined : parsed.data.parentCustomerId,
           defaultTermId: parsed.data.defaultTermId,
           customerGroupId:
             parsed.data.customerGroupId === undefined ? undefined : parsed.data.customerGroupId,

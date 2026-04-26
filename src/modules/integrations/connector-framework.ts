@@ -27,6 +27,9 @@ const customerMappedSchema = z.object({
   name: z.string().min(2).max(200),
   customerType: z.nativeEnum(CustomerType).optional(),
   taxId: z.string().max(20).optional(),
+  // Thai-style branch code (e.g. "00000" = HQ). Defaults to "00000"
+  // server-side when taxId is set but branchCode is missing.
+  branchCode: z.string().regex(/^[0-9]{1,5}$/).optional(),
   defaultTermId: z.string().min(1).optional(),
   defaultTermCode: z.string().min(1).optional(),
   ownerId: z.string().min(1).optional(),
@@ -392,13 +395,23 @@ async function upsertEntity(
       validatedCf = validateCustomFields(connectorAppShim, cfDefs, payload.customFields as Record<string, unknown>);
     }
 
+    // Default branch code to "00000" (HQ) whenever a Tax ID is present.
+    const incomingBranchCode = payload.taxId
+      ? (payload.branchCode ?? "00000")
+      : null;
+
     // Field-prospect auto-promotion: if a rep previously created a DRAFT for
-    // this prospect with the same Tax ID, ERP is now confirming it. Fill in
-    // the missing code/term/ref and flip to ACTIVE instead of inserting a new
-    // row — visits and deals already point at this id.
+    // this prospect with the same (Tax ID, branchCode), ERP is now confirming
+    // it. Fill in the missing code/term/ref and flip to ACTIVE instead of
+    // inserting a new row — visits and deals already point at this id.
     if (payload.taxId) {
       const draftMatch = await prisma.customer.findFirst({
-        where: { tenantId, taxId: payload.taxId, status: "DRAFT" },
+        where: {
+          tenantId,
+          taxId: payload.taxId,
+          branchCode: incomingBranchCode,
+          status: "DRAFT"
+        },
         select: {
           id: true,
           customerCode: true,
@@ -418,6 +431,7 @@ async function upsertEntity(
             customerCode: payload.customerCode,
             name: payload.name,
             customerType: payload.customerType ?? undefined,
+            branchCode: incomingBranchCode,
             ownerId: resolvedOwnerId,
             siteLat: payload.siteLat ?? undefined,
             siteLng: payload.siteLng ?? undefined,
@@ -437,11 +451,13 @@ async function upsertEntity(
             afterJson: {
               status: "ACTIVE",
               customerCode: payload.customerCode,
-              name: payload.name
+              name: payload.name,
+              branchCode: incomingBranchCode
             } as Prisma.InputJsonValue,
             contextJson: {
               reason: "promoted_via_sync",
-              taxId: payload.taxId
+              taxId: payload.taxId,
+              branchCode: incomingBranchCode
             } as Prisma.InputJsonValue
           }
         });
@@ -454,14 +470,15 @@ async function upsertEntity(
         where: {
           tenantId,
           taxId: payload.taxId,
+          branchCode: incomingBranchCode,
           status: "ACTIVE",
           NOT: { customerCode: payload.customerCode }
         },
-        select: { customerCode: true, name: true }
+        select: { customerCode: true, name: true, branchCode: true }
       });
       if (activeTaxIdDuplicate) {
         throw new Error(
-          `Tax ID "${payload.taxId}" is already registered to customer "${activeTaxIdDuplicate.name}" (${activeTaxIdDuplicate.customerCode}).`
+          `Tax ID "${payload.taxId}" branch "${incomingBranchCode}" is already registered to customer "${activeTaxIdDuplicate.name}" (${activeTaxIdDuplicate.customerCode}).`
         );
       }
     }
@@ -480,6 +497,7 @@ async function upsertEntity(
             name: payload.name,
             customerType: payload.customerType ?? undefined,
             taxId: payload.taxId ?? undefined,
+            branchCode: incomingBranchCode,
             ownerId: resolvedOwnerId,
             siteLat: payload.siteLat ?? undefined,
             siteLng: payload.siteLng ?? undefined,
@@ -505,6 +523,7 @@ async function upsertEntity(
           name: payload.name,
           customerType: payload.customerType ?? undefined,
           taxId: payload.taxId ?? undefined,
+          branchCode: incomingBranchCode,
           ownerId: resolvedOwnerId,
           siteLat: payload.siteLat ?? undefined,
           siteLng: payload.siteLng ?? undefined,
@@ -523,6 +542,7 @@ async function upsertEntity(
           name: payload.name,
           customerType: payload.customerType ?? undefined,
           taxId: payload.taxId ?? undefined,
+          branchCode: incomingBranchCode,
           ownerId: resolvedOwnerId,
           siteLat: payload.siteLat ?? undefined,
           siteLng: payload.siteLng ?? undefined,

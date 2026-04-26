@@ -33,8 +33,8 @@ export async function openCustomer360(customerIdOrCode, customerCode) {
   switchView("master");
   setStatus("Loading customer…");
   try {
-    const { customer, deals, visits } = await api(`/customers/${encodeURIComponent(customerIdOrCode)}/360`);
-    state.c360 = { customer, deals, visits, activeTab: "deals" };
+    const { customer, deals, visits, children } = await api(`/customers/${encodeURIComponent(customerIdOrCode)}/360`);
+    state.c360 = { customer, deals, visits, children: children || [], activeTab: "deals" };
     setStatus("");
     renderCustomer360();
   } catch (error) {
@@ -43,7 +43,27 @@ export async function openCustomer360(customerIdOrCode, customerCode) {
 }
 
 function renderC360TabContent(c360) {
-  const { customer, deals, visits, activeTab } = c360;
+  const { customer, deals, visits, children, activeTab } = c360;
+
+  if (activeTab === "children") {
+    const list = children ?? [];
+    if (!list.length) return `<div class="c360-empty"><div class="c360-empty-icon">${icon('building')}</div>No subsidiaries linked to this customer.</div>`;
+    return `
+      <div style="border:1px solid var(--border);border-radius:var(--r-md);overflow:hidden;margin-top:var(--sp-4)">
+        ${list.map((c) => `
+          <div class="c360-child-row c360-child-row--clickable" data-child-id="${escHtml(c.id)}" data-child-code="${escHtml(c.customerCode || "")}" role="button" tabindex="0">
+            <div class="c360-contact-avatar" style="background:${deps.avatarColor(c.name)}">${deps.c360Initials(c.name)}</div>
+            <div class="c360-child-body">
+              <div class="c360-child-name">${escHtml(c.name)}</div>
+              <div class="c360-child-meta">
+                ${c.customerCode ? `<span class="c360-child-code">${escHtml(c.customerCode)}</span>` : ""}
+                ${c.branchCode ? `<span class="cust-branch-pill">Br ${escHtml(c.branchCode)}</span>` : ""}
+                ${c.status === "DRAFT" ? `<span class="badge badge--open">DRAFT</span>` : ""}
+              </div>
+            </div>
+          </div>`).join("")}
+      </div>`;
+  }
 
   if (activeTab === "overview") {
     const cfEntries = customer.customFields && typeof customer.customFields === "object"
@@ -166,7 +186,8 @@ function renderC360TabContent(c360) {
 export function renderCustomer360() {
   const c360 = state.c360;
   if (!c360) return;
-  const { customer, deals, visits } = c360;
+  const { customer, deals, visits, children } = c360;
+  const childrenList = children ?? [];
 
   const activeDealCount = deals.filter(
     (d) => !["won","lost"].some((w) => (d.stage?.stageName ?? "").toLowerCase().includes(w))
@@ -183,6 +204,7 @@ export function renderCustomer360() {
     { key: "visits", label: "Visits", count: visits.length },
     { key: "contacts", label: "Contacts", count: customer.contacts?.length ?? 0 },
     { key: "addresses", label: "Addresses", count: customer.addresses?.length ?? 0 },
+    ...(childrenList.length > 0 ? [{ key: "children", label: "Subsidiaries", count: childrenList.length }] : []),
     { key: "overview", label: "Overview", count: null }
   ];
 
@@ -202,7 +224,12 @@ export function renderCustomer360() {
           <div class="c360-header-left">
             <div class="c360-avatar" style="background:${deps.avatarColor(customer.name)}">${deps.c360Initials(customer.name)}</div>
             <div class="c360-header-info">
-              <h2 class="c360-name">${escHtml(customer.name)}</h2>
+              ${customer.parentCustomer ? `
+                <div class="c360-parent-link" data-parent-id="${escHtml(customer.parentCustomer.id)}" data-parent-code="${escHtml(customer.parentCustomer.customerCode || "")}" role="button" tabindex="0" title="Open parent customer">
+                  <svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+                  Subsidiary of <strong>${escHtml(customer.parentCustomer.name)}</strong>${customer.parentCustomer.customerCode ? ` <span class="c360-parent-code">(${escHtml(customer.parentCustomer.customerCode)})</span>` : ""}
+                </div>` : ""}
+              <h2 class="c360-name">${escHtml(customer.name)}${customer.branchCode && customer.branchCode !== "00000" ? ` <span class="cust-branch-pill" style="font-size:0.7em;vertical-align:middle">Br ${escHtml(customer.branchCode)}</span>` : ""}</h2>
               <div class="c360-meta">
                 <span class="c360-code">${escHtml(customer.customerCode)}</span>
                 <span class="c360-meta-sep">·</span>
@@ -296,16 +323,39 @@ export function renderCustomer360() {
       if (visitRow) {
         const id = visitRow.dataset.visitId;
         if (id) deps.openVisitDetail(id);
+        return;
+      }
+      const childRow = target.closest(".c360-child-row--clickable");
+      if (childRow) {
+        const id = childRow.dataset.childId;
+        const code = childRow.dataset.childCode;
+        if (id) openCustomer360(id, code || id);
       }
     };
     tabContent.addEventListener("click", (e) => handleRowActivate(e.target));
     tabContent.addEventListener("keydown", (e) => {
       if (e.key === "Enter" || e.key === " ") {
-        const row = e.target.closest(".c360-deal-row--clickable, .c360-visit-row--clickable");
+        const row = e.target.closest(".c360-deal-row--clickable, .c360-visit-row--clickable, .c360-child-row--clickable");
         if (row) {
           e.preventDefault();
           handleRowActivate(e.target);
         }
+      }
+    });
+  }
+
+  const parentLink = views.master.querySelector(".c360-parent-link");
+  if (parentLink) {
+    const goParent = () => {
+      const id = parentLink.dataset.parentId;
+      const code = parentLink.dataset.parentCode;
+      if (id) openCustomer360(id, code || id);
+    };
+    parentLink.addEventListener("click", goParent);
+    parentLink.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        goParent();
       }
     });
   }
