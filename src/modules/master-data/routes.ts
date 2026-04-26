@@ -1644,6 +1644,11 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
   // path is gated and we want explicit failures rather than mysterious timeouts):
   //   DBD_API_URL  — base URL ending in `/`, taxId is appended (e.g. https://apidev.dbd.go.th/api/v3/juristic/)
   //   DBD_API_KEY  — required by most current DBD endpoints; sent as `api_key` header
+  app.get("/dbd/status", async (request) => {
+    requireTenantId(request);
+    return { configured: Boolean(process.env["DBD_API_URL"]) };
+  });
+
   app.get("/dbd/company/:taxId", async (request) => {
     requireTenantId(request);
     const { taxId } = request.params as { taxId: string };

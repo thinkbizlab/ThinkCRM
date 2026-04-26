@@ -502,6 +502,8 @@ body {
 
 /* ── TOP NAVIGATION ───────────────────────────────────────── */
 
+.topnav-hamburger { display: none; margin-right: var(--sp-2); }
+
 .topnav {
   height: var(--nav-h);
   background: var(--nav-bg);
@@ -7590,7 +7592,45 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 /* ── RESPONSIVE ───────────────────────────────────────────── */
 
 @media (max-width: 860px) {
-  .topnav-nav { overflow-x: auto; }
+  .topnav-hamburger { display: grid; }
+
+  .topnav-nav {
+    position: fixed;
+    top: var(--nav-h);
+    left: 0;
+    right: 0;
+    max-height: calc(100vh - var(--nav-h));
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--sp-1);
+    padding: var(--sp-2);
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+    overflow-y: auto;
+    overflow-x: hidden;
+    transform: translateY(-110%);
+    transition: transform 0.18s ease;
+    z-index: 39;
+  }
+  .topnav.is-mobile-nav-open .topnav-nav { transform: translateY(0); }
+
+  .topnav-nav .nav-btn {
+    width: 100%;
+    justify-content: flex-start;
+    padding: 10px var(--sp-3);
+    font-size: 0.95rem;
+  }
+
+  .topnav-nav .nav-dropdown { width: 100%; }
+  .topnav-nav .nav-dropdown-menu {
+    position: static;
+    box-shadow: none;
+    border: none;
+    background: transparent;
+    padding-left: var(--sp-5);
+  }
+
   .topnav-search-btn .qs-btn-label,
   .topnav-search-btn kbd { display: none; }
   .user-name { display: none; }

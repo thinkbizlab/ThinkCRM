@@ -6945,7 +6945,31 @@ function renderSettings() {
           resultBox.hidden = false;
           summaryEl.textContent = res.ok ? `✓ ${res.message}` : `✗ ${res.message}`;
           summaryEl.style.color = res.ok ? "var(--accent-bright,#16a34a)" : "var(--danger,#dc2626)";
-          bodyEl.value = res.responseBody ?? (res.detail?.firstRecord ? JSON.stringify(res.detail.firstRecord, null, 2) : "(no response body)");
+          if (res.responseBody) {
+            // REST: HTTP response body
+            bodyEl.value = res.responseBody;
+          } else if (res.detail?.sentSql !== undefined) {
+            // MYSQL: build a structured preview from detail fields
+            const lines = [];
+            lines.push(`-- SQL ----------------------------------------`);
+            lines.push(String(res.detail.sentSql ?? "(none)"));
+            lines.push("");
+            lines.push(`-- Sample rows: ${res.detail.sampleRecordCount ?? 0}`);
+            const keys = Array.isArray(res.detail.firstRecordKeys) ? res.detail.firstRecordKeys : [];
+            lines.push(`-- Fields (${keys.length}): ${keys.join(", ") || "(none)"}`);
+            lines.push("");
+            lines.push(`-- First record ----------------------------------`);
+            try {
+              lines.push(res.detail.firstRecord ? JSON.stringify(res.detail.firstRecord, null, 2) : "(no rows returned)");
+            } catch {
+              lines.push("(could not serialise row — non-JSON value)");
+            }
+            bodyEl.value = lines.join("\n");
+          } else if (res.detail?.firstRecord) {
+            bodyEl.value = JSON.stringify(res.detail.firstRecord, null, 2);
+          } else {
+            bodyEl.value = "(no response body)";
+          }
         }
       } catch (err) {
         setStatus(err.message || "Connection test failed.");
@@ -9825,6 +9849,15 @@ function openNewCustomerModal(termOptions) {
   }
 
   // ── DBD Lookup ──
+  // Hide the button up-front when the backend has no DBD provider configured,
+  // so users don't see a feature that will only ever return 503.
+  api("/dbd/status").then((s) => {
+    if (!s?.configured) {
+      const btn = overlay.querySelector("#ncm-dbd-lookup");
+      if (btn) btn.style.display = "none";
+    }
+  }).catch(() => {});
+
   overlay.querySelector("#ncm-dbd-lookup")?.addEventListener("click", async () => {
     const taxInput = overlay.querySelector("#ncm-taxid");
     const statusEl = overlay.querySelector("#ncm-dbd-status");
@@ -11463,6 +11496,7 @@ masterMenu?.querySelectorAll(".nav-dropdown-item").forEach((item) => {
   item.addEventListener("click", async () => {
     const page = item.dataset.masterPage;
     closeMasterDropdown();
+    if (typeof closeMobileNav === "function") closeMobileNav();
     navigateToMasterPage(page);
     switchView("master");
     updateMasterDropdownActive();
@@ -11484,10 +11518,37 @@ document.addEventListener("click", (e) => {
   }
 });
 
+// ── Mobile hamburger menu ──
+const topnavEl = document.querySelector(".topnav");
+const hamburgerBtn = document.getElementById("topnav-hamburger");
+function closeMobileNav() {
+  if (!topnavEl) return;
+  topnavEl.classList.remove("is-mobile-nav-open");
+  if (hamburgerBtn) hamburgerBtn.setAttribute("aria-expanded", "false");
+}
+if (hamburgerBtn && topnavEl) {
+  hamburgerBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const open = topnavEl.classList.toggle("is-mobile-nav-open");
+    hamburgerBtn.setAttribute("aria-expanded", open ? "true" : "false");
+  });
+  // Tap outside the nav closes it
+  document.addEventListener("click", (e) => {
+    if (!topnavEl.classList.contains("is-mobile-nav-open")) return;
+    const nav = document.getElementById("topnav-nav");
+    if (nav?.contains(e.target) || hamburgerBtn.contains(e.target)) return;
+    closeMobileNav();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeMobileNav();
+  });
+}
+
 document.querySelectorAll(".nav-btn").forEach((btn) => {
   // Master nav btn is handled above via the dropdown
   if (btn.id === "master-nav-btn") return;
   btn.addEventListener("click", async () => {
+    closeMobileNav();
     const target = btn.dataset.view;
     if (!target) return;
     if (btn.dataset.settingsPage) {
