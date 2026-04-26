@@ -9849,14 +9849,18 @@ function openNewCustomerModal(termOptions) {
   }
 
   // ── DBD Lookup ──
-  // Hide the button up-front when the backend has no DBD provider configured,
-  // so users don't see a feature that will only ever return 503.
-  api("/dbd/status").then((s) => {
-    if (!s?.configured) {
-      const btn = overlay.querySelector("#ncm-dbd-lookup");
-      if (btn) btn.style.display = "none";
+  // Visible only to ADMIN users, and only when the backend has a DBD
+  // provider configured (otherwise the button always returns 503).
+  const dbdBtn = overlay.querySelector("#ncm-dbd-lookup");
+  if (dbdBtn) {
+    if (state.user?.role !== "ADMIN") {
+      dbdBtn.style.display = "none";
+    } else {
+      api("/dbd/status").then((s) => {
+        if (!s?.configured) dbdBtn.style.display = "none";
+      }).catch(() => {});
     }
-  }).catch(() => {});
+  }
 
   overlay.querySelector("#ncm-dbd-lookup")?.addEventListener("click", async () => {
     const taxInput = overlay.querySelector("#ncm-taxid");
