@@ -1514,6 +1514,50 @@ views.settings?.addEventListener("click", (e) => {
   openIntegrationGuide(btn.dataset.label, btn.dataset.guide);
 });
 
+// Delegated listener for sync-job "Details" buttons. Wired at module init
+// (not inside renderSettings) so a re-render or navigate-away can never
+// detach it. Listens on document so it works even if a parent stops
+// propagation before reaching views.settings.
+document.addEventListener("click", async (ev) => {
+  const btn = ev.target instanceof Element ? ev.target.closest(".sync-view-job-btn") : null;
+  if (!btn) return;
+  ev.preventDefault();
+  const jobId = btn.dataset.jobId;
+  if (!jobId) return;
+  try {
+    const job = await api(`/sync/jobs/${jobId}`);
+    const errHtml = (job.errors || []).map(e =>
+      `<tr><td>${escHtml(e.rowRef)}</td><td><code>${escHtml(e.errorCode)}</code></td><td>${escHtml(e.errorMessage)}</td></tr>`
+    ).join("");
+    const overlay = document.createElement("div");
+    overlay.className = "popup-overlay";
+    overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:9999;padding:16px";
+    overlay.innerHTML = `
+      <div class="popup-box popup-box--wide" role="dialog" aria-modal="true" style="background:var(--clr-surface,#fff);border-radius:var(--radius,8px);max-width:800px;width:100%;max-height:90vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
+        <div class="popup-header" style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--clr-border,#e4e4e7)">
+          <p class="popup-title" style="margin:0;font-weight:600">Sync Job Detail</p>
+          <button class="popup-close-btn" aria-label="Close" style="background:transparent;border:0;cursor:pointer;padding:4px">${icon('x', 14)}</button>
+        </div>
+        <div style="padding:var(--sp-3,16px)">
+          <p><strong>Status:</strong> ${escHtml(job.status)} &nbsp; <strong>Source:</strong> ${escHtml(job.source?.sourceName ?? "—")} &nbsp; <strong>Type:</strong> ${escHtml(job.runType)}</p>
+          <p><strong>Started:</strong> ${new Date(job.startedAt).toLocaleString()} ${job.finishedAt ? " — <strong>Finished:</strong> " + new Date(job.finishedAt).toLocaleString() : ""}</p>
+          ${errHtml ? `
+            <h5 style="margin-top:var(--sp-3,16px)">Errors</h5>
+            <table class="data-table" style="font-size:0.82rem">
+              <thead><tr><th>Row</th><th>Code</th><th>Message</th></tr></thead>
+              <tbody>${errHtml}</tbody>
+            </table>
+          ` : '<p class="muted" style="margin-top:var(--sp-3,16px)">No errors.</p>'}
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector(".popup-close-btn")?.addEventListener("click", () => overlay.remove());
+    overlay.addEventListener("click", (e2) => { if (e2.target === overlay) overlay.remove(); });
+  } catch (err) {
+    setStatus(err?.message || "Failed to load job detail.", true);
+  }
+});
+
 const CURRENCIES = [
   { code: "THB", label: "THB — Thai Baht (฿)" },
   { code: "USD", label: "USD — US Dollar ($)" },
@@ -7504,47 +7548,8 @@ function renderSettings() {
     } catch (err) { setStatus(err.message || "Failed to save mappings."); }
   });
 
-  // Sync job detail — delegated on views.settings so it survives re-renders.
-  if (!views.settings.dataset.syncJobBtnWired) {
-    views.settings.dataset.syncJobBtnWired = "1";
-    views.settings.addEventListener("click", async (ev) => {
-      const btn = ev.target.closest?.(".sync-view-job-btn");
-      if (!btn || !views.settings.contains(btn)) return;
-      try {
-        const job = await api(`/sync/jobs/${btn.dataset.jobId}`);
-        const errHtml = (job.errors || []).map(e =>
-          `<tr><td>${escHtml(e.rowRef)}</td><td><code>${escHtml(e.errorCode)}</code></td><td>${escHtml(e.errorMessage)}</td></tr>`
-        ).join("");
-        const overlay = document.createElement("div");
-        overlay.className = "popup-overlay";
-        // Inline styles — don't rely on .popup-overlay being defined, in case CSS bailed.
-        overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:9999;padding:16px";
-        overlay.innerHTML = `
-          <div class="popup-box popup-box--wide" role="dialog" aria-modal="true" style="background:var(--clr-surface,#fff);border-radius:var(--radius,8px);max-width:800px;width:100%;max-height:90vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
-            <div class="popup-header" style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--clr-border,#e4e4e7)">
-              <p class="popup-title" style="margin:0;font-weight:600">Sync Job Detail</p>
-              <button class="popup-close-btn" aria-label="Close" style="background:transparent;border:0;cursor:pointer;padding:4px">${icon('x', 14)}</button>
-            </div>
-            <div style="padding:var(--sp-3,16px)">
-              <p><strong>Status:</strong> ${escHtml(job.status)} &nbsp; <strong>Source:</strong> ${escHtml(job.source?.sourceName ?? "—")} &nbsp; <strong>Type:</strong> ${escHtml(job.runType)}</p>
-              <p><strong>Started:</strong> ${new Date(job.startedAt).toLocaleString()} ${job.finishedAt ? " — <strong>Finished:</strong> " + new Date(job.finishedAt).toLocaleString() : ""}</p>
-              ${errHtml ? `
-                <h5 style="margin-top:var(--sp-3,16px)">Errors</h5>
-                <table class="data-table" style="font-size:0.82rem">
-                  <thead><tr><th>Row</th><th>Code</th><th>Message</th></tr></thead>
-                  <tbody>${errHtml}</tbody>
-                </table>
-              ` : '<p class="muted" style="margin-top:var(--sp-3,16px)">No errors.</p>'}
-            </div>
-          </div>`;
-        document.body.appendChild(overlay);
-        overlay.querySelector(".popup-close-btn")?.addEventListener("click", () => overlay.remove());
-        overlay.addEventListener("click", (ev) => { if (ev.target === overlay) overlay.remove(); });
-      } catch (err) {
-        setStatus(err?.message || "Failed to load job detail.", true);
-      }
-    });
-  }
+  // Sync job detail — handler is wired at module init (see top of file),
+  // not here, so re-renders can't detach it.
 
   // ── Roles page listeners ──────────────────────────────────────
   qs("#rp-info-toggle")?.addEventListener("click", () => {
