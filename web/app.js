@@ -707,6 +707,7 @@ const CRM_TARGET_FIELDS = {
     { value: "name",               label: "Customer Name",         required: true },
     { value: "customerType",       label: "Customer Type",         required: false },
     { value: "taxId",              label: "Tax ID",                required: false },
+    { value: "branchCode",         label: "Branch Code",           required: false },
     { value: "defaultTermCode",    label: "Default Payment Term",  required: false },
     { value: "customerGroupCode",  label: "Customer Group",        required: false },
     { value: "ownerId",            label: "Owner User ID",         required: false },
@@ -2180,27 +2181,29 @@ const MASTER_DATA_IMPORT_SPECS = {
   "payment-terms": {
     label: "Payment Terms",
     endpoint: "/payment-terms/import",
-    columns: ["code", "name", "dueDays"],
+    columns: ["code", "name", "dueDays", "isActive"],
+    requiredColumns: ["code", "name", "dueDays"],
     sample: [
-      { code: "NET30",  name: "Net 30 days",  dueDays: 30 },
-      { code: "NET60",  name: "Net 60 days",  dueDays: 60 },
-      { code: "COD",    name: "Cash on delivery", dueDays: 0 }
+      { code: "NET30",  name: "Net 30 days",  dueDays: 30, isActive: true },
+      { code: "NET60",  name: "Net 60 days",  dueDays: 60, isActive: true },
+      { code: "COD",    name: "Cash on delivery", dueDays: 0, isActive: true }
     ],
     sourceRows: () => (state.cache.paymentTerms || []).map((p) => ({
-      code: p.code, name: p.name, dueDays: p.dueDays
+      code: p.code, name: p.name, dueDays: p.dueDays, isActive: p.isActive
     })),
     fileBase: "payment-terms"
   },
   "items": {
     label: "Items",
     endpoint: "/items/import",
-    columns: ["itemCode", "name", "unitPrice", "externalRef"],
+    columns: ["itemCode", "name", "unitPrice", "externalRef", "isActive"],
+    requiredColumns: ["itemCode", "name", "unitPrice"],
     sample: [
-      { itemCode: "SKU-001", name: "Example Product A", unitPrice: 500,  externalRef: "" },
-      { itemCode: "SKU-002", name: "Example Product B", unitPrice: 1250, externalRef: "LEGACY-42" }
+      { itemCode: "SKU-001", name: "Example Product A", unitPrice: 500,  externalRef: "", isActive: true },
+      { itemCode: "SKU-002", name: "Example Product B", unitPrice: 1250, externalRef: "LEGACY-42", isActive: true }
     ],
     sourceRows: () => (state.cache.items || []).map((it) => ({
-      itemCode: it.itemCode, name: it.name, unitPrice: it.unitPrice, externalRef: it.externalRef || ""
+      itemCode: it.itemCode, name: it.name, unitPrice: it.unitPrice, externalRef: it.externalRef || "", isActive: it.isActive
     })),
     fileBase: "items"
   },
@@ -2208,6 +2211,7 @@ const MASTER_DATA_IMPORT_SPECS = {
     label: "Customer Groups",
     endpoint: "/customer-groups/import",
     columns: ["code", "name", "description", "isActive"],
+    requiredColumns: ["code", "name"],
     sample: [
       { code: "UNI",    name: "University",  description: "Universities and colleges", isActive: true },
       { code: "GOV",    name: "Government",  description: "Government bodies",         isActive: true },
@@ -2223,14 +2227,16 @@ const MASTER_DATA_IMPORT_SPECS = {
   "customers": {
     label: "Customers",
     endpoint: "/customers/import",
-    columns: ["customerCode", "name", "paymentTermCode", "customerGroupCode", "customerType", "taxId", "externalRef", "siteLat", "siteLng"],
+    columns: ["customerCode", "name", "paymentTermCode", "customerGroupCode", "customerType", "taxId", "branchCode", "parentCustomerCode", "externalRef", "siteLat", "siteLng", "disabled"],
+    requiredColumns: ["customerCode", "name", "paymentTermCode"],
     sample: [
-      { customerCode: "CUST-0001", name: "Acme Co., Ltd.", paymentTermCode: "NET30", customerGroupCode: "CORP", customerType: "COMPANY", taxId: "0105555123456", externalRef: "", siteLat: 13.7563, siteLng: 100.5018 },
-      { customerCode: "CUST-0002", name: "Jane Individual",  paymentTermCode: "COD",   customerGroupCode: "",    customerType: "INDIVIDUAL", taxId: "", externalRef: "", siteLat: "", siteLng: "" }
+      { customerCode: "CUST-0001", name: "Acme Co., Ltd.", paymentTermCode: "NET30", customerGroupCode: "CORP", customerType: "COMPANY", taxId: "0105555123456", branchCode: "00000", parentCustomerCode: "", externalRef: "", siteLat: 13.7563, siteLng: 100.5018, disabled: false },
+      { customerCode: "CUST-0002", name: "Jane Personal",  paymentTermCode: "COD",   customerGroupCode: "",    customerType: "PERSONAL", taxId: "", branchCode: "", parentCustomerCode: "", externalRef: "", siteLat: "", siteLng: "", disabled: false }
     ],
     sourceRows: () => {
       const terms = state.cache.paymentTerms || [];
       const codeById = new Map(terms.map((t) => [t.id, t.code]));
+      const customerCodeById = new Map((state.cache.customers || []).map((c) => [c.id, c.customerCode || ""]));
       return (state.cache.customers || []).map((c) => ({
         customerCode: c.customerCode,
         name: c.name,
@@ -2238,9 +2244,12 @@ const MASTER_DATA_IMPORT_SPECS = {
         customerGroupCode: c.customerGroup?.code || "",
         customerType: c.customerType || "COMPANY",
         taxId: c.taxId || "",
+        branchCode: c.branchCode || "",
+        parentCustomerCode: c.parentCustomer?.customerCode || customerCodeById.get(c.parentCustomerId) || "",
         externalRef: c.externalRef || "",
         siteLat: c.siteLat ?? "",
-        siteLng: c.siteLng ?? ""
+        siteLng: c.siteLng ?? "",
+        disabled: c.disabled || false
       }));
     },
     fileBase: "customers"
@@ -2283,7 +2292,7 @@ function openMasterDataImportModal(entity) {
         <button class="popup-close-btn" aria-label="Close">${icon('x', 14)}</button>
       </div>
       <div style="padding:var(--sp-3) 0;display:flex;flex-direction:column;gap:var(--sp-3)">
-        <p class="muted small">Upload an Excel (.xlsx) file. Required columns: ${spec.columns.map(c => `<code>${c}</code>`).join(", ")}. Existing rows (matched by natural key) are overwritten.${(() => {
+        <p class="muted small">Upload an Excel (.xlsx) file. Required columns: ${(spec.requiredColumns || spec.columns).map(c => `<code>${c}</code>`).join(", ")}. Existing rows (matched by natural key) are overwritten.${(() => {
           const cfCols = getActiveCustomFieldColumns(entity);
           return cfCols.length ? ` Optional custom field columns: ${cfCols.map(c => `<code>${c}</code>`).join(", ")}.` : "";
         })()}</p>
