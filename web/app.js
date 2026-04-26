@@ -7504,9 +7504,12 @@ function renderSettings() {
     } catch (err) { setStatus(err.message || "Failed to save mappings."); }
   });
 
-  // Sync job detail
-  views.settings.querySelectorAll(".sync-view-job-btn").forEach(btn => {
-    btn.addEventListener("click", async () => {
+  // Sync job detail — delegated on views.settings so it survives re-renders.
+  if (!views.settings.dataset.syncJobBtnWired) {
+    views.settings.dataset.syncJobBtnWired = "1";
+    views.settings.addEventListener("click", async (ev) => {
+      const btn = ev.target.closest?.(".sync-view-job-btn");
+      if (!btn || !views.settings.contains(btn)) return;
       try {
         const job = await api(`/sync/jobs/${btn.dataset.jobId}`);
         const errHtml = (job.errors || []).map(e =>
@@ -7537,9 +7540,11 @@ function renderSettings() {
         document.body.appendChild(overlay);
         overlay.querySelector(".popup-close-btn")?.addEventListener("click", () => overlay.remove());
         overlay.addEventListener("click", (ev) => { if (ev.target === overlay) overlay.remove(); });
-      } catch (err) { setStatus(err.message); }
+      } catch (err) {
+        setStatus(err?.message || "Failed to load job detail.", true);
+      }
     });
-  });
+  }
 
   // ── Roles page listeners ──────────────────────────────────────
   qs("#rp-info-toggle")?.addEventListener("click", () => {
