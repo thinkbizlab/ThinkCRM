@@ -50,6 +50,7 @@
     "fastify-plugin": "^5.1.0",
     "fflate": "^0.8.2",
     "jose": "^6.2.2",
+    "mysql2": "^3.22.2",
     "node-cron": "^4.2.1",
     "nodemailer": "^8.0.5",
     "stripe": "^22.0.2",

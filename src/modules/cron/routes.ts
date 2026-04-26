@@ -110,6 +110,16 @@ export const cronRoutes: FastifyPluginAsync = async (app) => {
     return runJobForAllTenants("syncRestPull");
   });
 
+  // ── MySQL Sync Pull ───────────────────────────────────────────────────────
+  // Reads Customers / Items / Payment Terms directly from a configured MySQL
+  // ERP. Read-only — never writes back to the upstream DB. Per-tenant cron tick
+  // (every minute by default); `pullAllMysqlSourcesForTenant` further throttles
+  // each source by its `intervalMinutes` setting.
+  app.get("/cron/sync-mysql-pull", async (request) => {
+    verifyCronSecret(request);
+    return runJobForAllTenants("syncMysqlPull");
+  });
+
   // ── Trial Expiry (system-level, not per-tenant job) ───────────────────────
   app.get("/cron/trial-expiry", async (request) => {
     verifyCronSecret(request);

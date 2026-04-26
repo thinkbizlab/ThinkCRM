@@ -15,10 +15,11 @@ import { prisma } from "../../lib/prisma.js";
 import { encryptField } from "../../lib/secrets.js";
 import { connectorInputContractSchema, executeConnectorRun } from "./connector-framework.js";
 import { executeRestPull, testRestConnection } from "../sync/rest-pull.js";
+import { executeMysqlPull, testMysqlConnection } from "../sync/mysql-pull.js";
 
 const sourceSchema = z.object({
   sourceName: z.string().min(2),
-  sourceType: z.enum(["EXCEL", "REST", "WEBHOOK"]),
+  sourceType: z.enum(["EXCEL", "REST", "WEBHOOK", "MYSQL"]),
   configJson: z.record(z.string(), z.any())
 });
 
@@ -173,7 +174,7 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
   });
 
   /**
-   * Manual trigger for a REST source pull. Admin-only.
+   * Manual trigger for a source pull (REST or MYSQL). Admin-only.
    * The scheduled cron runs the same logic for all enabled sources.
    */
   app.post("/integrations/master-data/sources/:id/pull", async (request, reply) => {
@@ -181,8 +182,18 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
     const tenantId = requireTenantId(request);
     const userId = requireUserId(request);
     const { id } = request.params as { id: string };
+    const source = await prisma.integrationSource.findFirst({
+      where: { id, tenantId },
+      select: { sourceType: true }
+    });
+    if (!source) throw app.httpErrors.notFound("Source not found.");
+    if (source.sourceType !== "REST" && source.sourceType !== "MYSQL") {
+      throw app.httpErrors.badRequest(`Manual pull is only supported for REST and MYSQL sources (got ${source.sourceType}).`);
+    }
     try {
-      const result = await executeRestPull(tenantId, id, `user:${userId}`);
+      const result = source.sourceType === "MYSQL"
+        ? await executeMysqlPull(tenantId, id, `user:${userId}`)
+        : await executeRestPull(tenantId, id, `user:${userId}`);
       return reply.code(200).send({
         jobId: result.jobId,
         ...result.summary,
@@ -254,6 +265,25 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
         };
       } catch (err) {
         result = { ok: false, message: err instanceof Error ? err.message : "Test failed." };
+      }
+    } else if (source.sourceType === "MYSQL") {
+      try {
+        const test = await testMysqlConnection(tenantId, source.id);
+        result = {
+          ok: test.ok,
+          message: test.ok
+            ? `Connected to ${test.url} — ${test.sampleRecordCount} sample record(s) returned.`
+            : `Failed: ${test.error ?? "MySQL test failed"}`,
+          detail: {
+            url: test.url,
+            sentSql: test.sentSql,
+            sampleRecordCount: test.sampleRecordCount,
+            firstRecordKeys: test.firstRecordKeys,
+            firstRecord: test.firstRecord
+          }
+        };
+      } catch (err) {
+        result = { ok: false, message: err instanceof Error ? err.message : "MySQL test failed." };
       }
     } else {
       const cfg = (source.configJson ?? {}) as Record<string, unknown>;
@@ -564,24 +594,51 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
 };
 
 /**
- * Encrypts the REST auth value before it hits the DB, preserving the prior
- * value on PATCH when the UI sends an empty string (so editing endpoint
- * URL alone doesn't blank out the stored secret).
+ * Encrypts secrets before they hit the DB. PATCH requests that omit the
+ * secret (or send an empty string) keep the previously-stored encrypted
+ * value, so editing a non-secret field doesn't blank out the stored secret.
  */
 function sanitizeSourceConfig(
-  sourceType: "EXCEL" | "REST" | "WEBHOOK",
+  sourceType: "EXCEL" | "REST" | "WEBHOOK" | "MYSQL",
   incoming: Record<string, unknown>,
   existing?: Record<string, unknown>
 ): Record<string, unknown> {
-  if (sourceType !== "REST") return incoming;
-  const out: Record<string, unknown> = { ...incoming };
-  const rawAuth = typeof out.authValue === "string" ? out.authValue.trim() : "";
-  delete out.authValue;
-  if (rawAuth) {
-    const enc = encryptField(rawAuth);
-    if (enc) out.authValueEnc = enc;
-  } else if (existing && typeof existing.authValueEnc === "string") {
-    out.authValueEnc = existing.authValueEnc;
+  if (sourceType === "REST") {
+    const out: Record<string, unknown> = { ...incoming };
+    const rawAuth = typeof out.authValue === "string" ? out.authValue.trim() : "";
+    delete out.authValue;
+    if (rawAuth) {
+      const enc = encryptField(rawAuth);
+      if (enc) out.authValueEnc = enc;
+    } else if (existing && typeof existing.authValueEnc === "string") {
+      out.authValueEnc = existing.authValueEnc;
+    }
+    return out;
   }
-  return out;
+  if (sourceType === "MYSQL") {
+    const out: Record<string, unknown> = { ...incoming };
+    // Password
+    const rawPwd = typeof out.password === "string" ? out.password : "";
+    delete out.password;
+    if (rawPwd) {
+      const enc = encryptField(rawPwd);
+      if (enc) out.passwordEnc = enc;
+    } else if (existing && typeof existing.passwordEnc === "string") {
+      out.passwordEnc = existing.passwordEnc;
+    }
+    // SSL CA PEM (optional)
+    const ssl = (out.ssl ?? {}) as Record<string, unknown>;
+    const existingSsl = (existing?.ssl ?? {}) as Record<string, unknown>;
+    const rawCa = typeof ssl.caPem === "string" ? ssl.caPem : "";
+    delete ssl.caPem;
+    if (rawCa) {
+      const enc = encryptField(rawCa);
+      if (enc) ssl.caPemEnc = enc;
+    } else if (typeof existingSsl.caPemEnc === "string") {
+      ssl.caPemEnc = existingSsl.caPemEnc;
+    }
+    out.ssl = ssl;
+    return out;
+  }
+  return incoming;
 }

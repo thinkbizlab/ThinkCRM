@@ -61,6 +61,16 @@ export const JOB_DEFS: JobDef[] = [
     }
   },
   {
+    key: "syncMysqlPull",
+    label: "MySQL Sync Pull",
+    description: "Polls Customers / Items / Payment Terms from every ENABLED MySQL data source. Read-only — never writes back.",
+    defaultCronExpr: "* * * * *", // every minute; per-source intervalMinutes throttles further
+    run: async (tenantId) => {
+      const { pullAllMysqlSourcesForTenant } = await import("../modules/sync/mysql-pull.js");
+      return pullAllMysqlSourcesForTenant(tenantId);
+    }
+  },
+  {
     key: "invoiceAutoSend",
     label: "Invoice Auto-Send",
     description: "Finalizes DRAFT tenant invoices whose billing period has ended and emails them to the first active tenant admin.",

@@ -5213,7 +5213,7 @@ function renderSettings() {
               </div>
               <div>
                 <button class="ghost small sync-test-source-btn" data-source-id="${src.id}" data-source-name="${escHtml(src.sourceName)}">Test Connection</button>
-                ${src.sourceType === "REST" && src.status === "ENABLED" ? `<button class="ghost small sync-pull-now-btn" data-source-id="${src.id}" data-source-name="${escHtml(src.sourceName)}">Pull now</button>` : ""}
+                ${(src.sourceType === "REST" || src.sourceType === "MYSQL") && src.status === "ENABLED" ? `<button class="ghost small sync-pull-now-btn" data-source-id="${src.id}" data-source-name="${escHtml(src.sourceName)}">Pull now</button>` : ""}
                 <button class="ghost small sync-toggle-source-btn" data-source-id="${src.id}" data-current-status="${src.status}">${src.status === "ENABLED" ? "Disable" : "Enable"}</button>
                 <button class="ghost small sync-edit-source-btn" data-source-id="${src.id}">Edit</button>
                 <button class="ghost small sync-edit-mappings-btn" data-source-id="${src.id}" data-source-name="${escHtml(src.sourceName)}">Edit Mappings</button>
@@ -5241,6 +5241,20 @@ function renderSettings() {
                 <strong>Request:</strong> ${escHtml(cfg.method || "GET")} <code>${escHtml(cfg.endpointUrl || "")}</code>
                 ${qp.length ? ` · <strong>Params:</strong> ${qp.map(([k, v]) => `<code>${escHtml(k)}=${escHtml(String(v))}</code>`).join(", ")}` : ""}
                 ${cfg.authHeaderName ? ` · <strong>Auth header:</strong> <code>${escHtml(cfg.authHeaderName)}</code>` : ""}
+                · <strong>Schedule:</strong> ${escHtml(describeSchedule(cfg.schedule))}
+              </p>`;
+            })() : ""}
+            ${src.sourceType === "MYSQL" && src.configJson ? (() => {
+              const cfg = src.configJson || {};
+              const q = cfg.query || {};
+              const queryDesc = q.mode === "SQL"
+                ? `SQL: <code>${escHtml(String(q.sql || "").slice(0, 80))}${(q.sql || "").length > 80 ? "…" : ""}</code>`
+                : `Table: <code>${escHtml(q.table || "")}</code>${q.where ? ` WHERE <code>${escHtml(q.where)}</code>` : ""}`;
+              return `<p class="muted" style="font-size:0.78rem;margin-top:var(--sp-2)">
+                <strong>Connection:</strong> <code>${escHtml(cfg.user || "")}@${escHtml(cfg.host || "")}:${cfg.port ?? 3306}/${escHtml(cfg.database || "")}</code>
+                · <strong>Entity:</strong> ${escHtml(cfg.entityType || "?")}
+                · <strong>TLS:</strong> ${escHtml(cfg.ssl?.mode || "REQUIRED")}
+                · ${queryDesc}
                 · <strong>Schedule:</strong> ${escHtml(describeSchedule(cfg.schedule))}
               </p>`;
             })() : ""}
@@ -5296,6 +5310,86 @@ function renderSettings() {
                     ${renderScheduleBlock("edit-" + src.id, cfg.schedule)}
                   `;
                 })() : ""}
+                ${src.sourceType === "MYSQL" ? (() => {
+                  const cfg = src.configJson || {};
+                  const ssl = cfg.ssl || { mode: "REQUIRED" };
+                  const q = cfg.query || { mode: "TABLE" };
+                  const sched = cfg.schedule || { kind: "MANUAL" };
+                  const curInterval = sched.kind === "MINUTES" ? sched.intervalMinutes : 0;
+                  const intervals = [0, 1, 2, 5, 10, 15, 30];
+                  const intervalLabel = (n) => n === 0 ? "Manual only" : `${n} minute${n === 1 ? "" : "s"}`;
+                  return `
+                    <div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:var(--radius);padding:var(--sp-2) var(--sp-3);margin-bottom:var(--sp-3);font-size:0.82rem;color:#78350f">
+                      <strong>Read-only:</strong> Use a DB user with <code>SELECT</code>-only privilege. ThinkCRM also wraps every query in a <code>READ ONLY</code> transaction.
+                    </div>
+                    <div class="form-row">
+                      <label class="form-label">Entity to pull
+                        <select name="mysqlEntityType" class="form-control">
+                          ${["CUSTOMER","ITEM","PAYMENT_TERM","CUSTOMER_GROUP"].map(et => `<option value="${et}"${cfg.entityType === et ? " selected" : ""}>${et}</option>`).join("")}
+                        </select>
+                      </label>
+                    </div>
+                    <div class="form-row" style="display:grid;grid-template-columns:2fr 1fr;gap:var(--sp-2)">
+                      <label class="form-label">Host <input type="text" name="mysqlHost" value="${escHtml(cfg.host || "")}" required class="form-control"></label>
+                      <label class="form-label">Port <input type="number" name="mysqlPort" value="${cfg.port ?? 3306}" min="1" max="65535" class="form-control"></label>
+                    </div>
+                    <div class="form-row" style="display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-2)">
+                      <label class="form-label">Database <input type="text" name="mysqlDatabase" value="${escHtml(cfg.database || "")}" required class="form-control"></label>
+                      <label class="form-label">User <input type="text" name="mysqlUser" value="${escHtml(cfg.user || "")}" required class="form-control"></label>
+                    </div>
+                    <div class="form-row">
+                      <label class="form-label">Password (leave blank to keep existing) <input type="password" name="mysqlPassword" autocomplete="new-password" placeholder="${cfg.passwordEnc ? "•••• (stored)" : ""}" class="form-control"></label>
+                    </div>
+                    <div class="form-row" style="display:grid;grid-template-columns:1fr;gap:var(--sp-2)">
+                      <label class="form-label">TLS mode
+                        <select name="mysqlSslMode" class="form-control">
+                          ${["REQUIRED","VERIFY_CA","DISABLED"].map(m => `<option value="${m}"${ssl.mode === m ? " selected" : ""}>${m}</option>`).join("")}
+                        </select>
+                      </label>
+                      <label class="form-label">CA certificate PEM (only for VERIFY_CA, leave blank to keep existing)
+                        <textarea name="mysqlCaPem" rows="3" placeholder="${ssl.caPemEnc ? "•••• (stored)" : "-----BEGIN CERTIFICATE-----..."}" class="form-control" style="font-family:var(--font-mono,monospace);font-size:0.78rem"></textarea>
+                      </label>
+                    </div>
+                    <div class="form-row">
+                      <label class="form-label">Query mode
+                        <select name="mysqlQueryMode" class="form-control mysql-query-mode-edit" data-source-id="${src.id}">
+                          <option value="TABLE"${q.mode === "TABLE" ? " selected" : ""}>Table (table name + optional WHERE)</option>
+                          <option value="SQL"${q.mode === "SQL" ? " selected" : ""}>Custom SQL (single SELECT)</option>
+                        </select>
+                      </label>
+                    </div>
+                    <div data-mysql-when-edit="${src.id}-TABLE" style="${q.mode === "TABLE" ? "" : "display:none"}">
+                      <div class="form-row" style="display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-2)">
+                        <label class="form-label">Table <input type="text" name="mysqlTable" value="${escHtml(q.table || "")}" class="form-control"></label>
+                        <label class="form-label">ORDER BY (optional) <input type="text" name="mysqlOrderBy" value="${escHtml(q.orderBy || "")}" class="form-control"></label>
+                      </div>
+                      <div class="form-row">
+                        <label class="form-label">WHERE clause (optional, no leading WHERE) <input type="text" name="mysqlWhere" value="${escHtml(q.where || "")}" class="form-control"></label>
+                      </div>
+                    </div>
+                    <div data-mysql-when-edit="${src.id}-SQL" style="${q.mode === "SQL" ? "" : "display:none"}">
+                      <div class="form-row">
+                        <label class="form-label">SQL (single SELECT only)
+                          <textarea name="mysqlSql" rows="4" class="form-control" style="font-family:var(--font-mono,monospace);font-size:0.82rem">${escHtml(q.sql || "")}</textarea>
+                        </label>
+                        <p class="muted" style="font-size:0.75rem;margin:6px 0 0">Templates supported: <code>{{today}}</code>, <code>{{today-7d:YYYY-MM-DD}}</code>.</p>
+                      </div>
+                    </div>
+                    <div class="form-row" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:var(--sp-2)">
+                      <label class="form-label">Poll every
+                        <select name="mysqlIntervalMinutes" class="form-control">
+                          ${intervals.map(n => `<option value="${n}"${n === curInterval ? " selected" : ""}>${intervalLabel(n)}</option>`).join("")}
+                        </select>
+                      </label>
+                      <label class="form-label">Row limit
+                        <input type="number" name="mysqlRowLimit" value="${cfg.rowLimit ?? 50000}" min="1" max="500000" class="form-control">
+                      </label>
+                      <label class="form-label">Query timeout (sec)
+                        <input type="number" name="mysqlQueryTimeoutSec" value="${cfg.queryTimeoutMs ? Math.round(cfg.queryTimeoutMs / 1000) : 60}" min="1" max="300" class="form-control">
+                      </label>
+                    </div>
+                  `;
+                })() : ""}
                 <div class="form-actions">
                   <button type="submit" class="btn-primary small">Save Changes</button>
                   <button type="button" class="ghost small sync-source-edit-cancel" data-source-id="${src.id}">Cancel</button>
@@ -5329,6 +5423,7 @@ function renderSettings() {
                 <select name="sourceType" id="sync-source-type-select" class="form-control">
                   <option value="WEBHOOK">Webhook (ERP pushes data)</option>
                   <option value="REST">REST API (CRM pulls data)</option>
+                  <option value="MYSQL">MySQL (direct DB pull, read-only)</option>
                   <option value="EXCEL">File Upload (CSV/Excel)</option>
                 </select>
               </label>
@@ -5373,6 +5468,88 @@ function renderSettings() {
               </div>
               ${renderScheduleBlock("create", null)}
               <p class="muted" style="font-size:0.78rem;margin:0">Request sent: <code>&lt;method&gt; &lt;endpoint&gt;?&lt;params&gt;</code> with <code>Accept: application/json</code> + auth header. Scheduled pulls honour the schedule above (tenant timezone). <strong>Pull now</strong> always runs regardless.</p>
+            </div>
+            <div id="sync-source-mysql-fields" style="display:none">
+              <div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:var(--radius);padding:var(--sp-2) var(--sp-3);margin-bottom:var(--sp-3);font-size:0.82rem;color:#78350f">
+                <strong>Read-only:</strong> ThinkCRM never writes to your MySQL. Use a DB user with <code>SELECT</code>-only privilege as the strongest guarantee. Every query also runs inside a <code>READ ONLY</code> transaction.
+              </div>
+              <div class="form-row">
+                <label class="form-label">Entity to pull
+                  <select name="mysqlEntityType" class="form-control">
+                    <option value="CUSTOMER">Customers</option>
+                    <option value="ITEM">Items</option>
+                    <option value="PAYMENT_TERM">Payment Terms</option>
+                    <option value="CUSTOMER_GROUP">Customer Groups</option>
+                  </select>
+                </label>
+              </div>
+              <div class="form-row" style="display:grid;grid-template-columns:2fr 1fr;gap:var(--sp-2)">
+                <label class="form-label">Host (public IP or hostname) <input type="text" name="mysqlHost" placeholder="db.client.example.com" class="form-control"></label>
+                <label class="form-label">Port <input type="number" name="mysqlPort" value="3306" min="1" max="65535" class="form-control"></label>
+              </div>
+              <div class="form-row" style="display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-2)">
+                <label class="form-label">Database <input type="text" name="mysqlDatabase" placeholder="erp" class="form-control"></label>
+                <label class="form-label">User (SELECT-only) <input type="text" name="mysqlUser" placeholder="thinkcrm_reader" class="form-control"></label>
+              </div>
+              <div class="form-row">
+                <label class="form-label">Password (stored encrypted) <input type="password" name="mysqlPassword" autocomplete="new-password" class="form-control"></label>
+              </div>
+              <div class="form-row" style="display:grid;grid-template-columns:1fr;gap:var(--sp-2)">
+                <label class="form-label">TLS mode
+                  <select name="mysqlSslMode" class="form-control">
+                    <option value="REQUIRED" selected>REQUIRED (encrypted, no CA verify)</option>
+                    <option value="VERIFY_CA">VERIFY_CA (encrypted + CA pinned)</option>
+                    <option value="DISABLED">DISABLED (plaintext — not recommended)</option>
+                  </select>
+                </label>
+                <label class="form-label">CA certificate PEM (only for VERIFY_CA, optional)
+                  <textarea name="mysqlCaPem" rows="3" placeholder="-----BEGIN CERTIFICATE-----&#10;…&#10;-----END CERTIFICATE-----" class="form-control" style="font-family:var(--font-mono,monospace);font-size:0.78rem"></textarea>
+                </label>
+              </div>
+              <div class="form-row">
+                <label class="form-label">Query mode
+                  <select name="mysqlQueryMode" id="sync-mysql-query-mode" class="form-control">
+                    <option value="TABLE" selected>Table (table name + optional WHERE)</option>
+                    <option value="SQL">Custom SQL (single SELECT)</option>
+                  </select>
+                </label>
+              </div>
+              <div data-mysql-when="TABLE">
+                <div class="form-row" style="display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-2)">
+                  <label class="form-label">Table <input type="text" name="mysqlTable" placeholder="erp_customer or schema.table" class="form-control"></label>
+                  <label class="form-label">ORDER BY (optional) <input type="text" name="mysqlOrderBy" placeholder="updated_at DESC" class="form-control"></label>
+                </div>
+                <div class="form-row">
+                  <label class="form-label">WHERE clause (optional, no leading WHERE) <input type="text" name="mysqlWhere" placeholder="updated_at &gt; '{{today-1d:YYYY-MM-DD}}'" class="form-control"></label>
+                </div>
+              </div>
+              <div data-mysql-when="SQL" style="display:none">
+                <div class="form-row">
+                  <label class="form-label">SQL (single SELECT only)
+                    <textarea name="mysqlSql" rows="4" placeholder="SELECT id, name, email, updated_at FROM erp_customer WHERE updated_at > '{{today-7d:YYYY-MM-DD}}' ORDER BY updated_at DESC" class="form-control" style="font-family:var(--font-mono,monospace);font-size:0.82rem"></textarea>
+                  </label>
+                  <p class="muted" style="font-size:0.75rem;margin:6px 0 0">Must be a single <code>SELECT</code> (or <code>WITH … SELECT</code>). No semicolons, no DML/DDL. Templates supported: <code>{{today}}</code>, <code>{{today-7d:YYYY-MM-DD}}</code>.</p>
+                </div>
+              </div>
+              <div class="form-row" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:var(--sp-2)">
+                <label class="form-label">Poll every
+                  <select name="mysqlIntervalMinutes" class="form-control">
+                    <option value="0">Manual only</option>
+                    <option value="1" selected>1 minute</option>
+                    <option value="2">2 minutes</option>
+                    <option value="5">5 minutes</option>
+                    <option value="10">10 minutes</option>
+                    <option value="15">15 minutes</option>
+                    <option value="30">30 minutes</option>
+                  </select>
+                </label>
+                <label class="form-label">Row limit
+                  <input type="number" name="mysqlRowLimit" value="50000" min="1" max="500000" class="form-control">
+                </label>
+                <label class="form-label">Query timeout (sec)
+                  <input type="number" name="mysqlQueryTimeoutSec" value="60" min="1" max="300" class="form-control">
+                </label>
+              </div>
             </div>
             <div class="form-actions">
               <button type="submit" class="btn-primary small">Create Source</button>
@@ -6464,11 +6641,62 @@ function renderSettings() {
   function describeSchedule(s) {
     if (!s || s.kind === "MANUAL") return "Manual only";
     const h = (n) => String(n).padStart(2,"0") + ":00";
+    if (s.kind === "MINUTES") return `Every ${s.intervalMinutes} min`;
     if (s.kind === "INTERVAL") return `Every ${s.intervalHours}h from ${h(s.anchorHourLocal)}`;
     if (s.kind === "DAILY") return `Daily at ${(s.hoursLocal||[]).map(h).join(", ")}`;
     if (s.kind === "WEEKLY") return `${DAY_OF_WEEK[s.dayOfWeek] || "?"} at ${h(s.hourLocal)}`;
     if (s.kind === "MONTHLY") return `Day ${s.dayOfMonth} at ${h(s.hourLocal)}`;
     return "Manual only";
+  }
+
+  function buildMysqlConfigFromForm(fd, opts) {
+    const isEdit = !!opts?.isEdit;
+    const host = String(fd.get("mysqlHost") || "").trim();
+    const database = String(fd.get("mysqlDatabase") || "").trim();
+    const user = String(fd.get("mysqlUser") || "").trim();
+    const password = String(fd.get("mysqlPassword") || "");
+    const portN = parseInt(String(fd.get("mysqlPort") || "3306"), 10);
+    const queryMode = String(fd.get("mysqlQueryMode") || "TABLE");
+    const sslMode = String(fd.get("mysqlSslMode") || "REQUIRED");
+    const caPem = String(fd.get("mysqlCaPem") || "").trim();
+    const intervalN = parseInt(String(fd.get("mysqlIntervalMinutes") || "0"), 10) || 0;
+    const rowLimit = parseInt(String(fd.get("mysqlRowLimit") || "50000"), 10) || 50000;
+    const queryTimeoutSec = parseInt(String(fd.get("mysqlQueryTimeoutSec") || "60"), 10) || 60;
+    if (!host) return { ok: false, error: "MySQL host is required." };
+    if (!Number.isFinite(portN) || portN < 1 || portN > 65535) return { ok: false, error: "MySQL port must be between 1 and 65535." };
+    if (!database) return { ok: false, error: "MySQL database is required." };
+    if (!user) return { ok: false, error: "MySQL user is required." };
+    if (!isEdit && !password) return { ok: false, error: "MySQL password is required." };
+    let query;
+    if (queryMode === "TABLE") {
+      const table = String(fd.get("mysqlTable") || "").trim();
+      const where = String(fd.get("mysqlWhere") || "").trim();
+      const orderBy = String(fd.get("mysqlOrderBy") || "").trim();
+      if (!table) return { ok: false, error: "MySQL table name is required." };
+      query = { mode: "TABLE", table };
+      if (where) query.where = where;
+      if (orderBy) query.orderBy = orderBy;
+    } else {
+      const sql = String(fd.get("mysqlSql") || "").trim();
+      if (!sql) return { ok: false, error: "MySQL SQL is required." };
+      query = { mode: "SQL", sql };
+    }
+    const schedule = intervalN > 0 ? { kind: "MINUTES", intervalMinutes: intervalN } : { kind: "MANUAL" };
+    const config = {
+      entityType: String(fd.get("mysqlEntityType") || "CUSTOMER"),
+      host,
+      port: portN,
+      database,
+      user,
+      ssl: { mode: sslMode },
+      queryTimeoutMs: Math.min(queryTimeoutSec, 300) * 1000,
+      rowLimit: Math.min(rowLimit, 500000),
+      schedule,
+      query
+    };
+    if (password) config.password = password; // backend encrypts → passwordEnc
+    if (sslMode === "VERIFY_CA" && caPem) config.ssl.caPem = caPem; // backend encrypts → caPemEnc
+    return { ok: true, config };
   }
 
   function readQueryParamRows(container) {
@@ -6512,8 +6740,28 @@ function renderSettings() {
     qs("#sync-source-form-wrap").style.display = "none";
   });
   qs("#sync-source-type-select")?.addEventListener("change", (e) => {
+    const v = e.currentTarget.value;
     const rest = qs("#sync-source-rest-fields");
-    if (rest) rest.style.display = e.currentTarget.value === "REST" ? "block" : "none";
+    const mysql = qs("#sync-source-mysql-fields");
+    if (rest) rest.style.display = v === "REST" ? "block" : "none";
+    if (mysql) mysql.style.display = v === "MYSQL" ? "block" : "none";
+  });
+  qs("#sync-mysql-query-mode")?.addEventListener("change", (e) => {
+    const mode = e.currentTarget.value;
+    qs("#sync-source-mysql-fields")?.querySelectorAll("[data-mysql-when]").forEach(el => {
+      el.style.display = el.dataset.mysqlWhen === mode ? "" : "none";
+    });
+  });
+  views.settings.querySelectorAll(".mysql-query-mode-edit").forEach(sel => {
+    sel.addEventListener("change", (e) => {
+      const sid = e.currentTarget.dataset.sourceId;
+      const mode = e.currentTarget.value;
+      const form = e.currentTarget.closest("form");
+      form?.querySelectorAll("[data-mysql-when-edit]").forEach(el => {
+        const [id, m] = el.dataset.mysqlWhenEdit.split("-");
+        if (id === sid) el.style.display = m === mode ? "" : "none";
+      });
+    });
   });
   qs("#sync-source-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -6535,6 +6783,10 @@ function renderSettings() {
       const qp = readQueryParamRows(e.currentTarget.querySelector('[data-qp-rows="create"]'));
       if (Object.keys(qp).length) configJson.queryParams = qp;
       configJson.schedule = readScheduleFromBlock(e.currentTarget.querySelector('.sched-block[data-sched-scope="create"]'));
+    } else if (sourceType === "MYSQL") {
+      const mysql = buildMysqlConfigFromForm(fd, { isEdit: false });
+      if (!mysql.ok) { setStatus(mysql.error); return; }
+      Object.assign(configJson, mysql.config);
     }
     try {
       await api("/integrations/master-data/sources", {
@@ -6654,6 +6906,10 @@ function renderSettings() {
         configJson.queryParams = readQueryParamRows(form.querySelector(`[data-qp-rows="${form.dataset.sourceId}"]`));
         configJson.schedule = readScheduleFromBlock(form.querySelector(`.sched-block[data-sched-scope="edit-${form.dataset.sourceId}"]`));
         body.configJson = configJson;
+      } else if (sourceType === "MYSQL") {
+        const mysql = buildMysqlConfigFromForm(fd, { isEdit: true });
+        if (!mysql.ok) { setStatus(mysql.error); return; }
+        body.configJson = mysql.config;
       }
       try {
         await api(`/integrations/master-data/sources/${form.dataset.sourceId}`, {
@@ -6679,7 +6935,9 @@ function renderSettings() {
         const res = await api(`/integrations/master-data/sources/${sourceId}/test`, { method: "POST" });
         const parts = [`${sourceName}: ${res.message}`];
         if (res.detail?.url)                     parts.push(`URL: ${res.detail.url}`);
+        if (res.detail?.sentSql)                 parts.push(`SQL: ${String(res.detail.sentSql).slice(0, 80)}${String(res.detail.sentSql).length > 80 ? "…" : ""}`);
         if (res.detail?.sentHeaderNames?.length) parts.push(`Headers: ${res.detail.sentHeaderNames.join(", ")}`);
+        if (res.detail?.sampleRecordCount != null) parts.push(`Sample rows: ${res.detail.sampleRecordCount}`);
         if (res.detail?.firstRecordKeys?.length) parts.push(`Fields: ${res.detail.firstRecordKeys.slice(0, 8).join(", ")}`);
         const summary = parts.join(" · ");
         setStatus(summary);
@@ -6687,7 +6945,7 @@ function renderSettings() {
           resultBox.hidden = false;
           summaryEl.textContent = res.ok ? `✓ ${res.message}` : `✗ ${res.message}`;
           summaryEl.style.color = res.ok ? "var(--accent-bright,#16a34a)" : "var(--danger,#dc2626)";
-          bodyEl.value = res.responseBody ?? "(no response body)";
+          bodyEl.value = res.responseBody ?? (res.detail?.firstRecord ? JSON.stringify(res.detail.firstRecord, null, 2) : "(no response body)");
         }
       } catch (err) {
         setStatus(err.message || "Connection test failed.");

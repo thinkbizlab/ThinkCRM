@@ -23,10 +23,13 @@ const ALLOWED_METHODS: ReadonlySet<HttpMethod> = new Set(["GET", "POST", "PUT", 
 
 export type SyncSchedule =
   | { kind: "MANUAL" }
+  | { kind: "MINUTES"; intervalMinutes: number }
   | { kind: "INTERVAL"; intervalHours: number; anchorHourLocal: number }
   | { kind: "DAILY"; hoursLocal: number[] }
   | { kind: "WEEKLY"; dayOfWeek: number; hourLocal: number }
   | { kind: "MONTHLY"; dayOfMonth: number; hourLocal: number };
+
+const ALLOWED_SCHEDULE_MINUTES = [1, 2, 5, 10, 15, 30] as const;
 
 type RestSourceConfig = {
   endpointUrl: string;
@@ -39,7 +42,7 @@ type RestSourceConfig = {
   schedule: SyncSchedule;
 };
 
-function parseSchedule(raw: unknown): SyncSchedule {
+export function parseSchedule(raw: unknown): SyncSchedule {
   if (!raw || typeof raw !== "object") return { kind: "MANUAL" };
   const o = raw as Record<string, unknown>;
   const kind = typeof o.kind === "string" ? o.kind : "MANUAL";
@@ -48,6 +51,11 @@ function parseSchedule(raw: unknown): SyncSchedule {
     return Number.isFinite(n) && n >= 0 && n <= 23 ? n : 0;
   };
   switch (kind) {
+    case "MINUTES": {
+      const raw = typeof o.intervalMinutes === "number" ? o.intervalMinutes : parseInt(String(o.intervalMinutes), 10);
+      const intervalMinutes = (ALLOWED_SCHEDULE_MINUTES as readonly number[]).includes(raw) ? raw : 5;
+      return { kind: "MINUTES", intervalMinutes };
+    }
     case "INTERVAL": {
       const raw = typeof o.intervalHours === "number" ? o.intervalHours : parseInt(String(o.intervalHours), 10);
       const allowed = [1, 2, 3, 4, 6, 8, 12];
@@ -97,6 +105,11 @@ export function shouldRunNow(schedule: SyncSchedule, now: Date, timezone: string
   if (schedule.kind === "MANUAL") return false;
   const { hour, dow, dom } = localParts(now, timezone);
   switch (schedule.kind) {
+    case "MINUTES":
+      // Sub-hourly schedule. The hourly REST cron always rejects this — only the
+      // per-minute MySQL cron asks `shouldRunNow` for MINUTES sources, and that
+      // path uses `lastSyncAt` throttling (not this function) for the actual gate.
+      return true;
     case "INTERVAL": {
       const offset = ((hour - schedule.anchorHourLocal) % schedule.intervalHours + schedule.intervalHours) % schedule.intervalHours;
       return offset === 0;

@@ -976,6 +976,7 @@ enum SourceType {
   EXCEL
   REST
   WEBHOOK
+  MYSQL
 }
 
 enum SourceStatus {
