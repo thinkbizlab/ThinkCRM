@@ -11961,35 +11961,101 @@ qs("#notif-btn")?.addEventListener("click", () => {
   isOpen ? closeAllPanels() : openPanel(notifPanel);
 });
 
+// Settings flyin: rendered just-in-time so role changes and the active-page
+// highlight stay in sync. The lists here mirror renderSettings()'s sidebar
+// (personalNavItems + allNavItems); keep them in lockstep.
+const SPI_HUE = {
+  user: 25, bell: 75, building: 25, palette: 145, users: 278,
+  lockKey: 85, target: 200, plug: 280, globe: 220, refresh: 175,
+  clipboard: 320, clock: 260, activity: 30
+};
+const SPI_DESC = {
+  "my-profile":     "Personal info and password",
+  notifications:    "Channels and per-event preferences",
+  company:          "Tenant information and details",
+  branding:         "Logo and color customization",
+  "team-structure": "Manage teams and reporting structure",
+  roles:            "Configure role chain and access",
+  "kpi-targets":    "Per-person, per-month sales targets",
+  integrations:     "AI, communication and cloud APIs",
+  "custom-domain":  "Use your own domain for the app",
+  "data-sync":      "ERP / data-source connections",
+  "custom-fields":  "Add fields to customers, items, etc.",
+  "cron-jobs":      "Background schedule and runs",
+  logs:             "Integration and system logs"
+};
+function spiItemHtml({ page, label, ic, view, active }) {
+  const hue = SPI_HUE[ic] ?? 200;
+  return `
+    <button class="spi nav-btn ${active ? "active" : ""}" data-view="${view || "settings"}" data-settings-page="${page}" data-panel-close>
+      <div class="spi-icon" style="background:oklch(93% 0.04 ${hue});color:oklch(50% 0.18 ${hue})">${icon(ic, 16)}</div>
+      <div class="spi-text"><p class="spi-title">${escHtml(label)}</p><p class="spi-desc">${escHtml(SPI_DESC[page] || "")}</p></div>
+    </button>`;
+}
+function renderSettingsFlyin() {
+  const body = qs("#settings-panel-body");
+  if (!body) return;
+  const role = state.user?.role || "REP";
+  const activePage = state.settingsPage || "my-profile";
+  const personal = [
+    { page: "my-profile",    label: "My Profile",    ic: "user" },
+    { page: "notifications", label: "Notifications", ic: "bell" }
+  ];
+  const all = [
+    { page: "company",        label: "Company Settings",     ic: "building",  roles: ["ADMIN"] },
+    { page: "branding",       label: "Branding & Theme",     ic: "palette",   roles: ["ADMIN"] },
+    { page: "team-structure", label: "Team Structure",        ic: "users",     roles: ["ADMIN", "DIRECTOR", "MANAGER", "SUPERVISOR", "REP"] },
+    { page: "roles",          label: "Roles & Permissions",  ic: "lockKey",   roles: ["ADMIN"] },
+    { page: "kpi-targets",    label: "KPI Targets",           ic: "target",    roles: ["ADMIN", "DIRECTOR", "MANAGER", "SUPERVISOR", "REP"] },
+    { page: "integrations",   label: "Integrations",         ic: "plug",      roles: ["ADMIN"] },
+    { page: "custom-domain",  label: "Custom Domain",         ic: "globe",     roles: ["ADMIN"] },
+    { page: "data-sync",      label: "Data Sync",             ic: "refresh",   roles: ["ADMIN"] },
+    { page: "custom-fields",  label: "Custom Fields",        ic: "clipboard", roles: ["ADMIN"] },
+    { page: "cron-jobs",      label: "Scheduled Jobs",        ic: "clock",     roles: ["ADMIN"] },
+    { page: "logs",           label: "Logs",                  ic: "activity",  roles: ["ADMIN"], view: "integrations" }
+  ].filter(i => i.roles.includes(role));
+  body.innerHTML = `
+    <p class="sp-section-label">PERSONAL</p>
+    ${personal.map(i => spiItemHtml({ ...i, active: !i.view && i.page === activePage })).join("")}
+    ${all.length ? `<p class="sp-section-label" style="margin-top:var(--sp-3)">ORGANIZATION</p>` : ""}
+    ${all.map(i => spiItemHtml({ ...i, active: !i.view && i.page === activePage })).join("")}
+  `;
+}
+
 // ── Gear (now inside user-dropdown) → opens fly-in settings panel ───────────
 qs("#settings-gear-btn")?.addEventListener("click", (e) => {
   e.stopPropagation();
   closeUserDropdown();
   const isOpen = settingsPanel && !settingsPanel.hidden;
-  isOpen ? closeAllPanels() : openPanel(settingsPanel);
+  if (isOpen) {
+    closeAllPanels();
+  } else {
+    renderSettingsFlyin();
+    openPanel(settingsPanel);
+  }
 });
 
 qs("#notif-close")?.addEventListener("click", closeAllPanels);
 qs("#settings-panel-close")?.addEventListener("click", closeAllPanels);
 panelBackdrop?.addEventListener("click", closeAllPanels);
 
-// Settings panel nav items — close panel then switch view
-document.querySelectorAll(".spi[data-view]").forEach((item) => {
-  item.addEventListener("click", async () => {
-    const target = item.dataset.view;
-    const settingsPage = item.dataset.settingsPage;
-    closeAllPanels();
-    if (!target) return;
-    if (target === "settings" && settingsPage) {
-      navigateToSettingsPage(settingsPage);
-    }
-    switchView(target);
-    try {
-      if (target === "settings") await loadSettings(settingsPage || state.settingsPage);
-    } catch (error) {
-      setStatus(error.message, true);
-    }
-  });
+// Settings panel nav items — delegated, since the body is rebuilt on open.
+settingsPanel?.addEventListener("click", async (ev) => {
+  const item = ev.target instanceof Element ? ev.target.closest(".spi[data-view]") : null;
+  if (!item || !settingsPanel.contains(item)) return;
+  const target = item.dataset.view;
+  const settingsPage = item.dataset.settingsPage;
+  closeAllPanels();
+  if (!target) return;
+  if (target === "settings" && settingsPage) {
+    navigateToSettingsPage(settingsPage);
+  }
+  switchView(target);
+  try {
+    if (target === "settings") await loadSettings(settingsPage || state.settingsPage);
+  } catch (error) {
+    setStatus(error.message, true);
+  }
 });
 
 window.addEventListener("popstate", async () => {
