@@ -22,6 +22,20 @@ const connectorAppShim = {
   }
 } as Parameters<typeof validateCustomFields>[0];
 
+// CSV/MySQL/Excel often deliver booleans as 0/1 or "true"/"false". Coerce
+// before validation so imports don't fail on benign type drift.
+const flexibleBoolean = z.preprocess((v) => {
+  if (typeof v === "boolean") return v;
+  if (v === 1) return true;
+  if (v === 0) return false;
+  if (typeof v === "string") {
+    const s = v.trim().toLowerCase();
+    if (["true", "1", "yes", "y"].includes(s)) return true;
+    if (["false", "0", "no", "n"].includes(s)) return false;
+  }
+  return v;
+}, z.boolean());
+
 const customerMappedSchema = z.object({
   customerCode: z.string().min(2).max(40),
   name: z.string().min(2).max(200),
@@ -36,7 +50,7 @@ const customerMappedSchema = z.object({
   siteLat: z.number().min(-90).max(90).optional(),
   siteLng: z.number().min(-180).max(180).optional(),
   externalRef: z.string().trim().max(100).optional(),
-  disabled: z.boolean().optional(),
+  disabled: flexibleBoolean.optional(),
   customFields: z.record(z.string(), z.unknown()).optional()
 });
 
@@ -45,7 +59,7 @@ const itemMappedSchema = z.object({
   name: z.string().min(1),
   unitPrice: z.number().nonnegative(),
   externalRef: z.string().trim().max(100).optional(),
-  isActive: z.boolean().optional(),
+  isActive: flexibleBoolean.optional(),
   customFields: z.record(z.string(), z.unknown()).optional()
 });
 
@@ -219,6 +233,8 @@ function applyStep(value: unknown, step: TransformStep, depth = 0): unknown {
     }
     case "boolean": {
       if (typeof value === "boolean") return value;
+      if (value === 1) return true;
+      if (value === 0) return false;
       if (typeof value === "string") {
         const s = value.trim().toLowerCase();
         if (["true", "1", "yes", "y"].includes(s)) return true;
@@ -754,7 +770,12 @@ export async function executeConnectorRun(input: ConnectorRunInput): Promise<Con
           makeError(
             rowRef,
             "VALIDATION_FAILED",
-            error.issues.map((issue) => issue.message).join(", "),
+            error.issues
+              .map((issue) => {
+                const path = issue.path.length > 0 ? issue.path.join(".") : "(root)";
+                return `${path}: ${issue.message}`;
+              })
+              .join(", "),
             "validation"
           )
         );
