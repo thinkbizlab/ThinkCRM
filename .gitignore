@@ -16,3 +16,5 @@ uploads/
 backups/
 test-results/
 .DS_Store
+web/**/*.br
+web/**/*.gz

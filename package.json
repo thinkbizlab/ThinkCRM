@@ -5,7 +5,7 @@
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "prisma generate && (prisma migrate deploy || (sleep 8 && prisma migrate deploy))",
+    "build": "prisma generate && node scripts/compress-web-assets.mjs && (prisma migrate deploy || (sleep 8 && prisma migrate deploy))",
     "start": "tsx src/server.ts",
     "test": "vitest run",
     "test:watch": "vitest",

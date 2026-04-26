@@ -13,12 +13,73 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { brotliCompress, gzip } from "node:zlib";
+import { promisify } from "node:util";
 import { Sentry } from "./lib/sentry.js";
 
 // Bot Framework JWKS — cached once, jose handles key rotation internally
 const BOT_FRAMEWORK_JWKS = createRemoteJWKSet(
   new URL("https://login.botframework.com/v1/.well-known/keys")
 );
+const brotliCompressAsync = promisify(brotliCompress);
+const gzipAsync = promisify(gzip);
+
+const COMPRESSIBLE_RESPONSE_TYPES = [
+  "application/javascript",
+  "application/json",
+  "application/manifest+json",
+  "application/xml",
+  "image/svg+xml",
+  "text/"
+];
+const STATIC_CACHE_SECONDS = 31_536_000;
+const SHORT_CACHE_SECONDS = 3_600;
+
+function appendVary(headerValue: unknown, value: string): string {
+  const current = Array.isArray(headerValue)
+    ? headerValue.join(", ")
+    : typeof headerValue === "string"
+      ? headerValue
+      : "";
+  const parts = current.split(",").map((part) => part.trim()).filter(Boolean);
+  if (!parts.some((part) => part.toLowerCase() === value.toLowerCase())) {
+    parts.push(value);
+  }
+  return parts.join(", ");
+}
+
+function acceptsCompression(acceptEncoding: string | undefined): "br" | "gzip" | null {
+  if (!acceptEncoding) return null;
+  const encodings = acceptEncoding.toLowerCase();
+  if (encodings.includes("br")) return "br";
+  if (encodings.includes("gzip")) return "gzip";
+  return null;
+}
+
+function isCompressibleContentType(contentType: unknown): boolean {
+  const value = Array.isArray(contentType) ? contentType[0] : contentType;
+  if (typeof value !== "string") return false;
+  return COMPRESSIBLE_RESPONSE_TYPES.some((type) => value.includes(type));
+}
+
+function staticCacheControlForUrl(rawUrl: string | undefined): string | null {
+  if (!rawUrl) return null;
+  const url = new URL(rawUrl, "http://localhost");
+  const pathname = url.pathname;
+  if (pathname.startsWith("/api/") || pathname.startsWith("/uploads/")) return null;
+  if (pathname === "/" || pathname.endsWith(".html")) {
+    return "public, max-age=0, must-revalidate";
+  }
+
+  const hasVersion = url.searchParams.has("v");
+  const isModuleAsset = pathname.startsWith("/modules/");
+  const isStaticAsset = /\.(?:css|js|svg|webmanifest|json|ico|png|jpe?g|webp|gif|woff2?)$/i.test(pathname);
+  if (!isStaticAsset) return null;
+  if (hasVersion || isModuleAsset || pathname === "/xlsx.min.js") {
+    return `public, max-age=${STATIC_CACHE_SECONDS}, immutable`;
+  }
+  return `public, max-age=${SHORT_CACHE_SECONDS}`;
+}
 import { healthRoutes } from "./modules/health/routes.js";
 import { tenantRoutes } from "./modules/tenants/routes.js";
 import { requestContextPlugin } from "./plugins/request-context.js";
@@ -61,6 +122,41 @@ export async function buildApp() {
   if (config.SENTRY_DSN) {
     Sentry.setupFastifyErrorHandler(app);
   }
+
+  app.addHook("onSend", async (request, reply, payload) => {
+    const cacheControl = staticCacheControlForUrl(request.raw.url);
+    if (cacheControl) {
+      reply.header("cache-control", cacheControl);
+    }
+
+    if (reply.getHeader("content-encoding")) {
+      reply.header("vary", appendVary(reply.getHeader("vary"), "Accept-Encoding"));
+      return payload;
+    }
+
+    if (
+      request.method === "HEAD" ||
+      (!Buffer.isBuffer(payload) && typeof payload !== "string") ||
+      !isCompressibleContentType(reply.getHeader("content-type"))
+    ) {
+      return payload;
+    }
+
+    const body = Buffer.isBuffer(payload) ? payload : Buffer.from(payload);
+    if (body.byteLength < 1024) return payload;
+
+    const encoding = acceptsCompression(request.headers["accept-encoding"]);
+    if (!encoding) return payload;
+
+    const compressed = encoding === "br"
+      ? await brotliCompressAsync(body)
+      : await gzipAsync(body);
+
+    reply.header("content-encoding", encoding);
+    reply.header("vary", appendVary(reply.getHeader("vary"), "Accept-Encoding"));
+    reply.removeHeader("content-length");
+    return compressed;
+  });
 
   // C10: Security headers. Inline scripts have been externalised (web/boot.js), so
   // scriptSrc no longer needs 'unsafe-inline'. Google Maps loads from maps.googleapis.com
@@ -180,7 +276,8 @@ export async function buildApp() {
   }
   await app.register(fastifyStatic, {
     root: join(__dirname, "..", "web"),
-    prefix: "/"
+    prefix: "/",
+    preCompressed: true
   });
 
   // M4: Only create and serve uploads dir when R2 is not configured.
