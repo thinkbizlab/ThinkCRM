@@ -11795,12 +11795,23 @@ function toggleMobileNav(e) {
   if (hamburgerBtn) hamburgerBtn.setAttribute("aria-expanded", open ? "true" : "false");
 }
 if (hamburgerBtn) {
-  // Use both touchend and click — iOS sometimes drops click on transformed/fixed parents.
-  hamburgerBtn.addEventListener("click", toggleMobileNav);
+  // iOS Safari/Chrome sometimes still fires a synthetic click after touchend
+  // even when preventDefault() ran. Without a guard the menu opens then
+  // immediately closes, looking like the tap did nothing. Lock for 400 ms.
+  let lastToggleAt = 0;
+  const guardedToggle = (e) => {
+    const now = Date.now();
+    if (now - lastToggleAt < 400) {
+      if (e) e.preventDefault();
+      return;
+    }
+    lastToggleAt = now;
+    toggleMobileNav(e);
+  };
+  hamburgerBtn.addEventListener("click", guardedToggle);
   hamburgerBtn.addEventListener("touchend", (e) => {
-    // Prevent the synthetic click that follows touchend from double-toggling.
     e.preventDefault();
-    toggleMobileNav();
+    guardedToggle(e);
   }, { passive: false });
   // Tap outside the nav closes it
   document.addEventListener("click", (e) => {
