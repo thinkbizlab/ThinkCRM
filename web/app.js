@@ -5466,6 +5466,7 @@ function renderSettings() {
                 <button class="ghost small sync-toggle-source-btn" data-source-id="${src.id}" data-current-status="${src.status}">${src.status === "ENABLED" ? "Disable" : "Enable"}</button>
                 <button class="ghost small sync-edit-source-btn" data-source-id="${src.id}">Edit</button>
                 <button class="ghost small sync-edit-mappings-btn" data-source-id="${src.id}" data-source-name="${escHtml(src.sourceName)}">Edit Mappings</button>
+                <button class="ghost small sync-delete-source-btn" data-source-id="${src.id}" data-source-name="${escHtml(src.sourceName)}" style="color:var(--danger,#b91c1c)">Delete</button>
               </div>
             </div>
             ${src.mappings && src.mappings.length > 0 ? `
@@ -7122,6 +7123,25 @@ function renderSettings() {
         await loadSyncData();
         renderSettings();
       } catch (err) { setStatus(err.message); }
+    });
+  });
+  views.settings.querySelectorAll(".sync-delete-source-btn").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const sourceId = btn.dataset.sourceId;
+      const sourceName = btn.dataset.sourceName || "this source";
+      const ok = await openConfirmPopup({
+        title: "Delete data source?",
+        message: `Delete <strong>${escHtml(sourceName)}</strong>? This removes its field mappings and sync-job history. Imported customers and items stay; future pulls from this source stop.`,
+        confirmLabel: "Delete",
+        danger: true
+      });
+      if (!ok) return;
+      try {
+        await api(`/integrations/master-data/sources/${sourceId}`, { method: "DELETE" });
+        await loadSyncData();
+        renderSettings();
+        setStatus("Data source deleted.");
+      } catch (err) { setStatus(err.message || "Failed to delete source.", true); }
     });
   });
   views.settings.querySelectorAll(".sync-edit-source-btn").forEach(btn => {

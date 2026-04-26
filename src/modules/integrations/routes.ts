@@ -173,6 +173,21 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
     });
   });
 
+  app.delete("/integrations/master-data/sources/:id", async (request, reply) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+    const params = request.params as { id: string };
+    const source = await prisma.integrationSource.findFirst({
+      where: { id: params.id, tenantId }
+    });
+    if (!source) throw app.httpErrors.notFound("Source not found.");
+    // Schema cascades mappings + jobs + errors. SyncExternalRef rows reference
+    // by externalSource string (not FK), so they survive — past correlation
+    // history stays intact.
+    await prisma.integrationSource.delete({ where: { id: params.id } });
+    reply.code(204).send();
+  });
+
   /**
    * Manual trigger for a source pull (REST or MYSQL). Admin-only.
    * The scheduled cron runs the same logic for all enabled sources.
