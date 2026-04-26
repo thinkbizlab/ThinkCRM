@@ -7080,33 +7080,101 @@ function renderSettings() {
         }
         box.scrollIntoView({ behavior: "smooth", block: "nearest" });
       };
-      try {
-        const result = await api(`/integrations/master-data/sources/${sourceId}/pull`, { method: "POST" });
-        const ok = result.status !== "failed" && (result.failure_count || 0) === 0;
-        const partial = (result.failure_count || 0) > 0 && (result.success_count || 0) > 0;
+      // Synchronous result renderer (REST: full summary + errors).
+      const renderSummary = (summary, errors) => {
+        const ok = summary.status !== "failed" && (summary.failure_count || 0) === 0;
+        const partial = (summary.failure_count || 0) > 0 && (summary.success_count || 0) > 0;
         const color = ok ? "var(--accent-bright,#16a34a)" : (partial ? "#d97706" : "var(--danger,#dc2626)");
         const bg = ok ? "rgba(22,163,74,0.08)" : (partial ? "rgba(217,119,6,0.08)" : "rgba(220,38,38,0.08)");
         const title = ok ? `Pull completed — ${sourceName}` : (partial ? `Pull completed with errors — ${sourceName}` : `Pull failed — ${sourceName}`);
         const statsHtml = [
-          `<span><strong>${result.processed_count ?? 0}</strong> processed</span>`,
-          `<span style="color:var(--accent-bright,#16a34a)"><strong>${result.success_count ?? 0}</strong> succeeded</span>`,
-          `<span style="color:var(--danger,#dc2626)"><strong>${result.failure_count ?? 0}</strong> failed</span>`,
-          result.duration_ms != null ? `<span class="muted">${(result.duration_ms / 1000).toFixed(1)}s</span>` : "",
-          result.jobId ? `<span class="muted">Job ${String(result.jobId).slice(0, 8)}</span>` : ""
+          `<span><strong>${summary.processed_count ?? 0}</strong> processed</span>`,
+          `<span style="color:var(--accent-bright,#16a34a)"><strong>${summary.success_count ?? 0}</strong> succeeded</span>`,
+          `<span style="color:var(--danger,#dc2626)"><strong>${summary.failure_count ?? 0}</strong> failed</span>`,
+          summary.duration_ms != null ? `<span class="muted">${(summary.duration_ms / 1000).toFixed(1)}s</span>` : "",
+          summary.jobId ? `<span class="muted">Job ${String(summary.jobId).slice(0, 8)}</span>` : ""
         ].filter(Boolean).join("");
-        await loadSyncData();
-        renderSettings();
-        renderResult(ok, title, color, bg, statsHtml, result.errors);
+        renderResult(ok, title, color, bg, statsHtml, errors);
         const toastMsg = ok
-          ? `Pull completed: ${result.success_count ?? 0}/${result.processed_count ?? 0} records synced from ${sourceName}.`
+          ? `Pull completed: ${summary.success_count ?? 0}/${summary.processed_count ?? 0} records synced from ${sourceName}.`
           : partial
-          ? `Pull partial: ${result.success_count ?? 0} succeeded, ${result.failure_count ?? 0} failed on ${sourceName}.`
+          ? `Pull partial: ${summary.success_count ?? 0} succeeded, ${summary.failure_count ?? 0} failed on ${sourceName}.`
           : `Pull failed on ${sourceName}.`;
         setStatus(toastMsg, !ok && !partial);
+      };
+
+      // Async progress renderer (MYSQL chunked drain — keeps the box open
+      // and updates the stats line each poll until the job finishes).
+      const renderProgress = (job) => {
+        const s = job.summaryJson || {};
+        const processed = s.processed_count || 0;
+        const succeeded = s.success_count || 0;
+        const failed = s.failure_count || 0;
+        const cursor = s.cursor || 0;
+        const running = job.status === "PENDING" || job.status === "RUNNING";
+        const color = running ? "#0284c7" : (failed > 0 && succeeded === 0 ? "var(--danger,#dc2626)" : (failed > 0 ? "#d97706" : "var(--accent-bright,#16a34a)"));
+        const bg = running ? "rgba(2,132,199,0.08)" : (failed > 0 && succeeded === 0 ? "rgba(220,38,38,0.08)" : (failed > 0 ? "rgba(217,119,6,0.08)" : "rgba(22,163,74,0.08)"));
+        const title = job.status === "PENDING"
+          ? `Queued — ${sourceName}`
+          : job.status === "RUNNING"
+          ? `Pulling… (${succeeded}/${processed} so far) — ${sourceName}`
+          : job.status === "SUCCESS"
+          ? `Pull completed — ${sourceName}`
+          : `Pull failed — ${sourceName}`;
+        const statsHtml = [
+          `<span><strong>${processed}</strong> rows fetched</span>`,
+          `<span style="color:var(--accent-bright,#16a34a)"><strong>${succeeded}</strong> succeeded</span>`,
+          `<span style="color:var(--danger,#dc2626)"><strong>${failed}</strong> failed</span>`,
+          running ? `<span class="muted">cursor=${cursor}</span>` : "",
+          `<span class="muted">Job ${String(job.id).slice(0, 8)}</span>`
+        ].filter(Boolean).join("");
+        renderResult(!running && job.status === "SUCCESS", title, color, bg, statsHtml,
+          (job.errors || []).slice(0, 50).map(e => `${e.rowRef}: ${e.errorCode} — ${e.errorMessage}`));
+      };
+
+      const pollJob = async (jobId) => {
+        let attempts = 0;
+        const maxAttempts = 600; // ~30 min at 3s intervals
+        while (attempts++ < maxAttempts) {
+          await new Promise(r => setTimeout(r, 3000));
+          let job;
+          try {
+            job = await api(`/integrations/master-data/jobs/${jobId}`);
+          } catch (err) {
+            // transient — keep polling
+            continue;
+          }
+          renderProgress(job);
+          if (job.status === "SUCCESS" || job.status === "FAILED") {
+            await loadSyncData();
+            renderSettings();
+            const finalToast = job.status === "SUCCESS"
+              ? `Pull completed: ${(job.summaryJson?.success_count ?? 0)}/${(job.summaryJson?.processed_count ?? 0)} records synced from ${sourceName}.`
+              : `Pull failed on ${sourceName}.`;
+            setStatus(finalToast, job.status !== "SUCCESS");
+            return;
+          }
+        }
+        setStatus(`Pull on ${sourceName} is taking longer than expected — open Settings → Sync Jobs to track it.`, true);
+      };
+
+      try {
+        const result = await api(`/integrations/master-data/sources/${sourceId}/pull`, { method: "POST" });
+        // MYSQL: server returns a queued job (status: "queued"|"already_running"). Poll it.
+        if (result && result.jobId && (result.status === "queued" || result.status === "already_running") && !result.processed_count) {
+          renderProgress({ id: result.jobId, status: "PENDING", summaryJson: {}, errors: [] });
+          setStatus(result.message || `Pull queued for ${sourceName}.`);
+          await pollJob(result.jobId);
+        } else {
+          renderSummary({ ...result, jobId: result.jobId }, result.errors);
+          await loadSyncData();
+          renderSettings();
+        }
       } catch (err) {
         const msg = err.message || "Pull failed.";
         renderResult(false, `Pull failed — ${sourceName}`, "var(--danger,#dc2626)", "rgba(220,38,38,0.08)", `<span>${escHtml(msg)}</span>`, null);
         setStatus(`Pull failed on ${sourceName}: ${msg}`, true);
+      } finally {
         btn.disabled = false;
         btn.textContent = originalLabel;
       }

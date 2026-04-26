@@ -130,6 +130,103 @@ export type ConnectorRunInput = {
   records: ConnectorRecord[];
 };
 
+export type ChunkProcessResult = {
+  successCount: number;
+  duplicateCount: number;
+  errors: ConnectorError[];
+};
+
+export type FieldMapping = {
+  sourceField: string;
+  targetField: string;
+  transformRule: string | null;
+  isRequired: boolean;
+};
+
+/**
+ * Process a chunk of records into an existing IntegrationSyncJob.
+ * Used by chunked, resumable pulls (e.g. MySQL) where the job is created
+ * up-front and the cron drains it in pieces. `rowOffset` is added to the
+ * 1-based row index when emitting `record_ref` so error references stay
+ * sensible across chunks (chunk 1 starts at 1, chunk 2 might start at 1001).
+ *
+ * `seenKeys` carries the in-memory dedupe set across chunks within the
+ * same drain pass — it's a perf-only shortcut; the DB UNIQUE constraints
+ * catch true duplicates regardless.
+ */
+export async function processConnectorChunk(params: {
+  tenantId: string;
+  jobId: string;
+  entityType: EntityType;
+  mappings: FieldMapping[];
+  records: ConnectorRecord[];
+  rowOffset: number;
+  seenKeys: Set<string>;
+}): Promise<ChunkProcessResult> {
+  const { tenantId, jobId, entityType, mappings, records, rowOffset, seenKeys } = params;
+  const errors: ConnectorError[] = [];
+  let successCount = 0;
+  let duplicateCount = 0;
+
+  for (let index = 0; index < records.length; index += 1) {
+    const rowRef = String(rowOffset + index + 1);
+    const rawRecord = records[index] ?? {};
+    const { mapped, issues } = buildMappedRecord(rawRecord, mappings);
+    if (issues.length > 0) {
+      for (const issue of issues) {
+        errors.push(makeError(rowRef, "MAPPING_REQUIRED_FIELD_MISSING", issue, "mapping"));
+      }
+      continue;
+    }
+
+    const rowDedupeKey = dedupeKey(entityType, mapped);
+    if (rowDedupeKey && seenKeys.has(rowDedupeKey)) {
+      duplicateCount += 1;
+      continue;
+    }
+    if (rowDedupeKey) seenKeys.add(rowDedupeKey);
+
+    try {
+      await upsertEntity(tenantId, entityType, mapped);
+      successCount += 1;
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        errors.push(
+          makeError(
+            rowRef,
+            "VALIDATION_FAILED",
+            error.issues
+              .map((issue) => {
+                const path = issue.path.length > 0 ? issue.path.join(".") : "(root)";
+                return `${path}: ${issue.message}`;
+              })
+              .join(", "),
+            "validation"
+          )
+        );
+      } else if (error instanceof Error) {
+        errors.push(makeError(rowRef, "UPSERT_FAILED", error.message, "internal"));
+      } else {
+        errors.push(makeError(rowRef, "UPSERT_FAILED", "Unknown processing error.", "internal"));
+      }
+    }
+  }
+
+  if (errors.length > 0) {
+    await prisma.integrationSyncError.createMany({
+      data: errors.map((error) => ({
+        jobId,
+        entityType,
+        rowRef: error.record_ref,
+        errorCode: error.error_code,
+        errorMessage: error.error_message
+      }))
+    });
+  }
+
+  return { successCount, duplicateCount, errors };
+}
+
 function toRunStatus(summary: ConnectorSummary): JobStatus {
   return summary.status === "failed" ? JobStatus.FAILED : JobStatus.SUCCESS;
 }

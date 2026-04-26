@@ -13,6 +13,7 @@ const baseCfg = (over: Partial<MysqlSourceConfig> = {}): MysqlSourceConfig => ({
   connectTimeoutMs: 10_000,
   queryTimeoutMs: 60_000,
   rowLimit: 50_000,
+  chunkSize: 1000,
   schedule: { kind: "MANUAL" },
   query: { mode: "TABLE", table: "customers" },
   ...over,
