@@ -10,8 +10,9 @@ UPDATE "Customer" SET "branchCode" = '00000' WHERE "taxId" IS NOT NULL;
 
 -- Replace the (tenantId, taxId) unique with (tenantId, taxId, branchCode).
 -- This lets two branches of the same legal entity coexist as separate rows.
-ALTER TABLE "Customer" DROP CONSTRAINT "Customer_tenantId_taxId_key";
-ALTER TABLE "Customer" ADD CONSTRAINT "Customer_tenantId_taxId_branchCode_key" UNIQUE ("tenantId", "taxId", "branchCode");
+-- Prisma generates @@unique as a UNIQUE INDEX, not a CONSTRAINT, so use DROP INDEX.
+DROP INDEX "Customer_tenantId_taxId_key";
+CREATE UNIQUE INDEX "Customer_tenantId_taxId_branchCode_key" ON "Customer"("tenantId", "taxId", "branchCode");
 
 -- Self-referential FK for corporate hierarchy. SetNull so deleting a parent
 -- leaves children intact (just orphaned).
