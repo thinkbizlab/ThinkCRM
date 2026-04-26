@@ -782,6 +782,27 @@ const TRANSFORM_RULES = [
     { name: "pattern", type: "text",   label: "Pattern", default: "", width: "130px", mono: true },
     { name: "group",   type: "number", label: "Group",   default: "1", width: "44px" },
     { name: "flags",   type: "text",   label: "Flags",   default: "",  width: "50px" }
+  ]},
+  // Always-set: replaces value with a constant. Mainly used inside if/else branches.
+  { rule: "set",         label: "Set to constant",       group: "Logic",    args: [
+    { name: "value", type: "text", label: "Value", default: "", width: "100px" }
+  ]},
+  // Conditional: if value <op> compareValue then set to thenValue else set to elseValue.
+  // The flat args are repackaged into the backend's nested cond/then/else shape on save.
+  { rule: "if",          label: "If / Else",             group: "Logic",    args: [
+    { name: "op", type: "select", label: "Operator", default: "equals", width: "110px",
+      options: [
+        { value: "equals",     label: "= equals" },
+        { value: "not_equals", label: "≠ not equals" },
+        { value: "contains",   label: "contains" },
+        { value: "matches",    label: "matches regex" },
+        { value: "empty",      label: "is empty" },
+        { value: "not_empty",  label: "is not empty" }
+      ]
+    },
+    { name: "compareValue", type: "text", label: "Compare to", default: "", width: "90px" },
+    { name: "thenValue",    type: "text", label: "Then set to", default: "", width: "100px" },
+    { name: "elseValue",    type: "text", label: "Else set to", default: "", width: "100px" }
   ]}
 ];
 
@@ -839,6 +860,10 @@ function transformStepPillHtml(step, rowIdx, stepIdx) {
   const argHtml = def ? def.args.map(a => {
     const val = args[a.name] !== undefined ? args[a.name] : a.default;
     const mono = a.mono ? "font-family:var(--font-mono,monospace);" : "";
+    if (a.type === "select") {
+      const opts = (a.options || []).map(o => `<option value="${escHtml(String(o.value))}"${String(o.value) === String(val) ? " selected" : ""}>${escHtml(o.label)}</option>`).join("");
+      return `<select data-arg="${a.name}" title="${escHtml(a.label)}" class="form-control" style="width:${a.width};padding:2px 4px;font-size:0.8rem">${opts}</select>`;
+    }
     return `<input type="${a.type}" data-arg="${a.name}" value="${escHtml(String(val))}" title="${escHtml(a.label)}" placeholder="${escHtml(a.label)}" class="form-control" style="width:${a.width};${mono}padding:2px 6px;font-size:0.8rem">`;
   }).join("") : "";
   const unknown = !def;
@@ -852,11 +877,13 @@ function transformStepPillHtml(step, rowIdx, stepIdx) {
 
 function renderTransformStepsInto(container, steps) {
   const rowIdx = container.dataset.rowIdx ?? "0";
-  container.innerHTML = (steps || [])
+  // Convert any nested `if` steps coming from the wire into the flat UI shape.
+  const uiSteps = (steps || []).map(s => s && s.rule === "if" ? unpackIfStep(s) : s);
+  container.innerHTML = uiSteps
     .map((s, i) => transformStepPillHtml(s, rowIdx, i))
     .join("");
   // Refresh stored model so we can read + re-render after arg edits.
-  container._steps = (steps || []).map(s => ({ rule: s.rule, args: { ...(s.args || {}) } }));
+  container._steps = uiSteps.map(s => ({ rule: s.rule, args: { ...(s.args || {}) } }));
   refreshTransformPreview(container);
 }
 
@@ -866,13 +893,57 @@ function readTransformStepsFromContainer(container) {
   return pills.map(pill => {
     const rule = pill.querySelector(".tf-rule")?.value || "";
     const args = {};
+    // Inputs (text, number)
     pill.querySelectorAll("input[data-arg]").forEach(inp => {
       const k = inp.dataset.arg;
       const v = inp.value;
       if (k && v !== "") args[k] = inp.type === "number" ? Number(v) : v;
     });
+    // Selects (e.g. the if-rule's `op`)
+    pill.querySelectorAll("select[data-arg]").forEach(sel => {
+      const k = sel.dataset.arg;
+      const v = sel.value;
+      if (k && v !== "") args[k] = v;
+    });
+    // Repackage flat if-rule args into the backend's nested cond/then/else shape.
+    if (rule === "if") return packIfStep(args);
     return Object.keys(args).length ? { rule, args } : { rule };
   });
+}
+
+// Convert the UI's flat {op, compareValue, thenValue, elseValue} into the
+// backend's nested {cond, then, else} shape using inner `set` steps.
+function packIfStep(flat) {
+  const op = flat.op || "equals";
+  const cond = (op === "empty" || op === "not_empty")
+    ? { op }
+    : { op, value: flat.compareValue ?? "" };
+  return {
+    rule: "if",
+    args: {
+      cond,
+      then: [{ rule: "set", args: { value: flat.thenValue ?? "" } }],
+      else: [{ rule: "set", args: { value: flat.elseValue ?? "" } }]
+    }
+  };
+}
+
+// Inverse of packIfStep — restores the flat args used by the pill UI.
+function unpackIfStep(step) {
+  const a = step.args || {};
+  const cond = (a.cond && typeof a.cond === "object") ? a.cond : {};
+  const firstSet = (arr) => Array.isArray(arr) && arr[0] && arr[0].rule === "set"
+    ? String(arr[0].args?.value ?? "")
+    : "";
+  return {
+    rule: "if",
+    args: {
+      op: typeof cond.op === "string" ? cond.op : "equals",
+      compareValue: cond.value !== undefined ? String(cond.value) : "",
+      thenValue: firstSet(a.then),
+      elseValue: firstSet(a.else)
+    }
+  };
 }
 
 function refreshTransformPreview(container) {
@@ -970,7 +1041,36 @@ function applyStepClient(value, step) {
         return m[idx] ?? "";
       } catch { return value; }
     }
+    case "set": return args.value ?? "";
+    case "if": {
+      // The pill UI gives us flat {op, compareValue, thenValue, elseValue}.
+      // The serialized step uses nested {cond, then[set], else[set]} — handle both.
+      const op = args.op || args.cond?.op || "equals";
+      const cmp = args.compareValue !== undefined ? args.compareValue : (args.cond?.value ?? "");
+      const matches = evalConditionClient(value, op, cmp);
+      if (args.thenValue !== undefined || args.elseValue !== undefined) {
+        return matches ? (args.thenValue ?? "") : (args.elseValue ?? "");
+      }
+      const branch = matches ? args.then : args.else;
+      if (Array.isArray(branch) && branch[0]) return applyStepClient(value, branch[0]);
+      return value;
+    }
     default: return value;
+  }
+}
+
+function evalConditionClient(value, op, cmp) {
+  switch (op) {
+    case "equals":     return String(value ?? "") === String(cmp ?? "");
+    case "not_equals": return String(value ?? "") !== String(cmp ?? "");
+    case "empty":      return value === null || value === undefined || value === "";
+    case "not_empty":  return !(value === null || value === undefined || value === "");
+    case "contains":   return typeof value === "string" && value.includes(String(cmp ?? ""));
+    case "matches": {
+      try { return typeof value === "string" && new RegExp(String(cmp ?? "")).test(value); }
+      catch { return false; }
+    }
+    default: return false;
   }
 }
 
@@ -6991,15 +7091,20 @@ function renderSettings() {
     btn.addEventListener("click", () => {
       const sourceId = btn.dataset.sourceId;
       const source = (state.cache.syncSources || []).find(s => s.id === sourceId);
-      const isRest = source?.sourceType === "REST";
+      const isRest  = source?.sourceType === "REST";
+      const isMysql = source?.sourceType === "MYSQL";
       const cfg = (source?.configJson && typeof source.configJson === "object") ? source.configJson : {};
-      const lockedEntity = isRest && typeof cfg.entityType === "string" ? cfg.entityType : "";
+      // Lock entity for single-entity sources (REST + MYSQL both store entityType in configJson).
+      const lockedEntity = (isRest || isMysql) && typeof cfg.entityType === "string" ? cfg.entityType : "";
       qs("#sync-mapping-editor").style.display = "block";
       qs("#sync-mapping-source-name").textContent = btn.dataset.sourceName;
       qs("#sync-mapping-source-id").value = sourceId;
       qs("#sync-mapping-locked-entity").value = lockedEntity;
-      // Show "Fetch sample fields" button only for REST sources (other types don't have a live endpoint).
-      qs("#sync-mapping-fetch-wrap").style.display = isRest ? "" : "none";
+      // "Fetch sample fields" works for any source whose /test endpoint returns
+      // firstRecordKeys — REST and MYSQL today. WEBHOOK/EXCEL have no live
+      // endpoint to probe.
+      const canFetchFields = isRest || isMysql;
+      qs("#sync-mapping-fetch-wrap").style.display = canFetchFields ? "" : "none";
       qs("#sync-mapping-fetch-msg").textContent = "";
       // Hide entity column when locked (single-entity REST source).
       const entityCol = qs("#sync-mapping-col-entity");

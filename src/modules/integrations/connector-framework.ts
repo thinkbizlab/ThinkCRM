@@ -249,6 +249,11 @@ function applyStep(value: unknown, step: TransformStep, depth = 0): unknown {
       const idx = Number.isFinite(group) && group >= 0 ? group : 1;
       return m[idx] ?? "";
     }
+    case "set": {
+      // Always replace the value with the configured constant (used inside
+      // if/else branches where the column should map to a fixed string).
+      return step.args?.value ?? "";
+    }
     case "if": {
       if (depth >= MAX_TRANSFORM_DEPTH) return value;
       const args = (step.args ?? {}) as Record<string, unknown>;
