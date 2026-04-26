@@ -1640,7 +1640,10 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
 
   // ── DBD Datawarehouse proxy ──────────────────────────────────────────────
   // Proxies requests to Thailand's DBD company registry to avoid CORS.
-  // Set DBD_API_KEY env var if the target API requires one.
+  // Configure with the env vars below (no silent default — the legacy public
+  // path is gated and we want explicit failures rather than mysterious timeouts):
+  //   DBD_API_URL  — base URL ending in `/`, taxId is appended (e.g. https://apidev.dbd.go.th/api/v3/juristic/)
+  //   DBD_API_KEY  — required by most current DBD endpoints; sent as `api_key` header
   app.get("/dbd/company/:taxId", async (request) => {
     requireTenantId(request);
     const { taxId } = request.params as { taxId: string };
@@ -1648,10 +1651,13 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.badRequest("Tax ID must be exactly 13 digits.");
     }
 
-    const baseUrl =
-      process.env["DBD_API_URL"] ??
-      "https://datawarehouse.dbd.go.th/api/juristic/";
+    const baseUrl = process.env["DBD_API_URL"];
     const apiKey = process.env["DBD_API_KEY"] ?? "";
+    if (!baseUrl) {
+      throw app.httpErrors.serviceUnavailable(
+        "DBD lookup is not configured. Set DBD_API_URL (and DBD_API_KEY if the upstream requires it)."
+      );
+    }
 
     try {
       const headers: Record<string, string> = { Accept: "application/json" };
@@ -1660,6 +1666,16 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       const res = await fetch(`${baseUrl}${taxId}`, { headers });
       if (!res.ok) {
         if (res.status === 404) throw app.httpErrors.notFound("Company not found in DBD registry.");
+        const bodySnippet = await res.text().catch(() => "");
+        request.log.warn(
+          { dbdStatus: res.status, dbdBody: bodySnippet.slice(0, 500), dbdUrl: baseUrl },
+          "DBD upstream returned non-OK status"
+        );
+        if (res.status === 401 || res.status === 403) {
+          throw app.httpErrors.badGateway(
+            `DBD API rejected the request (${res.status}). ${apiKey ? "Verify DBD_API_KEY is valid." : "DBD_API_KEY is not set — most endpoints require one."}`
+          );
+        }
         throw app.httpErrors.badGateway(`DBD API returned ${res.status}.`);
       }
       const data = await res.json() as Record<string, unknown>;
@@ -1677,7 +1693,14 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       };
     } catch (err: unknown) {
       if (err && typeof err === "object" && "statusCode" in err) throw err;
-      throw app.httpErrors.badGateway("Could not reach DBD API. Check DBD_API_URL configuration.");
+      // Surface the real cause: fetch failures usually carry a `cause` (DNS/TLS/network)
+      // and the message itself often names the failure mode.
+      const message = err instanceof Error ? err.message : String(err);
+      const cause = err instanceof Error && err.cause ? String((err.cause as Error).message ?? err.cause) : null;
+      request.log.error({ err, dbdUrl: baseUrl }, "DBD proxy failed");
+      throw app.httpErrors.badGateway(
+        `Could not reach DBD API: ${message}${cause ? ` (cause: ${cause})` : ""}. Check DBD_API_URL${apiKey ? "" : " and DBD_API_KEY"}.`
+      );
     }
   });
 
