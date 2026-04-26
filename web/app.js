@@ -783,27 +783,28 @@ const TRANSFORM_RULES = [
     { name: "group",   type: "number", label: "Group",   default: "1", width: "44px" },
     { name: "flags",   type: "text",   label: "Flags",   default: "",  width: "50px" }
   ]},
-  // Always-set: replaces value with a constant. Mainly used inside if/else branches.
+  // Always-set: replaces value with a constant. Use `{{value}}` to reference
+  // the original value — "{{value}}" alone keeps it unchanged.
   { rule: "set",         label: "Set to constant",       group: "Logic",    args: [
-    { name: "value", type: "text", label: "Value", default: "", width: "100px" }
+    { name: "value", type: "text", label: "Value (use {{value}} for original)", default: "", width: "140px" }
   ]},
-  // Conditional: if value <op> compareValue then set to thenValue else set to elseValue.
-  // The flat args are repackaged into the backend's nested cond/then/else shape on save.
-  { rule: "if",          label: "If / Else",             group: "Logic",    args: [
-    { name: "op", type: "select", label: "Operator", default: "equals", width: "110px",
-      options: [
-        { value: "equals",     label: "= equals" },
-        { value: "not_equals", label: "≠ not equals" },
-        { value: "contains",   label: "contains" },
-        { value: "matches",    label: "matches regex" },
-        { value: "empty",      label: "is empty" },
-        { value: "not_empty",  label: "is not empty" }
-      ]
-    },
-    { name: "compareValue", type: "text", label: "Compare to", default: "", width: "90px" },
-    { name: "thenValue",    type: "text", label: "Then set to", default: "", width: "100px" },
-    { name: "elseValue",    type: "text", label: "Else set to", default: "", width: "100px" }
-  ]}
+  // Conditional with elseif support. Custom-rendered (no flat arg list).
+  // UI shape: { branches: [{op, compareValue, thenValue}, ...], elseValue }
+  // Wire shape: nested {cond, then[set], else:[if{...}|set]} chain.
+  { rule: "if",          label: "If / Elseif / Else",    group: "Logic",    customUI: true, args: [] }
+];
+
+const IF_OPERATORS = [
+  { value: "equals",           label: "= equals" },
+  { value: "not_equals",       label: "≠ not equals" },
+  { value: "greater",          label: "> greater than" },
+  { value: "less",             label: "< less than" },
+  { value: "greater_or_equal", label: "≥ ≥" },
+  { value: "less_or_equal",    label: "≤ ≤" },
+  { value: "contains",         label: "contains" },
+  { value: "matches",          label: "matches regex" },
+  { value: "empty",            label: "is empty" },
+  { value: "not_empty",        label: "is not empty" }
 ];
 
 const TRANSFORM_RULE_MAP = TRANSFORM_RULES.reduce((acc, r) => { acc[r.rule] = r; return acc; }, {});
@@ -856,6 +857,8 @@ function transformRuleSelectHtml(selectedRule) {
 
 function transformStepPillHtml(step, rowIdx, stepIdx) {
   const def = TRANSFORM_RULE_MAP[step.rule];
+  const unknown = !def;
+  if (def && def.customUI && step.rule === "if") return transformIfPillHtml(step, rowIdx, stepIdx);
   const args = step.args || {};
   const argHtml = def ? def.args.map(a => {
     const val = args[a.name] !== undefined ? args[a.name] : a.default;
@@ -866,12 +869,61 @@ function transformStepPillHtml(step, rowIdx, stepIdx) {
     }
     return `<input type="${a.type}" data-arg="${a.name}" value="${escHtml(String(val))}" title="${escHtml(a.label)}" placeholder="${escHtml(a.label)}" class="form-control" style="width:${a.width};${mono}padding:2px 6px;font-size:0.8rem">`;
   }).join("") : "";
-  const unknown = !def;
   return `<span class="tf-step" draggable="true" data-row-idx="${rowIdx}" data-step-idx="${stepIdx}" style="display:inline-flex;align-items:center;gap:4px;background:${unknown ? "#fee2e2" : "var(--clr-elev,#f4f4f5)"};border:1px solid ${unknown ? "#fca5a5" : "var(--clr-border,#e4e4e7)"};border-radius:6px;padding:3px 6px;cursor:move">
     <span class="tf-drag" title="Drag to reorder" style="cursor:grab;opacity:0.4;font-size:0.7rem">⋮⋮</span>
     <select class="tf-rule form-control" style="padding:2px 4px;font-size:0.8rem;max-width:160px">${transformRuleSelectHtml(step.rule)}</select>
     ${argHtml}
     <button type="button" class="tf-remove" title="Remove step" aria-label="Remove" style="background:transparent;border:0;color:#71717a;cursor:pointer;font-size:0.9rem;line-height:1;padding:0 2px">×</button>
+  </span>`;
+}
+
+function ifOperatorSelectHtml(selected) {
+  return IF_OPERATORS.map(o =>
+    `<option value="${escHtml(o.value)}"${o.value === selected ? " selected" : ""}>${escHtml(o.label)}</option>`
+  ).join("");
+}
+
+function transformIfPillHtml(step, rowIdx, stepIdx) {
+  const args = step.args || {};
+  const branches = Array.isArray(args.branches) && args.branches.length > 0
+    ? args.branches
+    : [{ op: "equals", compareValue: "", thenValue: "" }];
+  const elseValue = args.elseValue ?? "";
+  const branchHtml = branches.map((b, i) => {
+    const op = b.op || "equals";
+    const needsCmp = op !== "empty" && op !== "not_empty";
+    const label = i === 0 ? "IF" : "ELSEIF";
+    const removeBtn = branches.length > 1
+      ? `<button type="button" class="tf-branch-remove" title="Remove branch" aria-label="Remove branch" style="background:transparent;border:0;color:#71717a;cursor:pointer;font-size:0.9rem;line-height:1;padding:0 2px">×</button>`
+      : "";
+    return `<div class="tf-if-branch" data-branch-idx="${i}" style="display:flex;align-items:center;gap:4px;flex-wrap:wrap">
+      <span style="font-weight:600;color:#71717a;font-size:0.75rem;min-width:46px">${label}</span>
+      <span style="color:#52525b;font-size:0.75rem">value</span>
+      <select data-bf="op" class="form-control" style="padding:2px 4px;font-size:0.8rem;width:130px">${ifOperatorSelectHtml(op)}</select>
+      ${needsCmp
+        ? `<input type="text" data-bf="compareValue" value="${escHtml(String(b.compareValue ?? ""))}" placeholder="compare to" class="form-control" style="width:90px;padding:2px 6px;font-size:0.8rem">`
+        : `<input type="hidden" data-bf="compareValue" value="">`}
+      <span style="color:#52525b;font-size:0.75rem">→ set to</span>
+      <input type="text" data-bf="thenValue" value="${escHtml(String(b.thenValue ?? ""))}" placeholder="value or {{value}}" title="Output value. Use {{value}} for the original input." class="form-control" style="width:130px;padding:2px 6px;font-size:0.8rem">
+      ${removeBtn}
+    </div>`;
+  }).join("");
+  return `<span class="tf-step tf-step-if" draggable="true" data-row-idx="${rowIdx}" data-step-idx="${stepIdx}" style="display:inline-flex;flex-direction:column;align-items:stretch;gap:4px;background:var(--clr-elev,#f4f4f5);border:1px solid var(--clr-border,#e4e4e7);border-radius:6px;padding:6px 8px;cursor:move;min-width:480px">
+    <div style="display:flex;align-items:center;gap:6px">
+      <span class="tf-drag" title="Drag to reorder" style="cursor:grab;opacity:0.4;font-size:0.7rem">⋮⋮</span>
+      <select class="tf-rule form-control" style="padding:2px 4px;font-size:0.8rem;max-width:180px">${transformRuleSelectHtml(step.rule)}</select>
+      <span style="flex:1"></span>
+      <button type="button" class="tf-remove" title="Remove step" aria-label="Remove" style="background:transparent;border:0;color:#71717a;cursor:pointer;font-size:0.9rem;line-height:1;padding:0 2px">×</button>
+    </div>
+    ${branchHtml}
+    <div class="tf-if-else" style="display:flex;align-items:center;gap:4px;flex-wrap:wrap">
+      <span style="font-weight:600;color:#71717a;font-size:0.75rem;min-width:46px">ELSE</span>
+      <span style="color:#52525b;font-size:0.75rem">→ set to</span>
+      <input type="text" data-bf="elseValue" value="${escHtml(String(elseValue))}" placeholder="value or {{value}}" title="Output when no branch matches. Use {{value}} to keep the original." class="form-control" style="width:130px;padding:2px 6px;font-size:0.8rem">
+    </div>
+    <div>
+      <button type="button" class="tf-branch-add" style="background:transparent;border:1px dashed var(--clr-border,#d4d4d8);color:#52525b;cursor:pointer;font-size:0.75rem;padding:2px 8px;border-radius:4px">+ Add elseif</button>
+    </div>
   </span>`;
 }
 
@@ -888,62 +940,89 @@ function renderTransformStepsInto(container, steps) {
 }
 
 function readTransformStepsFromContainer(container) {
-  // Prefer the in-memory model when pill DOM still matches it; otherwise walk the DOM.
-  const pills = Array.from(container.querySelectorAll(".tf-step"));
+  // Walk only the top-level pills (descendant selector would also match
+  // nested .tf-step inside compound rules, but for now only the top level
+  // exists at the DOM level).
+  const pills = Array.from(container.children).filter(el => el.classList?.contains("tf-step"));
   return pills.map(pill => {
     const rule = pill.querySelector(".tf-rule")?.value || "";
+    if (rule === "if") return packIfStep(readIfPillFlatArgs(pill));
     const args = {};
-    // Inputs (text, number)
     pill.querySelectorAll("input[data-arg]").forEach(inp => {
       const k = inp.dataset.arg;
       const v = inp.value;
       if (k && v !== "") args[k] = inp.type === "number" ? Number(v) : v;
     });
-    // Selects (e.g. the if-rule's `op`)
     pill.querySelectorAll("select[data-arg]").forEach(sel => {
       const k = sel.dataset.arg;
       const v = sel.value;
       if (k && v !== "") args[k] = v;
     });
-    // Repackage flat if-rule args into the backend's nested cond/then/else shape.
-    if (rule === "if") return packIfStep(args);
     return Object.keys(args).length ? { rule, args } : { rule };
   });
 }
 
-// Convert the UI's flat {op, compareValue, thenValue, elseValue} into the
-// backend's nested {cond, then, else} shape using inner `set` steps.
-function packIfStep(flat) {
-  const op = flat.op || "equals";
-  const cond = (op === "empty" || op === "not_empty")
-    ? { op }
-    : { op, value: flat.compareValue ?? "" };
-  return {
-    rule: "if",
-    args: {
-      cond,
-      then: [{ rule: "set", args: { value: flat.thenValue ?? "" } }],
-      else: [{ rule: "set", args: { value: flat.elseValue ?? "" } }]
-    }
-  };
+// Walk the if-rule pill's branch rows + ELSE row into the flat UI shape:
+// { branches: [{op, compareValue, thenValue}, ...], elseValue }
+function readIfPillFlatArgs(pill) {
+  const branches = Array.from(pill.querySelectorAll(".tf-if-branch")).map(row => ({
+    op: row.querySelector('[data-bf="op"]')?.value || "equals",
+    compareValue: row.querySelector('[data-bf="compareValue"]')?.value ?? "",
+    thenValue: row.querySelector('[data-bf="thenValue"]')?.value ?? ""
+  }));
+  const elseValue = pill.querySelector('.tf-if-else [data-bf="elseValue"]')?.value ?? "";
+  return { branches, elseValue };
 }
 
-// Inverse of packIfStep — restores the flat args used by the pill UI.
+// Convert the UI's flat {branches, elseValue} into the backend's nested
+// {cond, then[set], else:[if{...}|set]} chain. Multiple branches → nested ifs.
+function packIfStep(flat) {
+  const branches = Array.isArray(flat.branches) && flat.branches.length > 0
+    ? flat.branches
+    : [{ op: "equals", compareValue: "", thenValue: "" }];
+  const elseValue = flat.elseValue ?? "";
+  let elseSteps = [{ rule: "set", args: { value: elseValue } }];
+  for (let i = branches.length - 1; i >= 0; i--) {
+    const b = branches[i];
+    const op = b.op || "equals";
+    const cond = (op === "empty" || op === "not_empty")
+      ? { op }
+      : { op, value: b.compareValue ?? "" };
+    elseSteps = [{
+      rule: "if",
+      args: {
+        cond,
+        then: [{ rule: "set", args: { value: b.thenValue ?? "" } }],
+        else: elseSteps
+      }
+    }];
+  }
+  return elseSteps[0];
+}
+
+// Inverse of packIfStep — walk a nested if-chain into a flat branches[] array.
 function unpackIfStep(step) {
-  const a = step.args || {};
-  const cond = (a.cond && typeof a.cond === "object") ? a.cond : {};
+  const branches = [];
   const firstSet = (arr) => Array.isArray(arr) && arr[0] && arr[0].rule === "set"
     ? String(arr[0].args?.value ?? "")
     : "";
-  return {
-    rule: "if",
-    args: {
+  let cur = step;
+  while (cur && cur.rule === "if" && cur.args) {
+    const a = cur.args;
+    const cond = (a.cond && typeof a.cond === "object") ? a.cond : {};
+    branches.push({
       op: typeof cond.op === "string" ? cond.op : "equals",
       compareValue: cond.value !== undefined ? String(cond.value) : "",
-      thenValue: firstSet(a.then),
-      elseValue: firstSet(a.else)
+      thenValue: firstSet(a.then)
+    });
+    const elseArr = Array.isArray(a.else) ? a.else : [];
+    if (elseArr.length === 1 && elseArr[0]?.rule === "if") {
+      cur = elseArr[0];
+    } else {
+      return { rule: "if", args: { branches, elseValue: firstSet(a.else) } };
     }
-  };
+  }
+  return { rule: "if", args: { branches, elseValue: "" } };
 }
 
 function refreshTransformPreview(container) {
@@ -1041,31 +1120,57 @@ function applyStepClient(value, step) {
         return m[idx] ?? "";
       } catch { return value; }
     }
-    case "set": return args.value ?? "";
+    case "set": {
+      const tpl = args.value;
+      if (tpl === null || tpl === undefined) return "";
+      return expandValueTokenClient(String(tpl), value);
+    }
     case "if": {
-      // The pill UI gives us flat {op, compareValue, thenValue, elseValue}.
-      // The serialized step uses nested {cond, then[set], else[set]} — handle both.
-      const op = args.op || args.cond?.op || "equals";
-      const cmp = args.compareValue !== undefined ? args.compareValue : (args.cond?.value ?? "");
-      const matches = evalConditionClient(value, op, cmp);
-      if (args.thenValue !== undefined || args.elseValue !== undefined) {
-        return matches ? (args.thenValue ?? "") : (args.elseValue ?? "");
+      // Flat UI shape: {branches: [{op, compareValue, thenValue}], elseValue}
+      // Wire shape:    {cond, then[set], else:[if{...}|set]} chain.
+      if (Array.isArray(args.branches)) {
+        for (const b of args.branches) {
+          if (evalConditionClient(value, b.op || "equals", b.compareValue ?? "")) {
+            return expandValueTokenClient(String(b.thenValue ?? ""), value);
+          }
+        }
+        return expandValueTokenClient(String(args.elseValue ?? ""), value);
       }
-      const branch = matches ? args.then : args.else;
-      if (Array.isArray(branch) && branch[0]) return applyStepClient(value, branch[0]);
+      const op = args.cond?.op || "equals";
+      const cmp = args.cond?.value ?? "";
+      const branch = evalConditionClient(value, op, cmp) ? args.then : args.else;
+      if (Array.isArray(branch)) {
+        let v = value;
+        for (const s of branch) v = applyStepClient(v, s);
+        return v;
+      }
       return value;
     }
     default: return value;
   }
 }
 
+function expandValueTokenClient(template, value) {
+  if (!template.includes("{{value}}")) return template;
+  return template.split("{{value}}").join(value === null || value === undefined ? "" : String(value));
+}
+
 function evalConditionClient(value, op, cmp) {
+  const numCmp = (fn) => {
+    const a = typeof value === "number" ? value : Number(value);
+    const b = typeof cmp === "number" ? cmp : Number(cmp);
+    return Number.isFinite(a) && Number.isFinite(b) && fn(a, b);
+  };
   switch (op) {
-    case "equals":     return String(value ?? "") === String(cmp ?? "");
-    case "not_equals": return String(value ?? "") !== String(cmp ?? "");
-    case "empty":      return value === null || value === undefined || value === "";
-    case "not_empty":  return !(value === null || value === undefined || value === "");
-    case "contains":   return typeof value === "string" && value.includes(String(cmp ?? ""));
+    case "equals":           return String(value ?? "") === String(cmp ?? "");
+    case "not_equals":       return String(value ?? "") !== String(cmp ?? "");
+    case "greater":          return numCmp((a, b) => a > b);
+    case "less":             return numCmp((a, b) => a < b);
+    case "greater_or_equal": return numCmp((a, b) => a >= b);
+    case "less_or_equal":    return numCmp((a, b) => a <= b);
+    case "empty":            return value === null || value === undefined || value === "";
+    case "not_empty":        return !(value === null || value === undefined || value === "");
+    case "contains":         return typeof value === "string" && value.includes(String(cmp ?? ""));
     case "matches": {
       try { return typeof value === "string" && new RegExp(String(cmp ?? "")).test(value); }
       catch { return false; }
@@ -7220,6 +7325,34 @@ function renderSettings() {
         renderTransformStepsInto(container, steps);
         return;
       }
+      // Add a new "ELSEIF" branch to an if-rule pill.
+      if (t.classList.contains("tf-branch-add")) {
+        const pill = t.closest(".tf-step-if");
+        const container = pill?.closest(".tf-steps");
+        if (!pill || !container) return;
+        const flat = readIfPillFlatArgs(pill);
+        flat.branches.push({ op: "equals", compareValue: "", thenValue: "" });
+        const all = readTransformStepsFromContainer(container);
+        all[Number(pill.dataset.stepIdx)] = packIfStep(flat);
+        renderTransformStepsInto(container, all);
+        return;
+      }
+      // Remove an ELSEIF branch.
+      if (t.classList.contains("tf-branch-remove")) {
+        const branchRow = t.closest(".tf-if-branch");
+        const pill = t.closest(".tf-step-if");
+        const container = pill?.closest(".tf-steps");
+        if (!branchRow || !pill || !container) return;
+        const flat = readIfPillFlatArgs(pill);
+        const idx = Number(branchRow.dataset.branchIdx);
+        if (flat.branches.length > 1) {
+          flat.branches.splice(idx, 1);
+          const all = readTransformStepsFromContainer(container);
+          all[Number(pill.dataset.stepIdx)] = packIfStep(flat);
+          renderTransformStepsInto(container, all);
+        }
+        return;
+      }
       // Save chain as template
       if (t.classList.contains("tf-save-template")) {
         const row = t.closest(".sync-mapping-row");
@@ -7266,12 +7399,28 @@ function renderSettings() {
         if (!container) return;
         const steps = readTransformStepsFromContainer(container);
         renderTransformStepsInto(container, steps);
+        return;
+      }
+      // If-rule operator changed → re-render so the compare-input toggles
+      // visibility for empty/not_empty operators.
+      if (t.dataset.bf === "op") {
+        const pill = t.closest(".tf-step-if");
+        const container = pill?.closest(".tf-steps");
+        if (!container) return;
+        const steps = readTransformStepsFromContainer(container);
+        renderTransformStepsInto(container, steps);
+        return;
+      }
+      // Any other arg change inside an if pill → just refresh preview.
+      if (t.dataset.bf) {
+        const container = t.closest(".tf-steps");
+        if (container) refreshTransformPreview(container);
       }
     });
     mappingRowsRoot.addEventListener("input", (ev) => {
       const t = ev.target;
       if (!(t instanceof HTMLElement)) return;
-      if (t.tagName === "INPUT" && t.dataset.arg !== undefined) {
+      if (t.tagName === "INPUT" && (t.dataset.arg !== undefined || t.dataset.bf !== undefined)) {
         const container = t.closest(".tf-steps");
         if (container) refreshTransformPreview(container);
       }

@@ -164,18 +164,34 @@ function evalCondition(value: unknown, cond: Record<string, unknown> | undefined
   if (!cond || typeof cond !== "object") return false;
   const op = typeof cond.op === "string" ? cond.op : "";
   const target = cond.value;
+  const numCmp = (cmp: (a: number, b: number) => boolean): boolean => {
+    const a = typeof value === "number" ? value : Number(value);
+    const b = typeof target === "number" ? target : Number(target);
+    return Number.isFinite(a) && Number.isFinite(b) && cmp(a, b);
+  };
   switch (op) {
-    case "equals":      return String(value ?? "") === String(target ?? "");
-    case "not_equals":  return String(value ?? "") !== String(target ?? "");
-    case "empty":       return value === null || value === undefined || value === "";
-    case "not_empty":   return !(value === null || value === undefined || value === "");
-    case "contains":    return typeof value === "string" && value.includes(String(target ?? ""));
+    case "equals":           return String(value ?? "") === String(target ?? "");
+    case "not_equals":       return String(value ?? "") !== String(target ?? "");
+    case "greater":          return numCmp((a, b) => a > b);
+    case "less":             return numCmp((a, b) => a < b);
+    case "greater_or_equal": return numCmp((a, b) => a >= b);
+    case "less_or_equal":    return numCmp((a, b) => a <= b);
+    case "empty":            return value === null || value === undefined || value === "";
+    case "not_empty":        return !(value === null || value === undefined || value === "");
+    case "contains":         return typeof value === "string" && value.includes(String(target ?? ""));
     case "matches": {
       const re = safeRegex(String(target ?? ""), "");
       return !!re && typeof value === "string" && re.test(value);
     }
     default: return false;
   }
+}
+
+function expandValueToken(template: string, value: unknown): string {
+  // {{value}} substitutes the input value as a string. Allows things like
+  // setting "{{value}}" (keep original) or "${{value}}" (prepend a $).
+  if (!template.includes("{{value}}")) return template;
+  return template.split("{{value}}").join(value === null || value === undefined ? "" : String(value));
 }
 
 function applyStep(value: unknown, step: TransformStep, depth = 0): unknown {
@@ -250,9 +266,13 @@ function applyStep(value: unknown, step: TransformStep, depth = 0): unknown {
       return m[idx] ?? "";
     }
     case "set": {
-      // Always replace the value with the configured constant (used inside
-      // if/else branches where the column should map to a fixed string).
-      return step.args?.value ?? "";
+      // Replace the value with the configured constant (used inside if/else
+      // branches). Supports `{{value}}` as a placeholder for the original
+      // value — e.g. "{{value}}" alone keeps it unchanged, ">{{value}}"
+      // prepends ">", etc.
+      const tpl = step.args?.value;
+      if (tpl === null || tpl === undefined) return "";
+      return expandValueToken(String(tpl), value);
     }
     case "if": {
       if (depth >= MAX_TRANSFORM_DEPTH) return value;
