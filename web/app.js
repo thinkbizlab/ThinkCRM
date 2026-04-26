@@ -11631,19 +11631,31 @@ document.addEventListener("click", (e) => {
 const topnavEl = document.querySelector(".topnav");
 const hamburgerBtn = document.getElementById("topnav-hamburger");
 function closeMobileNav() {
-  if (!topnavEl) return;
-  topnavEl.classList.remove("is-mobile-nav-open");
+  document.body.classList.remove("has-mobile-nav-open");
+  if (topnavEl) topnavEl.classList.remove("is-mobile-nav-open");
   if (hamburgerBtn) hamburgerBtn.setAttribute("aria-expanded", "false");
 }
-if (hamburgerBtn && topnavEl) {
-  hamburgerBtn.addEventListener("click", (e) => {
+function toggleMobileNav(e) {
+  if (e) {
+    e.preventDefault();
     e.stopPropagation();
-    const open = topnavEl.classList.toggle("is-mobile-nav-open");
-    hamburgerBtn.setAttribute("aria-expanded", open ? "true" : "false");
-  });
+  }
+  const open = !document.body.classList.contains("has-mobile-nav-open");
+  document.body.classList.toggle("has-mobile-nav-open", open);
+  if (topnavEl) topnavEl.classList.toggle("is-mobile-nav-open", open);
+  if (hamburgerBtn) hamburgerBtn.setAttribute("aria-expanded", open ? "true" : "false");
+}
+if (hamburgerBtn) {
+  // Use both touchend and click — iOS sometimes drops click on transformed/fixed parents.
+  hamburgerBtn.addEventListener("click", toggleMobileNav);
+  hamburgerBtn.addEventListener("touchend", (e) => {
+    // Prevent the synthetic click that follows touchend from double-toggling.
+    e.preventDefault();
+    toggleMobileNav();
+  }, { passive: false });
   // Tap outside the nav closes it
   document.addEventListener("click", (e) => {
-    if (!topnavEl.classList.contains("is-mobile-nav-open")) return;
+    if (!document.body.classList.contains("has-mobile-nav-open")) return;
     const nav = document.getElementById("topnav-nav");
     if (nav?.contains(e.target) || hamburgerBtn.contains(e.target)) return;
     closeMobileNav();
@@ -11759,9 +11771,10 @@ qs("#notif-btn")?.addEventListener("click", () => {
   isOpen ? closeAllPanels() : openPanel(notifPanel);
 });
 
-// ── Gear button → opens fly-in settings panel directly ───────────────────────
+// ── Gear (now inside user-dropdown) → opens fly-in settings panel ───────────
 qs("#settings-gear-btn")?.addEventListener("click", (e) => {
   e.stopPropagation();
+  closeUserDropdown();
   const isOpen = settingsPanel && !settingsPanel.hidden;
   isOpen ? closeAllPanels() : openPanel(settingsPanel);
 });

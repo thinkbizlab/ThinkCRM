@@ -502,7 +502,7 @@ body {
 
 /* ── TOP NAVIGATION ───────────────────────────────────────── */
 
-.topnav-hamburger { display: none; margin-right: var(--sp-2); }
+.topnav .topnav-hamburger { display: none; margin-right: var(--sp-2); -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
 
 .topnav {
   height: var(--nav-h);
@@ -7592,7 +7592,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 /* ── RESPONSIVE ───────────────────────────────────────────── */
 
 @media (max-width: 860px) {
-  .topnav-hamburger { display: grid; }
+  .topnav .topnav-hamburger { display: grid; }
 
   .topnav-nav {
     position: fixed;
@@ -7609,11 +7609,19 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
     box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
     overflow-y: auto;
     overflow-x: hidden;
-    transform: translateY(-110%);
-    transition: transform 0.18s ease;
-    z-index: 39;
+    visibility: hidden;
+    opacity: 0;
+    transform: translateY(-8px);
+    transition: transform 0.18s ease, opacity 0.18s ease, visibility 0s linear 0.18s;
+    z-index: 50;
   }
-  .topnav.is-mobile-nav-open .topnav-nav { transform: translateY(0); }
+  body.has-mobile-nav-open .topnav-nav,
+  .topnav.is-mobile-nav-open .topnav-nav {
+    visibility: visible;
+    opacity: 1;
+    transform: translateY(0);
+    transition: transform 0.18s ease, opacity 0.18s ease, visibility 0s linear 0s;
+  }
 
   .topnav-nav .nav-btn {
     width: 100%;
