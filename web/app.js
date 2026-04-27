@@ -9896,10 +9896,6 @@ async function searchThaiGeo(q) {
 function openNewCustomerModal(_termOptions) {
   // Remove any existing modal
   qs("#new-cust-modal")?.remove();
-
-  const termOptions = (state.cache.paymentTerms || [])
-    .map((term) => `<option value="${term.id}">${escHtml(term.code)} - ${escHtml(term.name)}</option>`)
-    .join("");
   const role = state.user?.role ?? "REP";
   const canAssignOwner = ["ADMIN", "MANAGER"].includes(role);
   const ownerOptions = canAssignOwner && state.cache.allUsers?.length
@@ -9993,7 +9989,6 @@ function openNewCustomerModal(_termOptions) {
               <label class="ncm-label" for="ncm-term">Payment Term</label>
               <select class="ncm-input" id="ncm-term" name="defaultTermId">
                 <option value="">— None —</option>
-                ${termOptions}
               </select>
             </div>
             ${canAssignOwner ? `
@@ -10054,6 +10049,21 @@ function openNewCustomerModal(_termOptions) {
   `;
 
   document.body.appendChild(overlay);
+
+  // Populate payment term select — fetch if not yet cached so the modal
+  // works even when opened before the master data page has loaded.
+  (async () => {
+    if (!Array.isArray(state.cache.paymentTerms)) {
+      try { state.cache.paymentTerms = await api("/payment-terms"); } catch { /* leave empty */ }
+    }
+    const termSelect = overlay.querySelector("#ncm-term");
+    if (termSelect && overlay.isConnected) {
+      const html = (state.cache.paymentTerms || [])
+        .map((t) => `<option value="${t.id}">${escHtml(t.code)} - ${escHtml(t.name)}</option>`)
+        .join("");
+      if (html) termSelect.insertAdjacentHTML("beforeend", html);
+    }
+  })();
 
   // Animate in
   requestAnimationFrame(() => overlay.classList.add("ncm-open"));
