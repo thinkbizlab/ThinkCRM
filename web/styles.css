@@ -1698,6 +1698,10 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 .ac-item:hover { background: var(--surface-soft) !important; color: var(--text) !important; opacity: 1 !important; }
 .ac-item-name { font-weight: 500; color: var(--text); }
 .ac-item-code { font-size: 0.75rem; color: var(--muted-color); font-weight: 500; flex-shrink: 0; }
+.ac-item--new-prospect { color: var(--accent); border-top: 1px solid var(--border); }
+.ac-item--new-prospect:hover { background: color-mix(in srgb, var(--accent) 10%, transparent) !important; color: var(--accent) !important; }
+.ac-item--new-prospect:disabled { opacity: 0.55; cursor: wait; pointer-events: none; }
+.ac-item-prospect-icon { font-style: normal; font-weight: 700; flex-shrink: 0; }
 
 .mini-form {
   display: flex;

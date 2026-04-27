@@ -11557,7 +11557,19 @@ function initCustomerAutocomplete(inputEl, listEl, hiddenEl, onSelect) {
       return;
     }
     if (reqId !== activeRequest || inputEl.value.trim() !== q) return;
-    if (!matches.length) { closeList(); return; }
+    if (!matches.length) {
+      const modal = inputEl.closest("#visit-create-modal");
+      const isUnplanned = modal
+        ? modal.querySelector('input[name="visitType"]:checked')?.value === "UNPLANNED"
+        : false;
+      if (!isUnplanned) { closeList(); return; }
+      listEl.innerHTML = `<button type="button" class="ac-item ac-item--new-prospect" id="ac-new-prospect-btn">
+        <span class="ac-item-prospect-icon">+</span>
+        <span class="ac-item-name">Check in as new prospect &ldquo;<em>${escHtml(q)}</em>&rdquo;</span>
+      </button>`;
+      openList();
+      return;
+    }
     listEl.innerHTML = matches.map((c) =>
       `<button type="button" class="ac-item" data-id="${c.id}" data-name="${escHtml(c.name)}" data-status="${escHtml(c.status || "ACTIVE")}">
          <span class="ac-item-name">${escHtml(c.name)}</span>
@@ -11575,9 +11587,32 @@ function initCustomerAutocomplete(inputEl, listEl, hiddenEl, onSelect) {
   // Prevent input blur when clicking inside the list
   listEl.addEventListener("mousedown", (e) => { e.preventDefault(); });
 
-  listEl.addEventListener("click", (e) => {
+  listEl.addEventListener("click", async (e) => {
     const item = e.target.closest(".ac-item");
     if (!item) return;
+
+    if (item.id === "ac-new-prospect-btn") {
+      const name = inputEl.value.trim();
+      item.disabled = true;
+      item.querySelector(".ac-item-name").textContent = "Creating…";
+      try {
+        const draft = await api("/customers", {
+          method: "POST",
+          body: JSON.stringify({ status: "DRAFT", name })
+        });
+        inputEl.value = draft.name;
+        hiddenEl.value = draft.id;
+        closeList();
+        onSelect?.(draft.id, draft.name);
+      } catch (err) {
+        setStatus(err?.message || "Failed to create prospect", true);
+        item.disabled = false;
+        item.querySelector(".ac-item-name").innerHTML =
+          `Check in as new prospect &ldquo;<em>${escHtml(name)}</em>&rdquo;`;
+      }
+      return;
+    }
+
     inputEl.value = item.dataset.name;
     hiddenEl.value = item.dataset.id;
     closeList();
