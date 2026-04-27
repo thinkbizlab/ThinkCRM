@@ -109,13 +109,6 @@ const customerSchema = customerSchemaBase.superRefine((data, ctx) => {
         message: "customerCode is required for ACTIVE customers."
       });
     }
-    if (!data.defaultTermId) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["defaultTermId"],
-        message: "defaultTermId is required for ACTIVE customers."
-      });
-    }
   }
 });
 const customerUpdateSchema = customerSchemaBase.omit({ customerCode: true, status: true }).partial().extend({

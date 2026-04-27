@@ -9990,8 +9990,9 @@ function openNewCustomerModal(_termOptions) {
 
           <div class="ncm-row ncm-row--2">
             <div class="ncm-field">
-              <label class="ncm-label" for="ncm-term">Payment Term <span class="ncm-req">*</span></label>
-              <select class="ncm-input" id="ncm-term" name="defaultTermId" required>
+              <label class="ncm-label" for="ncm-term">Payment Term</label>
+              <select class="ncm-input" id="ncm-term" name="defaultTermId">
+                <option value="">— None —</option>
                 ${termOptions}
               </select>
             </div>
@@ -10410,11 +10411,6 @@ function openNewCustomerModal(_termOptions) {
       parentCustomerId: parentCustomerIdRaw || undefined,
     };
 
-    if (!payload.defaultTermId) {
-      setStatus("Please select a payment term.", true);
-      overlay.querySelector("#ncm-term")?.focus();
-      return;
-    }
 
     if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "Creating…"; }
     try {
