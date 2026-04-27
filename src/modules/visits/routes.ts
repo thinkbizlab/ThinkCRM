@@ -967,7 +967,8 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
       plannedAt: z.string().datetime().optional(),
       objective: z.string().trim().min(1).optional(),
       siteLat: z.number().min(-90).max(90).nullable().optional(),
-      siteLng: z.number().min(-180).max(180).nullable().optional()
+      siteLng: z.number().min(-180).max(180).nullable().optional(),
+      dealId: z.string().min(1).nullable().optional()
     })
     .strict()
     .refine((data) => Object.keys(data).length > 0, "At least one field is required.");
@@ -991,7 +992,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.badRequest("Only planned visits can be edited.");
     }
 
-    const beforeState = { plannedAt: visit.plannedAt, objective: visit.objective, siteLat: visit.siteLat, siteLng: visit.siteLng };
+    const beforeState = { plannedAt: visit.plannedAt, objective: visit.objective, siteLat: visit.siteLat, siteLng: visit.siteLng, dealId: visit.dealId };
 
     const updated = await prisma.visit.update({
       where: { id: params.id },
@@ -999,7 +1000,8 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
         ...(parsed.data.plannedAt !== undefined && { plannedAt: new Date(parsed.data.plannedAt) }),
         ...(parsed.data.objective !== undefined && { objective: parsed.data.objective }),
         ...(parsed.data.siteLat !== undefined && { siteLat: parsed.data.siteLat }),
-        ...(parsed.data.siteLng !== undefined && { siteLng: parsed.data.siteLng })
+        ...(parsed.data.siteLng !== undefined && { siteLng: parsed.data.siteLng }),
+        ...(parsed.data.dealId !== undefined && { dealId: parsed.data.dealId })
       }
     });
 
@@ -1011,7 +1013,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
       action: "UPDATE",
       changedById: repId,
       before: beforeState,
-      after: { plannedAt: updated.plannedAt, objective: updated.objective, siteLat: updated.siteLat, siteLng: updated.siteLng },
+      after: { plannedAt: updated.plannedAt, objective: updated.objective, siteLat: updated.siteLat, siteLng: updated.siteLng, dealId: updated.dealId },
       context: { workflow: "EDIT" }
     });
 

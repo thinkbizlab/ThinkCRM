@@ -3279,7 +3279,12 @@ function renderDeals(kanban, dealsRoot = views.deals, options = {}) {
   const filteredStages = applyDealsFilter(kanban);
   const totalDeals = filteredStages.reduce((s, st) => s + st.deals.length, 0);
   const { query, suspicious, repIds, followUpFrom, followUpTo, closedFrom, closedTo } = state.dealsFilter;
-  const isRep = state.user?.role === "REP";
+  const userRole = state.user?.role || "REP";
+  const isRep = userRole === "REP";
+  const dealCanSeeTeam = ["SUPERVISOR", "MANAGER", "ASSISTANT_MANAGER", "SALES_ADMIN"].includes(userRole);
+  const dealCanSeeAll  = ["ADMIN", "DIRECTOR"].includes(userRole);
+  const dealShowScope  = dealCanSeeTeam || dealCanSeeAll;
+  if (!state.dealsScope) state.dealsScope = "team";
   const hasFilter = query || suspicious || repIds?.length || followUpFrom || followUpTo || closedFrom || closedTo;
 
   const repMap = new Map();
@@ -3331,6 +3336,13 @@ function renderDeals(kanban, dealsRoot = views.deals, options = {}) {
           ${icon('sparkles')} New Deal
         </button>
       </div>
+
+      ${dealShowScope ? `
+      <div class="cust-scope-pills" style="margin-bottom:var(--sp-2)">
+        <button class="cust-scope-pill deals-scope-pill ${state.dealsScope === "mine" ? "active" : ""}" data-scope="mine">My Deals</button>
+        <button class="cust-scope-pill deals-scope-pill ${state.dealsScope === "team" ? "active" : ""}" data-scope="team">My Team</button>
+        ${dealCanSeeAll ? `<button class="cust-scope-pill deals-scope-pill ${state.dealsScope === "all" ? "active" : ""}" data-scope="all">All</button>` : ""}
+      </div>` : ""}
 
       <div class="deals-filter-bar">
         <div class="deals-search-wrap">
@@ -3398,6 +3410,14 @@ function renderDeals(kanban, dealsRoot = views.deals, options = {}) {
     dealsRoot.querySelector("#deals-followup-to")?.addEventListener("change",   (e) => { state.dealsFilter.followUpTo   = e.target.value; rdeals(kanban); });
     dealsRoot.querySelector("#deals-closed-from")?.addEventListener("change",   (e) => { state.dealsFilter.closedFrom   = e.target.value; rdeals(kanban); });
     dealsRoot.querySelector("#deals-closed-to")?.addEventListener("change",     (e) => { state.dealsFilter.closedTo     = e.target.value; rdeals(kanban); });
+
+    dealsRoot.querySelectorAll(".deals-scope-pill").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        state.dealsScope = btn.dataset.scope;
+        showPageLoading("Loading…");
+        try { await loadDeals(); } finally { hidePageLoading(); }
+      });
+    });
   }
 
   const board = dealsRoot.querySelector(".kanban-board");
@@ -4972,12 +4992,51 @@ function renderSettings() {
                 <span class="rp-role-change-cell">
                   ${roleOptions(u)}
                   ${isAdmin ? `<button type="button" class="passkey-admin-btn ghost small" data-uid="${u.id}" data-name="${escHtml(u.fullName)}" title="Manage passkeys">${icon('key')}</button>` : ""}
+                  ${isAdmin && !isSelf ? `<button type="button" class="btn-danger-outline small rp-delete-user-btn" data-uid="${u.id}" data-name="${escHtml(u.fullName)}" title="Deactivate user">${icon('trash')}</button>` : ""}
                 </span>
               </div>`;
             }).join("")}
           </div>
         </div></div>
       </div>
+
+      ${isAdmin && (state.cache.pendingInvites || []).length ? `
+      <div class="rp-table-card" style="margin-top:var(--sp-4)">
+        <div class="rp-table-header">
+          ${icon('mail')}
+          <span class="rp-table-title">Pending Invites</span>
+          <span class="rp-user-count" style="margin-left:auto">${state.cache.pendingInvites.length} pending</span>
+        </div>
+        <div class="rp-table-scroll"><div class="rp-table">
+          <div class="rp-thead">
+            <span>Email</span>
+            <span>Role</span>
+            <span>Invited</span>
+            <span>Expires</span>
+          </div>
+          <div class="rp-tbody">
+            ${(state.cache.pendingInvites || []).map(inv => {
+              const roleLabel2 = { ADMIN: "Admin", DIRECTOR: "Sales Director", MANAGER: "Sales Manager", ASSISTANT_MANAGER: "Assistant Manager", SUPERVISOR: "Supervisor", SALES_ADMIN: "Sales Admin", REP: "Sales Rep" };
+              const roleCls2   = { ADMIN: "rp-badge--admin", DIRECTOR: "rp-badge--director", MANAGER: "rp-badge--manager", ASSISTANT_MANAGER: "rp-badge--manager", SUPERVISOR: "rp-badge--supervisor", SALES_ADMIN: "rp-badge--supervisor", REP: "rp-badge--rep" };
+              const created = new Date(inv.createdAt).toLocaleDateString();
+              const expires = new Date(inv.expiresAt).toLocaleDateString();
+              return `<div class="rp-row">
+                <div class="rp-user-cell">
+                  <div class="rp-avatar" style="background:var(--muted-color,#aaa);opacity:0.6">?</div>
+                  <div class="rp-user-info">
+                    <span class="rp-user-name">${escHtml(inv.email)}</span>
+                    <span class="rp-user-email muted">Awaiting acceptance</span>
+                  </div>
+                </div>
+                <span><span class="rp-badge ${roleCls2[inv.role] || ""}">${roleLabel2[inv.role] || inv.role}</span></span>
+                <span class="muted small">${created}</span>
+                <span class="muted small">${expires}</span>
+              </div>`;
+            }).join("")}
+          </div>
+        </div></div>
+      </div>
+      ` : ""}
 
       <div class="rp-role-guide">
         <h4 class="rp-role-guide-title">How roles work</h4>
@@ -5003,7 +5062,7 @@ function renderSettings() {
           ${state.cache.salesReps.length ? `
           <form id="kpi-form" class="settings-form">
             <div class="settings-field-row">
-              <label class="form-label">Sales Rep
+              <label class="form-label">Person
                 <select class="form-input" name="userId" required>${salesRepOptions}</select>
               </label>
               <label class="form-label">Month
@@ -5023,7 +5082,7 @@ function renderSettings() {
             </div>
             <button type="submit">Save KPI Target</button>
           </form>
-          ` : `<div class="empty-state compact"><div><strong>No active sales reps</strong><p>Create sales rep users first.</p></div></div>`}
+          ` : `<div class="empty-state compact"><div><strong>No active users</strong><p>Create users first.</p></div></div>`}
         ` : `<div class="muted small" style="padding:var(--sp-2) 0">View only — Director or Manager access required to set targets.</div>`}
       </section>
 
@@ -7699,8 +7758,27 @@ function renderSettings() {
 
   qs("#rp-refresh-btn")?.addEventListener("click", async () => {
     setStatus("Refreshing…");
-    await loadSettings();
+    state.cache.pendingInvites = null;
+    await loadSettings("roles", { force: true });
     setStatus("");
+  });
+
+  qs("#rp-tbody")?.addEventListener("click", async (e) => {
+    const btn = e.target.closest(".rp-delete-user-btn");
+    if (!btn) return;
+    const uid = btn.dataset.uid;
+    const name = btn.dataset.name || "this user";
+    if (!confirm(`Deactivate ${name}? They will no longer be able to log in.`)) return;
+    btn.disabled = true;
+    try {
+      await api(`/users/${uid}`, { method: "DELETE" });
+      state.cache.allUsers = (state.cache.allUsers || []).filter(u => u.id !== uid);
+      renderSettings();
+      setStatus(`${name} has been deactivated.`);
+    } catch (err) {
+      setStatus(err.message || "Failed to deactivate user.", true);
+      btn.disabled = false;
+    }
   });
 
   // ── Invite User (S4) ───────────────────────────────────────────
@@ -10797,7 +10875,8 @@ async function loadMaster(page = state.masterPage || "customers", options = {}) 
 }
 
 async function loadDeals() {
-  const data = await api("/deals/kanban");
+  const scope = state.dealsScope || "team";
+  const data = await api(`/deals/kanban?scope=${encodeURIComponent(scope)}`);
   state.cache.kanban = data;
   state.cache.dealStages = Array.isArray(data?.stages) ? data.stages : [];
   if (state.deal360) {
@@ -10960,6 +11039,7 @@ async function loadSettings(page = state.settingsPage || "my-profile", options =
     !Array.isArray(state.cache.integrationCredentials)
   );
   const needsDelegationData = page === "roles" && isAdmin && (force || !state.cache.delegationsLoaded);
+  const needsPendingInvites = page === "roles" && isAdmin && (force || !Array.isArray(state.cache.pendingInvites));
   const needsSyncData = isAdmin && page === "data-sync" && (
     force ||
     !Array.isArray(state.cache.syncApiKeys) ||
@@ -11033,6 +11113,13 @@ async function loadSettings(page = state.settingsPage || "my-profile", options =
       api(`/tenants/${tenantId}/integrations/credentials`).then((integrationCredentials) => {
         state.cache.integrationCredentials = integrationCredentials;
       })
+    );
+  }
+  if (needsPendingInvites) {
+    requests.push(
+      api("/users/pending-invites").then((invites) => {
+        state.cache.pendingInvites = invites;
+      }).catch(() => { state.cache.pendingInvites = []; })
     );
   }
 

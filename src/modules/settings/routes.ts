@@ -2215,10 +2215,33 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     const tenantId = requireTenantId(request);
     const visibleIds = [...(await listVisibleUserIds(request))];
     return prisma.user.findMany({
-      where: { id: { in: visibleIds }, tenantId, role: UserRole.REP, isActive: true },
-      select: { id: true, fullName: true, teamId: true, avatarUrl: true },
+      where: { id: { in: visibleIds }, tenantId, isActive: true },
+      select: { id: true, fullName: true, role: true, teamId: true, avatarUrl: true },
       orderBy: { fullName: "asc" }
     });
+  });
+
+  app.get("/users/pending-invites", async (request) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+    const invites = await prisma.userInvite.findMany({
+      where: { tenantId, acceptedAt: null, expiresAt: { gt: new Date() } },
+      select: { id: true, email: true, role: true, teamId: true, createdAt: true, expiresAt: true },
+      orderBy: { createdAt: "desc" }
+    });
+    return invites;
+  });
+
+  app.delete("/users/:id", async (request, reply) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+    const actorId = requireUserId(request);
+    const params = request.params as { id: string };
+    if (params.id === actorId) throw app.httpErrors.badRequest("You cannot delete your own account.");
+    const user = await prisma.user.findFirst({ where: { id: params.id, tenantId } });
+    if (!user) throw app.httpErrors.notFound("User not found.");
+    await prisma.user.update({ where: { id: params.id }, data: { isActive: false } });
+    return reply.code(204).send();
   });
 
   app.post("/kpi-targets", async (request, reply) => {

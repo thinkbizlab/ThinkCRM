@@ -709,11 +709,22 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
 
   app.get("/deals/kanban", async (request) => {
     const tenantId = requireTenantId(request);
-    const visibleUserIdList = [...(await listVisibleUserIds(request))];
+    const requesterId = requireUserId(request);
+    const requesterRole = request.requestContext.role as string;
+    const { scope } = request.query as { scope?: string };
+    let ownerFilter: { in: string[] } | undefined;
+    if (scope === "mine") {
+      ownerFilter = { in: [requesterId] };
+    } else if (scope === "all" && (requesterRole === "ADMIN" || requesterRole === "DIRECTOR")) {
+      ownerFilter = undefined;
+    } else {
+      const visibleUserIdList = [...(await listVisibleUserIds(request))];
+      ownerFilter = { in: visibleUserIdList };
+    }
     const [stages, deals] = await Promise.all([
       prisma.dealStage.findMany({ where: { tenantId }, orderBy: { stageOrder: "asc" } }),
       prisma.deal.findMany({
-        where: { tenantId, ownerId: { in: visibleUserIdList } },
+        where: { tenantId, ...(ownerFilter ? { ownerId: ownerFilter } : {}) },
         include: {
           customer: { select: { id: true, name: true } },
           stage: true,

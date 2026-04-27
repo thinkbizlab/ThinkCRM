@@ -406,7 +406,7 @@ export function closeVisitCreateModal() {
   if (modal) modal.hidden = true;
 }
 
-export function openVisitEditModal(visit) {
+export async function openVisitEditModal(visit) {
   const modal = qs("#visit-edit-modal");
   if (!modal) return;
   qs("#visit-edit-id").value = visit.id;
@@ -435,6 +435,24 @@ export function openVisitEditModal(visit) {
     preview.hidden = true;
     pickBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> Pick on Map`;
   }
+
+  const dealSel = qs("#visit-edit-deal-select");
+  if (dealSel) {
+    dealSel.innerHTML = '<option value="">— No deal —</option>';
+    if (visit.customerId) {
+      try {
+        const deals = await api(`/deals?customerId=${encodeURIComponent(visit.customerId)}`);
+        for (const d of deals) {
+          const opt = document.createElement("option");
+          opt.value = d.id;
+          opt.textContent = d.title || d.id;
+          if (d.id === visit.dealId) opt.selected = true;
+          dealSel.appendChild(opt);
+        }
+      } catch { /* leave empty on error */ }
+    }
+  }
+
   modal.hidden = false;
 }
 
@@ -961,6 +979,7 @@ qs("#visit-detail-close")?.addEventListener("click", () => closeVisitDetailPanel
     const objective = qs("#visit-edit-objective").value.trim();
     const latRaw = qs("#visit-edit-site-lat").value;
     const lngRaw = qs("#visit-edit-site-lng").value;
+    const dealSelVal = qs("#visit-edit-deal-select")?.value ?? null;
     const body = {};
     if (plannedAt) body.plannedAt = new Date(plannedAt).toISOString();
     if (objective) body.objective = objective;
@@ -971,6 +990,7 @@ qs("#visit-detail-close")?.addEventListener("click", () => closeVisitDetailPanel
       body.siteLat = null;
       body.siteLng = null;
     }
+    body.dealId = dealSelVal || null;
     if (!Object.keys(body).length) {
       closeVisitEditModal();
       return;
