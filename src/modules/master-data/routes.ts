@@ -190,6 +190,24 @@ function resolveCustomFieldEntityType(raw: string, app: Parameters<FastifyPlugin
 }
 
 
+async function peekNextCrmCode(tenantId: string): Promise<string> {
+  const rows = await prisma.customer.findMany({
+    where: { tenantId, customerCode: { startsWith: "C-" } },
+    select: { customerCode: true }
+  });
+  let maxNum = 0;
+  for (const { customerCode } of rows) {
+    const m = customerCode?.match(/^C-(\d+)$/i);
+    if (m) maxNum = Math.max(maxNum, parseInt(m[1]!, 10));
+  }
+  return `C-${String(maxNum + 1).padStart(6, "0")}`;
+}
+
+// Returns true if the code looks like an auto-generated CRM code (C-NNNNNN).
+// These are re-derived server-side at insert time to prevent race conditions
+// when two users open the new-customer form simultaneously.
+const AUTO_CODE_RE = /^C-\d+$/i;
+
 export const masterDataRoutes: FastifyPluginAsync = async (app) => {
   async function findCustomerInScopeOrThrow(input: {
     tenantId: string;
@@ -444,17 +462,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
 
   app.get("/customers/next-crm-code", async (request) => {
     const tenantId = requireTenantId(request);
-    // Find the highest numeric suffix among existing C-NNNNNN codes.
-    const rows = await prisma.customer.findMany({
-      where: { tenantId, customerCode: { startsWith: "C-" } },
-      select: { customerCode: true }
-    });
-    let maxNum = 0;
-    for (const { customerCode } of rows) {
-      const m = customerCode?.match(/^C-(\d+)$/i);
-      if (m) maxNum = Math.max(maxNum, parseInt(m[1]!, 10));
-    }
-    return { code: `C-${String(maxNum + 1).padStart(6, "0")}` };
+    return { code: await peekNextCrmCode(tenantId) };
   });
 
   app.get("/customers", async (request) => {
@@ -680,7 +688,13 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    if (parsed.data.customerCode) {
+    const isAutoCode = !parsed.data.customerCode || AUTO_CODE_RE.test(parsed.data.customerCode);
+
+    // Only validate manually-typed codes for duplicates up front.
+    // Auto-generated codes (C-NNNNNN) are re-derived inside the transaction
+    // to eliminate the race condition where two users open the form at the
+    // same time and both receive the same preview code.
+    if (parsed.data.customerCode && !isAutoCode) {
       const codeDuplicate = await prisma.customer.findFirst({
         where: { tenantId, customerCode: parsed.data.customerCode },
         select: { id: true }
@@ -710,38 +724,57 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       where: { tenantId, entityType: EntityType.CUSTOMER }
     });
     const customFields = validateCustomFields(app, definitions, parsed.data.customFields ?? {});
-    const created = await prisma.$transaction(async (tx) => {
-      const row = await tx.customer.create({
-        data: {
-          tenantId,
-          status: isDraft ? "DRAFT" : "ACTIVE",
-          customerCode: parsed.data.customerCode ?? null,
-          name: parsed.data.name,
-          customerType: parsed.data.customerType ?? CustomerType.COMPANY,
-          taxId: parsed.data.taxId,
-          branchCode,
-          parentCustomerId: parsed.data.parentCustomerId ?? null,
-          defaultTermId: parsed.data.defaultTermId ?? null,
-          customerGroupId: parsed.data.customerGroupId ?? null,
-          ownerId,
-          createdByUserId: changedById,
-          draftCreatedByUserId: isDraft ? changedById : null,
-          customFields
-        }
-      });
-      await writeEntityChangelog({
-        db: tx,
-        tenantId,
-        entityType: EntityType.CUSTOMER,
-        entityId: row.id,
-        action: "CREATE",
-        changedById,
-        after: row,
-        context: isDraft ? { reason: "draft_created_in_field" } : undefined
-      });
-      return row;
-    });
-    return reply.code(201).send(created);
+
+    // Retry loop for auto-code allocation: if two inserts race and collide on
+    // the unique (tenantId, customerCode) index, re-derive and try again.
+    const MAX_CODE_RETRIES = 5;
+    let created;
+    for (let attempt = 0; attempt < MAX_CODE_RETRIES; attempt++) {
+      const customerCode = isAutoCode
+        ? await peekNextCrmCode(tenantId)
+        : (parsed.data.customerCode ?? null);
+      try {
+        created = await prisma.$transaction(async (tx) => {
+          const row = await tx.customer.create({
+            data: {
+              tenantId,
+              status: isDraft ? "DRAFT" : "ACTIVE",
+              customerCode,
+              name: parsed.data.name,
+              customerType: parsed.data.customerType ?? CustomerType.COMPANY,
+              taxId: parsed.data.taxId,
+              branchCode,
+              parentCustomerId: parsed.data.parentCustomerId ?? null,
+              defaultTermId: parsed.data.defaultTermId ?? null,
+              customerGroupId: parsed.data.customerGroupId ?? null,
+              ownerId,
+              createdByUserId: changedById,
+              draftCreatedByUserId: isDraft ? changedById : null,
+              customFields
+            }
+          });
+          await writeEntityChangelog({
+            db: tx,
+            tenantId,
+            entityType: EntityType.CUSTOMER,
+            entityId: row.id,
+            action: "CREATE",
+            changedById,
+            after: row,
+            context: isDraft ? { reason: "draft_created_in_field" } : undefined
+          });
+          return row;
+        });
+        break; // success
+      } catch (err) {
+        const isCodeCollision = isAutoCode &&
+          err instanceof Prisma.PrismaClientKnownRequestError &&
+          err.code === "P2002";
+        if (!isCodeCollision || attempt === MAX_CODE_RETRIES - 1) throw err;
+        // else: another insert won the race — loop and re-derive the next code
+      }
+    }
+    return reply.code(201).send(created!);
   });
 
   app.patch("/customers/:id", async (request) => {
