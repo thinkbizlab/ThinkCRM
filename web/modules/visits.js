@@ -16,7 +16,9 @@ let deps = {
   openMapPicker: async () => {},
   openDeal360: async () => {},
   loadMyTasks: async () => {},
-  attachOnBehalfOfField: async () => null
+  attachOnBehalfOfField: async () => null,
+  openCheckInModal: () => {},
+  openCheckOutModal: () => {}
 };
 
 export function setVisitsDeps(d) {
@@ -110,7 +112,7 @@ function buildVisitListHtml(visits, q) {
               <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
             </button>
             ${isOwn && visit.status !== "CHECKED_OUT" ? `
-              <button type="button" class="visit-action ${visit.status === "CHECKED_IN" ? "btn-success" : ""}" data-visit-id="${visit.id}" data-visit-status="${visit.status}">
+              <button type="button" class="visit-action ${visit.status === "CHECKED_IN" ? "btn-success" : ""}" data-visit-id="${visit.id}" data-visit-status="${visit.status}" data-visit-customer="${escHtml(visit.customer?.name || "")}">
                 ${visit.status === "PLANNED"
                   ? `<svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> Check In`
                   : `<svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg> Check Out`
@@ -142,28 +144,20 @@ function attachVisitListListeners(container) {
   });
 
   container.querySelectorAll(".visit-action").forEach((btn) => {
-    btn.addEventListener("click", async () => {
+    btn.addEventListener("click", () => {
       const id = btn.dataset.visitId;
       const status = btn.dataset.visitStatus;
-      try {
-        if (status === "PLANNED") {
-          await api(`/visits/${id}/checkin`, {
-            method: "POST",
-            body: { lat: 13.7563, lng: 100.5018, selfieUrl: "r2://demo/selfie.jpg" }
-          });
-          setStatus("Checked in.");
-        } else if (status === "CHECKED_IN") {
-          const result = window.prompt("Visit outcome / result:", "");
-          if (result === null) return;
-          await api(`/visits/${id}/checkout`, {
-            method: "POST",
-            body: { lat: 13.7564, lng: 100.5019, result: result || "Completed." }
-          });
-          setStatus("Visit completed.");
+      const customer = btn.dataset.visitCustomer || "";
+      if (status === "PLANNED") {
+        // Match the My Tasks behaviour: only one active check-in at a time.
+        const active = document.querySelectorAll('.visit-action[data-visit-status="CHECKED_IN"]');
+        if (active.length > 0) {
+          setStatus("Please complete your current check-out before starting a new check-in.", true);
+          return;
         }
-        await loadVisits();
-      } catch (error) {
-        setStatus(error.message, true);
+        deps.openCheckInModal(id, customer, () => loadVisits());
+      } else if (status === "CHECKED_IN") {
+        deps.openCheckOutModal(id, customer, () => loadVisits());
       }
     });
   });

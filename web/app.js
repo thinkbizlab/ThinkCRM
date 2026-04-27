@@ -431,7 +431,9 @@ async function ensureVisitsModule() {
       openMapPicker: openMapPickerLazy,
       openDeal360,
       loadMyTasks,
-      attachOnBehalfOfField
+      attachOnBehalfOfField,
+      openCheckInModal,
+      openCheckOutModal
     });
     visitsModuleInitialized = true;
   }
@@ -3790,7 +3792,7 @@ function renderMyTasks(data) {
 
 // ── Check-In Modal ─────────────────────────────────────────────────────────────
 
-function openCheckInModal(visitId, customerName) {
+function openCheckInModal(visitId, customerName, onSuccess) {
   qs("#mt-checkin-modal")?.remove();
 
   document.body.insertAdjacentHTML("beforeend", `
@@ -3934,6 +3936,9 @@ function openCheckInModal(visitId, customerName) {
       showNotifWarnings(checkinRes?.notifWarnings);
       closeModal();
       await loadMyTasks();
+      if (typeof onSuccess === "function") {
+        try { await onSuccess(); } catch (err) { setStatus(err?.message || "Refresh failed.", true); }
+      }
     } catch (e) {
       setStatus(e.message, true);
       confirmBtn.disabled = false;
@@ -3944,7 +3949,7 @@ function openCheckInModal(visitId, customerName) {
 
 // ── Check-Out Modal ─────────────────────────────────────────────────────────────
 
-function openCheckOutModal(visitId, customerName) {
+function openCheckOutModal(visitId, customerName, onSuccess) {
   qs("#mt-checkout-modal")?.remove();
 
   const nowIso = (() => {
@@ -4136,6 +4141,9 @@ function openCheckOutModal(visitId, customerName) {
     }
 
     try { await loadMyTasks(); } catch (e) { setStatus(e.message, true); }
+    if (typeof onSuccess === "function") {
+      try { await onSuccess(); } catch (err) { setStatus(err?.message || "Refresh failed.", true); }
+    }
   });
 }
 
