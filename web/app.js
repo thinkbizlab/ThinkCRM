@@ -15,7 +15,7 @@ import {
   authScreen, appScreen, statusBar, pageTitle,
   views, pageTitleMap,
   switchView, showApp, showAppLoading, hideAppLoading, showAuth, showTrialBanner,
-  setStatus
+  setStatus, showPageLoading, hidePageLoading
 } from "./modules/dom.js";
 import { loadOAuthProviderButtons, wireOAuthProviderButtons, consumeOAuthCallback } from "./modules/oauth.js";
 import { icon } from "./modules/icons.js";
@@ -2715,13 +2715,13 @@ function renderMasterData(paymentTerms = []) {
   views.master.querySelectorAll(".master-page-btn").forEach((btn) => {
     btn.addEventListener("click", async () => {
       navigateToMasterPage(btn.dataset.page);
-      setStatus("Loading…");
+      showPageLoading("Loading…");
       try {
         await loadMaster(btn.dataset.page);
       } catch (err) {
         setStatus(err.message || "Failed to load master data.", true);
       } finally {
-        setStatus("");
+        hidePageLoading();
       }
     });
   });
@@ -8637,7 +8637,7 @@ function installMasterPageSizeDelegation() {
       : key === "customerGroup" ? "#cg-list-body" : null;
     const listEl = listSel ? document.querySelector(listSel) : null;
     if (listEl) listEl.classList.add("master-list-loading");
-    setStatus("Loading…");
+    showPageLoading("Loading…");
     // Defer re-render so the loading class paints before work.
     requestAnimationFrame(() => {
       try {
@@ -8659,7 +8659,7 @@ function installMasterPageSizeDelegation() {
       } finally {
         const el = listSel ? document.querySelector(listSel) : null;
         if (el) el.classList.remove("master-list-loading");
-        setStatus("");
+        hidePageLoading();
       }
     });
   });
@@ -9141,9 +9141,8 @@ function attachCustBodyDelegation(bodyEl) {
         customer,
         termOptionsHtml,
         onPromoted: async () => {
-          setStatus("Loading…");
-          await loadMaster();
-          setStatus("");
+          showPageLoading("Loading…");
+          try { await loadMaster(); } finally { hidePageLoading(); }
         }
       });
       return;
@@ -9207,13 +9206,13 @@ function attachCustBodyDelegation(bodyEl) {
       const v = t.value === "all" ? "all" : Number(t.value);
       setMasterPageSize("customer", v);
       state.customerListPage = 1;
-      setStatus("Loading…");
+      showPageLoading("Loading…");
       bodyEl.classList.add("master-list-loading");
       requestAnimationFrame(() => {
         try { refreshCustBody(bodyEl, bodyEl._custCtx?.termOptions || ""); }
         finally {
           bodyEl.classList.remove("master-list-loading");
-          setStatus("");
+          hidePageLoading();
         }
       });
     }
@@ -9621,9 +9620,8 @@ function renderCustomerListSection(container, termOptions) {
     btn.addEventListener("click", async () => {
       state.customerScope = btn.dataset.scope;
       state.customerListPage = 1;
-      setStatus("Loading…");
-      await loadMaster();
-      setStatus("");
+      showPageLoading("Loading…");
+      try { await loadMaster(); } finally { hidePageLoading(); }
     });
   });
 
@@ -9635,9 +9633,8 @@ function renderCustomerListSection(container, termOptions) {
   container.querySelector("#cust-open-draft-modal")?.addEventListener("click", () => {
     openDraftCustomerModal({
       onCreated: async () => {
-        setStatus("Loading…");
-        await loadMaster();
-        setStatus("");
+        showPageLoading("Loading…");
+        try { await loadMaster(); } finally { hidePageLoading(); }
       }
     });
   });
@@ -11901,13 +11898,13 @@ masterMenu?.querySelectorAll(".nav-dropdown-item").forEach((item) => {
     navigateToMasterPage(page);
     switchView("master");
     updateMasterDropdownActive();
+    showPageLoading("Loading…");
     try {
-      setStatus("Loading…");
       await loadMaster(page);
     } catch (error) {
       setStatus(error.message, true);
     } finally {
-      setStatus("");
+      hidePageLoading();
     }
   });
 });
@@ -11984,6 +11981,7 @@ document.querySelectorAll(".nav-btn").forEach((btn) => {
     }
     closeMasterDropdown();
     switchView(target);
+    showPageLoading("Loading…");
     try {
       if (target === "repHub") {
         await loadRepHubContext();
@@ -12002,6 +12000,8 @@ document.querySelectorAll(".nav-btn").forEach((btn) => {
       if (target === "settings") await loadSettings(state.settingsPage);
     } catch (error) {
       setStatus(error.message, true);
+    } finally {
+      hidePageLoading();
     }
   });
 });
@@ -12164,10 +12164,13 @@ settingsPanel?.addEventListener("click", async (ev) => {
     navigateToSettingsPage(settingsPage);
   }
   switchView(target);
+  showPageLoading("Loading…");
   try {
     if (target === "settings") await loadSettings(settingsPage || state.settingsPage);
   } catch (error) {
     setStatus(error.message, true);
+  } finally {
+    hidePageLoading();
   }
 });
 
@@ -12211,6 +12214,7 @@ window.addEventListener("popstate", async () => {
     state.c360 = null;
     state.deal360 = null;
     switchView(simpleView);
+    showPageLoading("Loading…");
     try {
       if (simpleView === "repHub") {
         await loadRepHubContext();
@@ -12227,6 +12231,7 @@ window.addEventListener("popstate", async () => {
       }
       if (simpleView === "integrations") await loadIntegrations();
     } catch (e) { setStatus(e.message, true); }
+    finally { hidePageLoading(); }
   }
 });
 
