@@ -442,6 +442,21 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     });
   });
 
+  app.get("/customers/next-crm-code", async (request) => {
+    const tenantId = requireTenantId(request);
+    // Find the highest numeric suffix among existing C-NNNNNN codes.
+    const rows = await prisma.customer.findMany({
+      where: { tenantId, customerCode: { startsWith: "C-" } },
+      select: { customerCode: true }
+    });
+    let maxNum = 0;
+    for (const { customerCode } of rows) {
+      const m = customerCode?.match(/^C-(\d+)$/i);
+      if (m) maxNum = Math.max(maxNum, parseInt(m[1]!, 10));
+    }
+    return { code: `C-${String(maxNum + 1).padStart(6, "0")}` };
+  });
+
   app.get("/customers", async (request) => {
     const tenantId = requireTenantId(request);
     const requesterId = requireUserId(request);
@@ -661,6 +676,18 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
         }
         throw app.httpErrors.conflict(
           `Tax ID "${parsed.data.taxId}" branch "${branchCode}" is already registered to customer "${taxIdDuplicate.name}" (${taxIdDuplicate.customerCode ?? "DRAFT"}).`
+        );
+      }
+    }
+
+    if (parsed.data.customerCode) {
+      const codeDuplicate = await prisma.customer.findFirst({
+        where: { tenantId, customerCode: parsed.data.customerCode },
+        select: { id: true }
+      });
+      if (codeDuplicate) {
+        throw app.httpErrors.conflict(
+          `Customer code "${parsed.data.customerCode}" is already in use. Please enter a different code.`
         );
       }
     }

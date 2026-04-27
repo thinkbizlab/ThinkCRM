@@ -10227,15 +10227,12 @@ function openNewCustomerModal(termOptions) {
   // Auto-suggest next CRM-internal customer code (C-NNNNNN). When an ERP
   // sync later matches by Tax ID, the connector framework renames this
   // C-XXXXXX placeholder to the ERP's customerCode automatically.
+  // We fetch from the server so the counter is never off due to paging.
   const codeInput = overlay.querySelector("#ncm-code");
   if (codeInput) {
-    const codes = (state.cache.customers || []).map((c) => c.customerCode);
-    let maxNum = 0;
-    for (const code of codes) {
-      const m = code?.match(/^C-(\d+)$/i);
-      if (m) maxNum = Math.max(maxNum, parseInt(m[1], 10));
-    }
-    codeInput.value = `C-${String(maxNum + 1).padStart(6, "0")}`;
+    api("/customers/next-crm-code").then(({ code }) => {
+      if (codeInput.isConnected && !codeInput.value) codeInput.value = code;
+    }).catch(() => {});
   }
 
   // ── DBD Lookup ──
@@ -10416,12 +10413,18 @@ function openNewCustomerModal(termOptions) {
       customerType: String(formData.get("customerType") ?? "COMPANY"),
       taxId:        taxIdRaw || undefined,
       branchCode:   branchCodeRaw || undefined,
-      defaultTermId: String(formData.get("defaultTermId") ?? ""),
+      defaultTermId: String(formData.get("defaultTermId") ?? "").trim() || undefined,
       ownerId:      String(formData.get("ownerId") ?? state.user?.id ?? ""),
       externalRef:  externalRefRaw || undefined,
       customerGroupId: customerGroupIdRaw || undefined,
       parentCustomerId: parentCustomerIdRaw || undefined,
     };
+
+    if (!payload.defaultTermId) {
+      setStatus("Please select a payment term.", true);
+      overlay.querySelector("#ncm-term")?.focus();
+      return;
+    }
 
     if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "Creating…"; }
     try {
