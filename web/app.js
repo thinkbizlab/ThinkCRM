@@ -2584,7 +2584,7 @@ function renderMasterData(paymentTerms = []) {
     const listEl = qs("#pt-list-body");
     const pagEl  = qs("#pt-pagination");
     if (!listEl || !pagEl) return;
-    const all = paymentTerms;
+    const all = state.cache.paymentTerms || [];
     const ps = getMasterPageSize("paymentTerm");
     const totalPages = Math.max(1, Math.ceil(all.length / (ps === Infinity ? Math.max(1, all.length) : ps)));
     state.paymentTermListPage = Math.min(Math.max(1, state.paymentTermListPage || 1), totalPages);
@@ -9893,10 +9893,13 @@ async function searchThaiGeo(q) {
   }
 }
 
-function openNewCustomerModal(termOptions) {
+function openNewCustomerModal(_termOptions) {
   // Remove any existing modal
   qs("#new-cust-modal")?.remove();
 
+  const termOptions = (state.cache.paymentTerms || [])
+    .map((term) => `<option value="${term.id}">${escHtml(term.code)} - ${escHtml(term.name)}</option>`)
+    .join("");
   const role = state.user?.role ?? "REP";
   const canAssignOwner = ["ADMIN", "MANAGER"].includes(role);
   const ownerOptions = canAssignOwner && state.cache.allUsers?.length
@@ -10449,15 +10452,15 @@ function openNewCustomerModal(termOptions) {
 
 // ── Edit Customer Modal ───────────────────────────────────────────────────────
 
-function openEditCustomerModal(cust, termOptions) {
+function openEditCustomerModal(cust, _termOptions) {
   qs("#edit-cust-modal")?.remove();
   const overlay = document.createElement("div");
   overlay.id = "edit-cust-modal";
   overlay.className = "ncm-overlay";
 
-  const termOpts = (termOptions || []).map(
-    (t) => `<option value="${t.id}" ${t.id === cust.defaultTermId ? "selected" : ""}>${escHtml(t.code)} — ${escHtml(t.name)}</option>`
-  ).join("");
+  const termOpts = (state.cache.paymentTerms || [])
+    .map((t) => `<option value="${t.id}" ${t.id === cust.defaultTermId ? "selected" : ""}>${escHtml(t.code)} — ${escHtml(t.name)}</option>`)
+    .join("");
 
   overlay.innerHTML = `
     <div class="ncm-panel" style="max-width:480px">
