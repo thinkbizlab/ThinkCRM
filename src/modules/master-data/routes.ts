@@ -523,7 +523,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     const tenantId = requireTenantId(request);
     const visibleUserIdList = [...(await listVisibleUserIds(request))];
     const params = request.params as { id: string };
-    const isCode = /^[A-Za-z]+-\d+$/.test(params.id);
+    const isCode = params.id.includes("-");
     const where = isCode
       ? { customerCode: params.id, tenantId, ownerId: { in: visibleUserIdList } }
       : { id: params.id, tenantId, ownerId: { in: visibleUserIdList } };
@@ -548,7 +548,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     const tenantId = requireTenantId(request);
     const visibleUserIdList = [...(await listVisibleUserIds(request))];
     const params = request.params as { id: string };
-    const isCode = /^[A-Za-z]+-\d+$/.test(params.id);
+    const isCode = params.id.includes("-");
     const customerWhere = isCode
       ? { customerCode: params.id, tenantId, ownerId: { in: visibleUserIdList } }
       : { id: params.id, tenantId, ownerId: { in: visibleUserIdList } };
