@@ -15,7 +15,8 @@ let deps = {
   c360Initials: (n) => (n || "?").slice(0, 2).toUpperCase(),
   navigateToView: () => {},
   renderDeals: () => {},
-  showToast: () => {}
+  showToast: () => {},
+  openVisitDetail: () => {}
 };
 
 export function setDeal360Deps(d) {
@@ -218,7 +219,7 @@ function renderDeal360TabContent(d360) {
           const vDate = new Date(v.plannedAt || v.createdAt);
           const statusColor = v.status === "CHECKED_OUT" ? "won" : v.status === "CHECKED_IN" ? "open" : "muted";
           return `
-            <div class="c360-visit-row">
+            <div class="c360-visit-row c360-visit-row--clickable" data-visit-id="${escHtml(v.id)}" role="button" tabindex="0">
               <div class="c360-visit-date">
                 <strong>${vDate.getDate()}</strong>
                 <span>${vDate.toLocaleDateString("en-GB", { month: "short", year: "2-digit" })}</span>
@@ -423,6 +424,18 @@ function bindDeal360TabListeners() {
   // Customer tab — open c360
   views.deals.querySelectorAll(".d360-open-cust").forEach((btn) => {
     btn.addEventListener("click", () => openCustomer360(btn.dataset.id, btn.dataset.code));
+  });
+
+  // Visits tab — open visit-detail drawer
+  views.deals.querySelectorAll(".c360-visit-row--clickable").forEach((row) => {
+    const open = () => {
+      const id = row.dataset.visitId;
+      if (id) deps.openVisitDetail(id);
+    };
+    row.addEventListener("click", open);
+    row.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); }
+    });
   });
 
   // r2:// attachment download buttons — fetch presigned URL on demand

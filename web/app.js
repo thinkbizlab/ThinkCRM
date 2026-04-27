@@ -409,7 +409,8 @@ async function ensureDeal360Module() {
       c360Initials,
       navigateToView,
       renderDeals,
-      showToast: (message, type) => setStatus(message, type === "error")
+      showToast: (message, type) => setStatus(message, type === "error"),
+      openVisitDetail
     });
     deal360ModuleInitialized = true;
   }
