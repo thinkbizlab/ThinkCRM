@@ -2,7 +2,7 @@
 // (Progress / Customer / Visits / Changelog). App-level helpers
 // (`asMoney`, `avatarColor`, `c360Initials`, navigation, toasts) are
 // injected via `setDeal360Deps()`.
-import { views, switchView, setStatus } from "./dom.js";
+import { views, switchView, setStatus, showPageLoading, hidePageLoading } from "./dom.js";
 import { state } from "./state.js";
 import { api } from "./api.js";
 import { escHtml, fmtDateTime } from "./utils.js";
@@ -41,7 +41,7 @@ export async function openDeal360(dealId, dealNo) {
   const urlNo = dealNo || dealId;
   navigateToDeal360(urlNo);
   switchView("deals");
-  setStatus("Loading deal…");
+  showPageLoading("Loading deal…");
   try {
     const [deal, progress, visits] = await Promise.all([
       api(`/deals/${dealId}`),
@@ -57,10 +57,11 @@ export async function openDeal360(dealId, dealNo) {
       } catch { /* role may not be permitted */ }
     }
     state.deal360 = { deal, progress, visits, changelog, activeTab: "progress", canSeeChangelog };
-    setStatus("");
     renderDeal360();
   } catch (error) {
     setStatus(error.message, true);
+  } finally {
+    hidePageLoading();
   }
 }
 

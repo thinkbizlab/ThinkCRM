@@ -2,7 +2,7 @@
 // (Deals / Visits / Contacts / Addresses / Overview). App-level helpers
 // (`asMoney`, `avatarColor`, `c360Initials`, routing + modal openers,
 // `renderMasterData`) are injected via `setCustomer360Deps()`.
-import { qs, views, switchView, setStatus } from "./dom.js";
+import { qs, views, switchView, setStatus, showPageLoading, hidePageLoading } from "./dom.js";
 import { state } from "./state.js";
 import { api } from "./api.js";
 import { escHtml } from "./utils.js";
@@ -31,14 +31,15 @@ export async function openCustomer360(customerIdOrCode, customerCode) {
   const urlCode = customerCode || customerIdOrCode;
   deps.navigateToCustomer360(urlCode);
   switchView("master");
-  setStatus("Loading customer…");
+  showPageLoading("Loading customer…");
   try {
     const { customer, deals, visits, children } = await api(`/customers/${encodeURIComponent(customerIdOrCode)}/360`);
     state.c360 = { customer, deals, visits, children: children || [], activeTab: "deals" };
-    setStatus("");
     renderCustomer360();
   } catch (error) {
     setStatus(error.message, true);
+  } finally {
+    hidePageLoading();
   }
 }
 

@@ -374,6 +374,17 @@
         <!-- Demo-data banner — persistent across views (admins on TRIALING tenants only) -->
         <div id="demo-data-banner" hidden></div>
 
+        <!-- Full-screen loading overlay — shown during long async loads (Customer 360, Deal 360) to block stray clicks -->
+        <div id="page-loading" class="page-loading" hidden>
+          <div class="page-loading-inner">
+            <svg class="page-loading-spinner" width="40" height="40" viewBox="0 0 36 36">
+              <circle cx="18" cy="18" r="15" fill="none" stroke="rgba(255,255,255,0.25)" stroke-width="3"/>
+              <circle cx="18" cy="18" r="15" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-dasharray="70 100"/>
+            </svg>
+            <span id="page-loading-text" class="page-loading-text">Loading…</span>
+          </div>
+        </div>
+
         <!-- MAIN CONTENT BODY -->
         <div class="app-body">
           <!-- Loading overlay — shown while data loads after login / page refresh -->
