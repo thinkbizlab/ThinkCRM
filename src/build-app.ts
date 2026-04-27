@@ -115,6 +115,16 @@ function trustProxyFromConfig(): boolean {
   );
 }
 
+// Build version: identifies the current deploy. Vercel populates
+// VERCEL_GIT_COMMIT_SHA on every build. Falls back to BUILD_VERSION env var
+// for non-Vercel envs, then "dev" for local. Used to:
+//   1) version the <script src="/app.js?v=..."> tag in the rendered HTML
+//   2) answer GET /api/version so the client can detect stale builds
+const BUILD_VERSION =
+  process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 12) ??
+  process.env.BUILD_VERSION ??
+  "dev";
+
 export async function buildApp() {
   const app = Fastify({
     logger: { level: config.NODE_ENV === "production" ? "warn" : "info" },
@@ -548,8 +558,14 @@ export async function buildApp() {
         app.log.warn({ err, host }, "[shell] branding render failed — serving default shell");
       }
     }
+    rendered = rendered.replace(
+      /<script type="module" src="\/app\.js\?v=[^"]+"><\/script>/,
+      `<script type="module" src="/app.js?v=${encodeURIComponent(BUILD_VERSION)}"></script>`
+    );
     return reply.type("text/html; charset=utf-8").send(rendered);
   }
+
+  app.get("/api/version", async () => ({ version: BUILD_VERSION }));
 
   app.get("/", async (request, reply) => renderAppShell(request, reply));
   app.get("/dashboard", async (request, reply) => renderAppShell(request, reply));

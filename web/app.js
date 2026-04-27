@@ -21,6 +21,33 @@ import { loadOAuthProviderButtons, wireOAuthProviderButtons, consumeOAuthCallbac
 import { icon } from "./modules/icons.js";
 import { openDraftCustomerModal, openPromoteDraftModal, draftBadgeHtml, setDraftCustomerDeps } from "./modules/customer-drafts.js";
 
+// Build version: extracted from this script's own URL (?v=...). Used to
+// version dynamic imports so a deploy bumping the version forces fresh
+// module fetches instead of serving stale immutable cache.
+const MODULE_VERSION = (() => {
+  try { return new URL(import.meta.url).searchParams.get("v") || ""; }
+  catch { return ""; }
+})();
+const MV = MODULE_VERSION ? `?v=${MODULE_VERSION}` : "";
+
+// On boot, ask the server what the current build is. If we're running an
+// older app.js (cached across a deploy), reload once so the fresh HTML
+// pulls a fresh app.js URL. Session guard prevents reload loops.
+(async function checkBuildVersion() {
+  if (!MODULE_VERSION) return;
+  try {
+    const res = await fetch("/api/version", { cache: "no-store" });
+    if (!res.ok) return;
+    const { version } = await res.json();
+    if (!version || version === MODULE_VERSION) return;
+    const KEY = "thinkcrm:version-reload-at";
+    const lastReloadAt = Number(sessionStorage.getItem(KEY) || "0");
+    if (Date.now() - lastReloadAt < 60_000) return;
+    sessionStorage.setItem(KEY, String(Date.now()));
+    location.reload();
+  } catch { /* network / parse failures: stay on current build */ }
+})();
+
 setDraftCustomerDeps({
   getCustomerGroups: () => state.cache.customerGroups || []
 });
@@ -106,7 +133,7 @@ state.deal360 = state.deal360 ?? null;
 
 async function ensureDelegationsModule() {
   if (!delegationsModulePromise) {
-    delegationsModulePromise = import("./modules/delegations.js").then((module) => {
+    delegationsModulePromise = import(`./modules/delegations.js${MV}`).then((module) => {
       module.setDelegationsDeps({
         setStatus,
         escHtml,
@@ -121,7 +148,7 @@ async function ensureDelegationsModule() {
 
 async function ensureCronPickerModule() {
   if (!cronPickerModulePromise) {
-    cronPickerModulePromise = import("./modules/cron-picker.js").then((module) => {
+    cronPickerModulePromise = import(`./modules/cron-picker.js${MV}`).then((module) => {
       cronPickerModule = module;
       return module;
     });
@@ -131,7 +158,7 @@ async function ensureCronPickerModule() {
 
 async function ensureCustomFieldsModule() {
   if (!customFieldsModulePromise) {
-    customFieldsModulePromise = import("./modules/custom-fields.js").then((module) => {
+    customFieldsModulePromise = import(`./modules/custom-fields.js${MV}`).then((module) => {
       customFieldsModule = module;
       return module;
     });
@@ -141,7 +168,7 @@ async function ensureCustomFieldsModule() {
 
 async function ensureThemePresetsModule() {
   if (!themePresetsModulePromise) {
-    themePresetsModulePromise = import("./modules/theme-presets.js").then((module) => {
+    themePresetsModulePromise = import(`./modules/theme-presets.js${MV}`).then((module) => {
       themePresetsModule = module;
       return module;
     });
@@ -151,7 +178,7 @@ async function ensureThemePresetsModule() {
 
 async function ensureSettingsAdminModule() {
   if (!settingsAdminModulePromise) {
-    settingsAdminModulePromise = import("./modules/settings-admin.js").then((module) => {
+    settingsAdminModulePromise = import(`./modules/settings-admin.js${MV}`).then((module) => {
       module.setSettingsAdminDeps({
         CURRENCIES,
         getActiveCurrency,
@@ -260,14 +287,14 @@ function detectPresetSlug(tokens) {
 
 function ensureSuperAdminAnalytics() {
   if (!superAdminAnalyticsPromise) {
-    superAdminAnalyticsPromise = import("./modules/super-admin-analytics.js");
+    superAdminAnalyticsPromise = import(`./modules/super-admin-analytics.js${MV}`);
   }
   return superAdminAnalyticsPromise;
 }
 
 function ensureVoiceNoteModule() {
   if (!voiceNoteModulePromise) {
-    voiceNoteModulePromise = import("./modules/voice-note.js").then((module) => {
+    voiceNoteModulePromise = import(`./modules/voice-note.js${MV}`).then((module) => {
       module.bindVoiceNoteModal({ onConfirmed: handleVoiceNoteConfirmed });
       return module;
     });
@@ -277,14 +304,14 @@ function ensureVoiceNoteModule() {
 
 function ensurePasskeyModule() {
   if (!passkeyModulePromise) {
-    passkeyModulePromise = import("./modules/passkey.js");
+    passkeyModulePromise = import(`./modules/passkey.js${MV}`);
   }
   return passkeyModulePromise;
 }
 
 async function ensureMapPickerModule() {
   if (!mapPickerModulePromise) {
-    mapPickerModulePromise = import("./modules/map-picker.js");
+    mapPickerModulePromise = import(`./modules/map-picker.js${MV}`);
   }
   const module = await mapPickerModulePromise;
   module.setMapPickerDeps({ setStatus });
@@ -341,7 +368,7 @@ function handleLazyModuleError(error) {
 
 async function ensureDashboardModule() {
   if (!dashboardModulePromise) {
-    dashboardModulePromise = import("./modules/dashboard.js");
+    dashboardModulePromise = import(`./modules/dashboard.js${MV}`);
   }
   const module = await dashboardModulePromise;
   if (!dashboardModuleInitialized) {
@@ -358,7 +385,7 @@ async function ensureDashboardModule() {
 
 async function ensureCalendarModule() {
   if (!calendarModulePromise) {
-    calendarModulePromise = import("./modules/calendar.js");
+    calendarModulePromise = import(`./modules/calendar.js${MV}`);
   }
   const module = await calendarModulePromise;
   if (!calendarModuleInitialized) {
@@ -375,7 +402,7 @@ async function ensureCalendarModule() {
 
 async function ensureCustomer360Module() {
   if (!customer360ModulePromise) {
-    customer360ModulePromise = import("./modules/customer-360.js");
+    customer360ModulePromise = import(`./modules/customer-360.js${MV}`);
   }
   const module = await customer360ModulePromise;
   if (!customer360ModuleInitialized) {
@@ -399,7 +426,7 @@ async function ensureCustomer360Module() {
 async function ensureDeal360Module() {
   await ensureCustomer360Module();
   if (!deal360ModulePromise) {
-    deal360ModulePromise = import("./modules/deal-360.js");
+    deal360ModulePromise = import(`./modules/deal-360.js${MV}`);
   }
   const module = await deal360ModulePromise;
   if (!deal360ModuleInitialized) {
@@ -419,7 +446,7 @@ async function ensureDeal360Module() {
 
 async function ensureVisitsModule() {
   if (!visitsModulePromise) {
-    visitsModulePromise = import("./modules/visits.js");
+    visitsModulePromise = import(`./modules/visits.js${MV}`);
   }
   const module = await visitsModulePromise;
   if (!visitsModuleInitialized) {
@@ -539,7 +566,7 @@ function showEventDetail(...args) {
 
 async function ensureQuickSearchModule() {
   if (!quickSearchModulePromise) {
-    quickSearchModulePromise = import("./modules/quick-search.js");
+    quickSearchModulePromise = import(`./modules/quick-search.js${MV}`);
   }
   const module = await quickSearchModulePromise;
   if (!quickSearchInitialized) {
@@ -585,7 +612,7 @@ async function toggleQuickSearchLazy() {
 
 async function ensureOnboardingWizardModule() {
   if (!onboardingWizardModulePromise) {
-    onboardingWizardModulePromise = import("./modules/onboarding-wizard.js");
+    onboardingWizardModulePromise = import(`./modules/onboarding-wizard.js${MV}`);
   }
   const module = await onboardingWizardModulePromise;
   if (!onboardingWizardInitialized) {
@@ -606,7 +633,7 @@ async function ensureOnboardingWizardModule() {
 
 async function ensureDemoDataModule() {
   if (!demoDataModulePromise) {
-    demoDataModulePromise = import("./modules/demo-data.js");
+    demoDataModulePromise = import(`./modules/demo-data.js${MV}`);
   }
   const module = await demoDataModulePromise;
   if (!demoDataInitialized) {
