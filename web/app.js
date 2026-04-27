@@ -441,7 +441,8 @@ async function ensureDeal360Module() {
       showToast: (message, type) => setStatus(message, type === "error"),
       openVisitDetail,
       openCheckInModal,
-      openCheckOutModal
+      openCheckOutModal,
+      openVisitCreateModal
     });
     deal360ModuleInitialized = true;
   }
@@ -3195,14 +3196,11 @@ function renderDealCard(deal, kanban) {
       </div>
       <div class="deal-card-footer">
         <span class="deal-assignee"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>${escHtml(deal.owner?.fullName || "Unassigned")}</span>
-        <button class="deal-detail-btn" data-id="${deal.id}" data-no="${escHtml(deal.dealNo)}" title="Open deal detail">
-          <svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-        </button>
       </div>
       <div class="deal-card-actions">
         <select class="deal-stage-select" data-id="${deal.id}">${stageOptions}</select>
         <button class="deal-stage-save" data-id="${deal.id}">Move</button>
-        <button type="button" class="voice-note-btn ghost" data-entity-type="DEAL" data-entity-id="${deal.id}" title="Voice note">${icon('mic')}</button>
+        <button type="button" class="deal-detail-btn ghost" data-id="${deal.id}" data-no="${escHtml(deal.dealNo)}" title="Open Deal 360">${icon('eye')}</button>
       </div>
       ${stageProgressPct !== null ? `<div class="deal-stage-progress"><span style="width:${stageProgressPct}%"></span></div>` : ""}
     </div>
@@ -3526,14 +3524,6 @@ function renderDeals(kanban, dealsRoot = views.deals, options = {}) {
       } catch (error) {
         setStatus(error.message, true);
       }
-    });
-  });
-
-  dealsRoot.querySelectorAll(".voice-note-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const card = btn.closest(".deal-card");
-      const label = card?.querySelector(".deal-name")?.textContent?.trim() || "";
-      void openVoiceNoteDialog(btn.dataset.entityType, btn.dataset.entityId, label);
     });
   });
 
@@ -10234,16 +10224,18 @@ function openNewCustomerModal(termOptions) {
   addAddressBlock();
   addContactBlock();
 
-  // Auto-suggest next customer code (CUST-NNNNNN)
+  // Auto-suggest next CRM-internal customer code (C-NNNNNN). When an ERP
+  // sync later matches by Tax ID, the connector framework renames this
+  // C-XXXXXX placeholder to the ERP's customerCode automatically.
   const codeInput = overlay.querySelector("#ncm-code");
   if (codeInput) {
     const codes = (state.cache.customers || []).map((c) => c.customerCode);
     let maxNum = 0;
     for (const code of codes) {
-      const m = code.match(/^CUST-(\d+)$/i);
+      const m = code?.match(/^C-(\d+)$/i);
       if (m) maxNum = Math.max(maxNum, parseInt(m[1], 10));
     }
-    codeInput.value = `CUST-${String(maxNum + 1).padStart(6, "0")}`;
+    codeInput.value = `C-${String(maxNum + 1).padStart(6, "0")}`;
   }
 
   // ── DBD Lookup ──

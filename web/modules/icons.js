@@ -59,6 +59,7 @@ const P = {
   activity:   '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>',
   chevronDown:'<path d="m6 9 6 6 6-6"/>',
   chevronUp:  '<path d="m6 15 6-6 6 6"/>',
+  eye:        '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
 };
 
 export function icon(name, size = 16, className = "") {
