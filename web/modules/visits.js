@@ -522,14 +522,27 @@ function renderVisitDetailContent(visit, changelogs) {
   const diffInfo = fmtDiffLabel(plannedVsActualMs);
   const isOwnVisit = visit.rep?.id === state.user?.id;
   const canEdit = isOwnVisit && visit.status === "PLANNED";
+  const canCheckIn = isOwnVisit && visit.status === "PLANNED";
+  const canCheckOut = isOwnVisit && visit.status === "CHECKED_IN";
+  const customerNameForModal = escHtml(visit.customer?.name || "");
   const heroHtml = `
     <div class="vd-hero">
       <div class="vd-hero-top">
         <div class="vd-hero-customer">${escHtml(visit.customer?.name || "—")}</div>
-        ${canEdit ? `<button type="button" class="ghost small vd-edit-btn" data-visit-id="${visit.id}" title="Edit visit">
-          <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-          Edit
-        </button>` : ""}
+        <div class="vd-hero-actions">
+          ${canCheckIn ? `<button type="button" class="primary small vd-checkin-btn" data-visit-id="${visit.id}" data-visit-customer="${customerNameForModal}" title="Check in">
+            <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+            Check In
+          </button>` : ""}
+          ${canCheckOut ? `<button type="button" class="primary small btn-success vd-checkout-btn" data-visit-id="${visit.id}" data-visit-customer="${customerNameForModal}" title="Check out">
+            <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+            Check Out
+          </button>` : ""}
+          ${canEdit ? `<button type="button" class="ghost small vd-edit-btn" data-visit-id="${visit.id}" title="Edit visit">
+            <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            Edit
+          </button>` : ""}
+        </div>
       </div>
       <div class="vd-hero-meta">
         ${visit.visitNo ? `<span class="vd-hero-visitno">${escHtml(visit.visitNo)}</span>` : ""}
@@ -732,6 +745,25 @@ function renderVisitDetailContent(visit, changelogs) {
   visitDetailBody.innerHTML = heroHtml + customerHtml + dealHtml + timingHtml + objectiveHtml + resultHtml + locationHtml + voiceNotesHtml + changelogHtml;
 
   visitDetailBody.querySelector(".vd-edit-btn")?.addEventListener("click", () => openVisitEditModal(visit));
+
+  visitDetailBody.querySelector(".vd-checkin-btn")?.addEventListener("click", (ev) => {
+    const btn = ev.currentTarget;
+    const id = btn.dataset.visitId;
+    const customer = btn.dataset.visitCustomer || "";
+    const active = document.querySelectorAll('.visit-action[data-visit-status="CHECKED_IN"]');
+    if (active.length > 0) {
+      setStatus("Please complete your current check-out before starting a new check-in.", true);
+      return;
+    }
+    deps.openCheckInModal(id, customer, () => openVisitDetail(id));
+  });
+
+  visitDetailBody.querySelector(".vd-checkout-btn")?.addEventListener("click", (ev) => {
+    const btn = ev.currentTarget;
+    const id = btn.dataset.visitId;
+    const customer = btn.dataset.visitCustomer || "";
+    deps.openCheckOutModal(id, customer, () => openVisitDetail(id));
+  });
 
   if (visit.voiceNotes?.length) {
     visitDetailBody.querySelectorAll(".vd-vn-item").forEach(async (item) => {

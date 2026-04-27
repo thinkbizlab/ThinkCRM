@@ -8434,12 +8434,23 @@ button.cust-badge-contact:hover { opacity: 0.7; }
   gap: var(--sp-2);
 }
 
-.vd-edit-btn {
+.vd-edit-btn,
+.vd-checkin-btn,
+.vd-checkout-btn {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   gap: 4px;
   font-size: 0.78rem;
+}
+
+.vd-hero-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .vd-hero-customer {
