@@ -18,7 +18,8 @@ let deps = {
   showToast: () => {},
   openVisitDetail: () => {},
   openCheckInModal: () => {},
-  openCheckOutModal: () => {}
+  openCheckOutModal: () => {},
+  openVisitCreateModal: () => {}
 };
 
 export function setDeal360Deps(d) {
@@ -357,6 +358,13 @@ export function renderDeal360() {
               </div>
             </div>
           </div>
+          ${c?.id ? `
+          <div class="c360-header-actions">
+            <button class="c360-action ghost" id="d360-plan-visit">
+              <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+              Plan Visit
+            </button>
+          </div>` : ""}
         </div>
 
         <div class="c360-kpi-strip">
@@ -419,6 +427,14 @@ export function renderDeal360() {
     navigateToView("deals");
     switchView("deals");
     if (state.cache.kanban) renderDeals(state.cache.kanban);
+  });
+
+  views.deals.querySelector("#d360-plan-visit")?.addEventListener("click", () => {
+    if (!c?.id) return;
+    deps.openVisitCreateModal({
+      customer: { id: c.id, name: c.name },
+      deal: { id: deal.id, dealName: deal.dealName, status: deal.status, stage: deal.stage }
+    });
   });
 
   views.deals.querySelectorAll(".c360-tab-btn").forEach((btn) => {

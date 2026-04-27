@@ -392,29 +392,8 @@ export function renderCustomer360() {
     });
   }
 
-  views.master.querySelector("#c360-schedule-visit")?.addEventListener("click", async () => {
-    deps.openVisitCreateModal();
-    const modal = qs("#visit-create-modal");
-    if (!modal) return;
-    const hid = modal.querySelector("#visit-customer-id");
-    const inp = modal.querySelector("#visit-customer-input");
-    if (hid) hid.value = customer.id;
-    if (inp) inp.value = customer.name;
-    const dealLabel  = modal.querySelector("#visit-deal-label");
-    const dealSelect = modal.querySelector("#visit-deal-select");
-    if (dealLabel && dealSelect) {
-      dealSelect.innerHTML = `<option value="">Loading…</option>`;
-      dealLabel.hidden = false;
-      try {
-        const deals = await api(`/deals?customerId=${encodeURIComponent(customer.id)}`);
-        const active = deals.filter((d) => d.status !== "WON" && d.status !== "LOST");
-        dealSelect.innerHTML = active.length
-          ? `<option value="">— No deal —</option>` + active.map((d) => `<option value="${d.id}">${escHtml(d.dealName)}${d.stage?.stageName ? " · " + escHtml(d.stage.stageName) : ""}</option>`).join("")
-          : `<option value="">— No open deals —</option>`;
-      } catch {
-        dealSelect.innerHTML = `<option value="">— Could not load deals —</option>`;
-      }
-    }
+  views.master.querySelector("#c360-schedule-visit")?.addEventListener("click", () => {
+    deps.openVisitCreateModal({ customer: { id: customer.id, name: customer.name } });
   });
 
   views.master.querySelector("#c360-create-deal")?.addEventListener("click", () => {

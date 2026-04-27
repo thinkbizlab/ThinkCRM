@@ -325,14 +325,20 @@ export function renderVisits(visits) {
   qs("#add-visit-btn")?.addEventListener("click", () => openVisitCreateModal());
 }
 
-export function openVisitCreateModal(dateTime) {
+export function openVisitCreateModal(arg) {
   const modal = qs("#visit-create-modal");
   if (!modal) return;
+  // Accept either a legacy Date/string positional arg (calendar grid clicks)
+  // or an options object { dateTime, customer, deal } (Customer 360 / Deal 360).
+  const opts = (arg && typeof arg === "object" && !(arg instanceof Date))
+    ? arg
+    : { dateTime: arg };
+  const { dateTime, customer, deal } = opts;
   const input = modal.querySelector("#visit-customer-input");
   const hiddenId = modal.querySelector("#visit-customer-id");
   const list = modal.querySelector("#visit-customer-list");
-  if (input) input.value = "";
-  if (hiddenId) hiddenId.value = "";
+  if (input) input.value = customer?.name ?? "";
+  if (hiddenId) hiddenId.value = customer?.id ?? "";
   if (list) list.hidden = true;
   const dealLabel = modal.querySelector("#visit-deal-label");
   const dealSelect = modal.querySelector("#visit-deal-select");
@@ -364,6 +370,34 @@ export function openVisitCreateModal(dateTime) {
   const fields = form?.querySelector(".visit-modal-fields");
   if (fields && deps.attachOnBehalfOfField) {
     deps.attachOnBehalfOfField(fields).catch(() => {});
+  }
+  // Prefill customer + load that customer's open deals (and optionally
+  // pre-select one). We do this *after* clearing the customer input above so
+  // the modal always opens in a clean state for non-prefilled callers.
+  if (customer?.id && dealLabel && dealSelect) {
+    dealLabel.hidden = false;
+    dealSelect.innerHTML = `<option value="">Loading…</option>`;
+    api(`/deals?customerId=${encodeURIComponent(customer.id)}`)
+      .then((deals) => {
+        const active = deals.filter((d) => d.status !== "WON" && d.status !== "LOST");
+        // Make sure the prefilled deal stays selectable even if it's already
+        // closed (a user opening Deal 360 for a closed deal still wants to
+        // log a visit against it).
+        const list = (deal && !active.some((d) => d.id === deal.id))
+          ? [deal, ...active]
+          : active;
+        if (!list.length) {
+          dealSelect.innerHTML = `<option value="">— No open deals —</option>`;
+        } else {
+          dealSelect.innerHTML =
+            `<option value="">— No deal —</option>` +
+            list.map((d) => `<option value="${escHtml(d.id)}">${escHtml(d.dealName)}${d.stage?.stageName ? " · " + escHtml(d.stage.stageName) : ""}</option>`).join("");
+          if (deal?.id) dealSelect.value = deal.id;
+        }
+      })
+      .catch(() => {
+        dealSelect.innerHTML = `<option value="">— Could not load deals —</option>`;
+      });
   }
 }
 

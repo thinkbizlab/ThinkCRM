@@ -602,8 +602,12 @@ async function upsertEntity(
         return;
       }
 
-      // No DRAFT match — keep the friendly pre-check against ACTIVE customers
-      // so we return a clear error message before the unique constraint fires.
+      // No DRAFT match — look for an ACTIVE customer with the same
+      // (Tax ID, branchCode). If its code is a CRM-internal placeholder
+      // (C-NNNNNN, generated when a rep created the customer in CRM before
+      // ERP sync ran), rename it to the ERP's customerCode and update its
+      // fields. This is the inverse of the DRAFT-promotion path: the row
+      // already exists ACTIVE, we're just adopting the ERP-issued code.
       const activeTaxIdDuplicate = await prisma.customer.findFirst({
         where: {
           tenantId,
@@ -612,9 +616,52 @@ async function upsertEntity(
           status: "ACTIVE",
           NOT: { customerCode: payload.customerCode }
         },
-        select: { customerCode: true, name: true, branchCode: true }
+        select: {
+          id: true, customerCode: true, name: true, branchCode: true,
+          defaultTermId: true, status: true, externalRef: true, customerType: true
+        }
       });
       if (activeTaxIdDuplicate) {
+        const isCrmInternalCode = /^C-\d+$/i.test(activeTaxIdDuplicate.customerCode ?? "");
+        if (isCrmInternalCode) {
+          await prisma.customer.update({
+            where: { id: activeTaxIdDuplicate.id },
+            data: {
+              customerCode: payload.customerCode,
+              name: payload.name,
+              customerType: payload.customerType ?? undefined,
+              branchCode: incomingBranchCode,
+              ownerId: resolvedOwnerId,
+              siteLat: payload.siteLat ?? undefined,
+              siteLng: payload.siteLng ?? undefined,
+              externalRef: payload.externalRef ?? undefined,
+              disabled: payload.disabled ?? undefined,
+              defaultTermId,
+              customFields: validatedCf ?? undefined
+            }
+          });
+          await prisma.entityChangelog.create({
+            data: {
+              tenantId,
+              entityType: EntityType.CUSTOMER,
+              entityId: activeTaxIdDuplicate.id,
+              action: "UPDATE",
+              beforeJson: activeTaxIdDuplicate as unknown as Prisma.InputJsonValue,
+              afterJson: {
+                customerCode: payload.customerCode,
+                name: payload.name,
+                branchCode: incomingBranchCode
+              } as Prisma.InputJsonValue,
+              contextJson: {
+                reason: "renamed_crm_internal_code_via_sync",
+                previousCode: activeTaxIdDuplicate.customerCode,
+                taxId: payload.taxId,
+                branchCode: incomingBranchCode
+              } as Prisma.InputJsonValue
+            }
+          });
+          return;
+        }
         throw new Error(
           `Tax ID "${payload.taxId}" branch "${incomingBranchCode}" is already registered to customer "${activeTaxIdDuplicate.name}" (${activeTaxIdDuplicate.customerCode}).`
         );
