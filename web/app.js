@@ -416,7 +416,9 @@ async function ensureCustomer360Module() {
       openVisitCreateModal,
       openDealCreateModal: openDealCreateModalWithContext,
       openDeal360,
-      openVisitDetail
+      openVisitDetail,
+      openCheckInModal,
+      openCheckOutModal
     });
     customer360ModuleInitialized = true;
   }
@@ -437,7 +439,9 @@ async function ensureDeal360Module() {
       navigateToView,
       renderDeals,
       showToast: (message, type) => setStatus(message, type === "error"),
-      openVisitDetail
+      openVisitDetail,
+      openCheckInModal,
+      openCheckOutModal
     });
     deal360ModuleInitialized = true;
   }

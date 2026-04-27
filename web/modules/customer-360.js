@@ -18,7 +18,9 @@ let deps = {
   openVisitCreateModal: () => {},
   openDealCreateModal: () => {},
   openDeal360: () => {},
-  openVisitDetail: () => {}
+  openVisitDetail: () => {},
+  openCheckInModal: () => {},
+  openCheckOutModal: () => {}
 };
 
 export function setCustomer360Deps(d) {
@@ -120,11 +122,16 @@ function renderC360TabContent(c360) {
 
   if (activeTab === "visits") {
     if (!visits.length) return `<div class="c360-empty"><div class="c360-empty-icon">${icon('location')}</div>No visits recorded for this customer.</div>`;
+    const customerNameForModal = escHtml(customer.name || "");
+    const myUserId = state.user?.id;
     return `
       <div style="border:1px solid var(--border);border-radius:var(--r-md);overflow:hidden;margin-top:var(--sp-4)">
         ${visits.map((v) => {
           const vDate = new Date(v.plannedAt || v.createdAt);
           const notes = v.voiceNoteTranscript || v.notes || "";
+          const isOwnVisit = v.rep?.id === myUserId;
+          const canCheckIn = isOwnVisit && v.status === "PLANNED";
+          const canCheckOut = isOwnVisit && v.status === "CHECKED_IN";
           return `
             <div class="c360-visit-row c360-visit-row--clickable" data-visit-id="${escHtml(v.id)}" role="button" tabindex="0">
               <div class="c360-visit-date">
@@ -135,7 +142,17 @@ function renderC360TabContent(c360) {
                 <div class="c360-visit-rep">${escHtml(v.rep?.fullName ?? v.repName ?? "—")}</div>
                 ${notes ? `<div class="c360-visit-notes">${escHtml(notes)}</div>` : ""}
               </div>
-              <span class="badge badge--${v.status === "COMPLETED" ? "won" : v.status === "CANCELLED" ? "lost" : "open"}">${v.status ?? "—"}</span>
+              <div class="c360-visit-actions">
+                ${canCheckIn ? `<button type="button" class="primary small c360-visit-checkin-btn" data-visit-id="${escHtml(v.id)}" data-visit-customer="${customerNameForModal}" title="Check in">
+                  <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                  Check In
+                </button>` : ""}
+                ${canCheckOut ? `<button type="button" class="primary small btn-success c360-visit-checkout-btn" data-visit-id="${escHtml(v.id)}" data-visit-customer="${customerNameForModal}" title="Check out">
+                  <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+                  Check Out
+                </button>` : ""}
+                <span class="badge badge--${v.status === "COMPLETED" ? "won" : v.status === "CANCELLED" ? "lost" : "open"}">${v.status ?? "—"}</span>
+              </div>
             </div>`;
         }).join("")}
       </div>`;
@@ -313,6 +330,20 @@ export function renderCustomer360() {
   const tabContent = views.master.querySelector("#c360-tab-content");
   if (tabContent) {
     const handleRowActivate = (target) => {
+      const checkInBtn = target.closest(".c360-visit-checkin-btn");
+      if (checkInBtn) {
+        const id = checkInBtn.dataset.visitId;
+        const customer = checkInBtn.dataset.visitCustomer;
+        if (id) deps.openCheckInModal(id, customer, () => openCustomer360(state.c360?.customer?.id || id));
+        return;
+      }
+      const checkOutBtn = target.closest(".c360-visit-checkout-btn");
+      if (checkOutBtn) {
+        const id = checkOutBtn.dataset.visitId;
+        const customer = checkOutBtn.dataset.visitCustomer;
+        if (id) deps.openCheckOutModal(id, customer, () => openCustomer360(state.c360?.customer?.id || id));
+        return;
+      }
       const dealRow = target.closest(".c360-deal-row--clickable");
       if (dealRow) {
         const id = dealRow.dataset.dealId;

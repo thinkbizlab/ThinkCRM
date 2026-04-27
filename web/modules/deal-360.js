@@ -16,7 +16,9 @@ let deps = {
   navigateToView: () => {},
   renderDeals: () => {},
   showToast: () => {},
-  openVisitDetail: () => {}
+  openVisitDetail: () => {},
+  openCheckInModal: () => {},
+  openCheckOutModal: () => {}
 };
 
 export function setDeal360Deps(d) {
@@ -214,11 +216,16 @@ function renderDeal360TabContent(d360) {
     if (!visits.length) {
       return `<div class="c360-empty"><div class="c360-empty-icon">${icon('location')}</div>No visits linked to this deal yet.</div>`;
     }
+    const customerNameForModal = escHtml(deal.customer?.name || "");
+    const myUserId = state.user?.id;
     return `
       <div style="border:1px solid var(--border);border-radius:var(--r-md);overflow:hidden;margin-top:var(--sp-4)">
         ${visits.map((v) => {
           const vDate = new Date(v.plannedAt || v.createdAt);
           const statusColor = v.status === "CHECKED_OUT" ? "won" : v.status === "CHECKED_IN" ? "open" : "muted";
+          const isOwnVisit = v.rep?.id === myUserId;
+          const canCheckIn = isOwnVisit && v.status === "PLANNED";
+          const canCheckOut = isOwnVisit && v.status === "CHECKED_IN";
           return `
             <div class="c360-visit-row c360-visit-row--clickable" data-visit-id="${escHtml(v.id)}" role="button" tabindex="0">
               <div class="c360-visit-date">
@@ -230,7 +237,15 @@ function renderDeal360TabContent(d360) {
                 ${v.objective ? `<div class="c360-visit-notes">${escHtml(v.objective)}</div>` : ""}
                 ${v.result ? `<div class="c360-visit-notes" style="color:var(--text-muted)">${escHtml(v.result)}</div>` : ""}
               </div>
-              <div style="display:flex;flex-direction:column;align-items:flex-end;gap:var(--sp-1)">
+              <div class="c360-visit-actions">
+                ${canCheckIn ? `<button type="button" class="primary small c360-visit-checkin-btn" data-visit-id="${escHtml(v.id)}" data-visit-customer="${customerNameForModal}" title="Check in">
+                  <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+                  Check In
+                </button>` : ""}
+                ${canCheckOut ? `<button type="button" class="primary small btn-success c360-visit-checkout-btn" data-visit-id="${escHtml(v.id)}" data-visit-customer="${customerNameForModal}" title="Check out">
+                  <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+                  Check Out
+                </button>` : ""}
                 <span class="badge badge--${statusColor}">${v.status}</span>
                 <span class="muted small">${v.visitType}</span>
               </div>
@@ -427,15 +442,38 @@ function bindDeal360TabListeners() {
     btn.addEventListener("click", () => openCustomer360(btn.dataset.id, btn.dataset.code));
   });
 
-  // Visits tab — open visit-detail drawer
+  // Visits tab — inline Check In/Out buttons (handled before row navigation)
+  views.deals.querySelectorAll(".c360-visit-checkin-btn").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.visitId;
+      const customer = btn.dataset.visitCustomer;
+      const dealId = state.deal360?.deal?.id;
+      const dealNo = state.deal360?.deal?.dealNo;
+      if (id) deps.openCheckInModal(id, customer, () => { if (dealId) openDeal360(dealId, dealNo); });
+    });
+  });
+  views.deals.querySelectorAll(".c360-visit-checkout-btn").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.visitId;
+      const customer = btn.dataset.visitCustomer;
+      const dealId = state.deal360?.deal?.id;
+      const dealNo = state.deal360?.deal?.dealNo;
+      if (id) deps.openCheckOutModal(id, customer, () => { if (dealId) openDeal360(dealId, dealNo); });
+    });
+  });
+
+  // Visits tab — open visit-detail drawer (skip when click target is a button)
   views.deals.querySelectorAll(".c360-visit-row--clickable").forEach((row) => {
-    const open = () => {
+    const open = (e) => {
+      if (e?.target instanceof Element && e.target.closest("button")) return;
       const id = row.dataset.visitId;
       if (id) deps.openVisitDetail(id);
     };
     row.addEventListener("click", open);
     row.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); }
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(e); }
     });
   });
 

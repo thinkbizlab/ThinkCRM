@@ -4632,6 +4632,24 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 .c360-visit-row--clickable { cursor: pointer; }
 .c360-visit-row--clickable:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
 
+.c360-visit-actions {
+  margin-left: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--sp-1);
+}
+.c360-visit-actions .small {
+  white-space: nowrap;
+}
+.c360-visit-checkin-btn,
+.c360-visit-checkout-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.78rem;
+}
+
 .c360-visit-date {
   font-size: 0.8rem;
   font-weight: 600;
