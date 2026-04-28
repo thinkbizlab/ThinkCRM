@@ -20,6 +20,7 @@ import {
 import { loadOAuthProviderButtons, wireOAuthProviderButtons, consumeOAuthCallback } from "./modules/oauth.js";
 import { icon } from "./modules/icons.js";
 import { openDraftCustomerModal, openPromoteDraftModal, draftBadgeHtml, setDraftCustomerDeps } from "./modules/customer-drafts.js";
+import { enqueue, markDone, markFailed, markSyncing, getPendingOps, getQueueCount, clearQueue } from "./modules/offline-queue.js";
 
 // Build version: extracted from this script's own URL (?v=...). Used to
 // version dynamic imports so a deploy bumping the version forces fresh
@@ -3832,6 +3833,29 @@ function renderMyTasks(data) {
   });
 }
 
+// ── Offline optimistic update ─────────────────────────────────────────────────
+// Applies a new status to a visit in all local caches so the UI reflects the
+// queued state before the server confirms. Rolled back implicitly on next reload.
+function applyOptimisticVisitStatus(visitId, newStatus) {
+  if (Array.isArray(state.cache.visits)) {
+    const v = state.cache.visits.find(v => v.id === visitId);
+    if (v) v.status = newStatus;
+  }
+  const allBucketArrays = [
+    state.cache.myTasks?.pinned?.checkedInWaitingCheckout,
+    state.cache.myTasks?.buckets?.overdue,
+    state.cache.myTasks?.buckets?.today,
+    state.cache.myTasks?.buckets?.tomorrow,
+    state.cache.myTasks?.buckets?.next_week,
+    state.cache.myTasks?.buckets?.next_month
+  ];
+  for (const bucket of allBucketArrays) {
+    if (!Array.isArray(bucket)) continue;
+    const ev = bucket.find(e => e.type === "visit" && e.entityId === visitId);
+    if (ev) ev.status = newStatus;
+  }
+}
+
 // ── Check-In Modal ─────────────────────────────────────────────────────────────
 
 function openCheckInModal(visitId, customerName, onSuccess) {
@@ -3969,11 +3993,28 @@ function openCheckInModal(visitId, customerName, onSuccess) {
   confirmBtn.addEventListener("click", async () => {
     confirmBtn.disabled = true;
     confirmBtn.textContent = "Checking in…";
+
+    const capturedAt = new Date().toISOString();
+    const payload = { lat: coords.lat, lng: coords.lng, selfieUrl: selfieDataUrl || "no-selfie", capturedAt };
+
+    if (!navigator.onLine) {
+      try {
+        await enqueue({ type: "CHECKIN", visitId, endpoint: `/visits/${visitId}/checkin`, method: "POST", payload });
+        applyOptimisticVisitStatus(visitId, "CHECKED_IN");
+        if (state.cache.myTasks) renderMyTasks(state.cache.myTasks);
+        setStatus("Queued — will sync when you reconnect.");
+        updateSyncBadge();
+        closeModal();
+      } catch (qErr) {
+        setStatus("Failed to queue check-in: " + qErr.message, true);
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = "Confirm Check-In";
+      }
+      return;
+    }
+
     try {
-      const checkinRes = await api(`/visits/${visitId}/checkin`, {
-        method: "POST",
-        body: { lat: coords.lat, lng: coords.lng, selfieUrl: selfieDataUrl || "no-selfie" }
-      });
+      const checkinRes = await api(`/visits/${visitId}/checkin`, { method: "POST", body: payload });
       setStatus("Checked in successfully.");
       showNotifWarnings(checkinRes?.notifWarnings);
       closeModal();
@@ -4127,12 +4168,28 @@ function openCheckOutModal(visitId, customerName, onSuccess) {
     confirmBtn.disabled = true;
     confirmBtn.textContent = "Saving…";
 
+    const capturedAt = new Date().toISOString();
+    const payload = { lat: checkoutCoords?.lat ?? 0, lng: checkoutCoords?.lng ?? 0, result, capturedAt };
+
+    if (!navigator.onLine) {
+      try {
+        await enqueue({ type: "CHECKOUT", visitId, endpoint: `/visits/${visitId}/checkout`, method: "POST", payload });
+        applyOptimisticVisitStatus(visitId, "CHECKED_OUT");
+        if (state.cache.myTasks) renderMyTasks(state.cache.myTasks);
+        setStatus("Check-out queued — will sync when you reconnect.");
+        updateSyncBadge();
+        closeModal();
+      } catch (qErr) {
+        setStatus("Failed to queue check-out: " + qErr.message, true);
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = "Confirm Check-Out";
+      }
+      return;
+    }
+
     let checkoutRes;
     try {
-      checkoutRes = await api(`/visits/${visitId}/checkout`, {
-        method: "POST",
-        body: { lat: checkoutCoords?.lat ?? 0, lng: checkoutCoords?.lng ?? 0, result }
-      });
+      checkoutRes = await api(`/visits/${visitId}/checkout`, { method: "POST", body: payload });
     } catch (e) {
       setStatus(e.message, true);
       confirmBtn.disabled = false;
@@ -8928,6 +8985,7 @@ function idleSignOut() {
   state.cache.cronJobs = undefined;
   _notifPrefsCache = null;
   clearTokens();
+  clearQueue().catch(() => {});
   stopHeartbeat();
   showAuth();
   if (authMessage) authMessage.textContent = "Signed out due to inactivity. Please sign in again.";
@@ -11938,6 +11996,7 @@ qs("#logout-btn").addEventListener("click", () => {
   state.cache.cronJobs = undefined;
   _notifPrefsCache = null;
   clearTokens();
+  clearQueue().catch(() => {});
   stopHeartbeat();
   showAuth();
   authMessage.textContent = "";
@@ -12409,10 +12468,88 @@ async function bootstrap() {
     hideAppLoading();
     scheduleAdminChromeRefresh();
     startIdleWatch();
+    initOfflineSupport().catch(() => {});
   } catch {
     clearTokens();
+    clearQueue().catch(() => {});
     hideAppLoading();
   }
+}
+
+// ── OFFLINE / ONLINE INFRASTRUCTURE ──────────────────────────────────────────
+
+async function updateSyncBadge() {
+  const count  = await getQueueCount();
+  const btn    = qs("#sync-status-btn");
+  const dot    = qs("#sync-count-dot");
+  const qBadge = qs("#sync-queue-badge");
+  if (btn)    { btn.hidden = count === 0; }
+  if (dot)    { dot.textContent = count > 0 ? String(count) : ""; }
+  if (qBadge) { qBadge.hidden = count === 0; qBadge.textContent = count > 0 ? `${count} pending` : ""; }
+}
+
+let _draining = false;
+async function drainOfflineQueue() {
+  if (_draining || !navigator.onLine) return;
+  _draining = true;
+  try {
+    const ops = await getPendingOps();
+    for (const op of ops) {
+      if (!navigator.onLine) break;
+      await markSyncing(op.id);
+      try {
+        await api(op.endpoint, { method: op.method, body: op.payload });
+        await markDone(op.id);
+        const label = op.type === "CHECKIN" ? "check-in" : "check-out";
+        setStatus(`Synced offline ${label}.`);
+      } catch (err) {
+        await markFailed(op.id, err?.message || "Sync failed");
+        setStatus(`Sync failed (${op.type === "CHECKIN" ? "check-in" : "check-out"}): ${err?.message || "Unknown error"}`, true);
+      }
+    }
+    if (ops.length > 0) loadMyTasks().catch(() => {});
+  } finally {
+    _draining = false;
+    await updateSyncBadge();
+  }
+}
+
+async function initOfflineSupport() {
+  const banner = qs("#offline-banner");
+  if (!navigator.onLine) {
+    if (banner) banner.hidden = false;
+  } else {
+    await drainOfflineQueue();
+  }
+  await updateSyncBadge();
+}
+
+window.addEventListener("online", async () => {
+  const banner = qs("#offline-banner");
+  if (banner) banner.hidden = true;
+  if (navigator.serviceWorker?.controller) {
+    navigator.serviceWorker.controller.postMessage({ type: "REGISTER_SYNC" });
+  }
+  await drainOfflineQueue();
+});
+
+window.addEventListener("offline", async () => {
+  const banner = qs("#offline-banner");
+  if (banner) {
+    banner.hidden = false;
+    const count = await getQueueCount();
+    const txt   = qs("#offline-banner-text");
+    if (txt) txt.textContent = count > 0
+      ? `Offline — ${count} operation${count === 1 ? "" : "s"} waiting to sync.`
+      : "You're offline — check-ins will sync when you reconnect.";
+  }
+  await updateSyncBadge();
+});
+
+if (navigator.serviceWorker) {
+  navigator.serviceWorker.addEventListener("message", async (event) => {
+    if (event.data?.type === "SW_DRAIN_QUEUE") await drainOfflineQueue();
+  });
 }
 
 // ── QUICK SEARCH ──────────────────────────────────────────────────────────────

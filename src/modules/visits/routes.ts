@@ -67,13 +67,15 @@ const unplannedVisitCreateSchema = z.object({
 const checkInSchema = z.object({
   lat: z.number().min(-90).max(90),
   lng: z.number().min(-180).max(180),
-  selfieUrl: z.string().min(1)
+  selfieUrl: z.string().min(1),
+  capturedAt: z.string().datetime().optional()
 }).strict();
 
 const checkOutSchema = z.object({
   lat: z.number().min(-90).max(90),
   lng: z.number().min(-180).max(180),
-  result: z.string().trim().min(1)
+  result: z.string().trim().min(1),
+  capturedAt: z.string().datetime().optional()
 }).strict();
 
 const commaArray = (inner: z.ZodTypeAny) =>
@@ -603,7 +605,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
         changedById: repId,
         before: beforeState,
         after: updated,
-        context: { workflow: "CHECK_IN" }
+        context: { workflow: "CHECK_IN", capturedAt: parsed.data.capturedAt ?? null }
       });
       return updated;
     });
@@ -817,7 +819,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
         changedById: repId,
         before: beforeState,
         after: result,
-        context: { workflow: "CHECK_OUT" }
+        context: { workflow: "CHECK_OUT", capturedAt: parsed.data.capturedAt ?? null }
       });
       return result;
     });
