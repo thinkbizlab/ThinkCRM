@@ -9,7 +9,10 @@ test.describe("Authentication", () => {
     await page.goto("/");
     await expect(page.locator("#auth-screen")).toBeVisible();
     await expect(page.locator("#login-form")).toBeVisible();
-    await expect(page.locator(".login-heading")).toHaveText("Sign in");
+    // index.html has 7 `.login-heading` elements (one per auth panel —
+    // sign-in, signup, reset-password, verify-email, etc.). Scope to the
+    // visible login panel so Playwright strict-mode doesn't fail.
+    await expect(page.locator(".login-panel .login-heading")).toHaveText("Sign in");
   });
 
   test("rejects invalid credentials", async ({ page }) => {
