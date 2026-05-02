@@ -86,6 +86,8 @@ import { requestContextPlugin } from "./plugins/request-context.js";
 import { masterDataRoutes } from "./modules/master-data/routes.js";
 import { dealRoutes } from "./modules/deals/routes.js";
 import { visitRoutes } from "./modules/visits/routes.js";
+import { prospectRoutes } from "./modules/prospects/routes.js";
+import { enterFederationRequestScope } from "./modules/federation/customer-federation.js";
 import { integrationRoutes } from "./modules/integrations/routes.js";
 import { aiRoutes } from "./modules/ai/routes.js";
 import { dashboardRoutes } from "./modules/dashboard/routes.js";
@@ -260,6 +262,13 @@ export async function buildApp() {
     await requireActiveTenant(request);
   });
 
+  // Federation: enter a per-request AsyncLocalStorage scope so that a single
+  // request which resolves the same federated Customer multiple times only
+  // hits the upstream MySQL once.
+  app.addHook("onRequest", async () => {
+    enterFederationRequestScope();
+  });
+
   if (config.NODE_ENV !== "production") {
     await app.register(swagger, {
       openapi: {
@@ -316,6 +325,7 @@ export async function buildApp() {
   await app.register(masterDataRoutes, { prefix: "/api/v1" });
   await app.register(dealRoutes, { prefix: "/api/v1" });
   await app.register(visitRoutes, { prefix: "/api/v1" });
+  await app.register(prospectRoutes, { prefix: "/api/v1" });
   await app.register(billingRoutes, { prefix: "/api/v1" });
   await app.register(integrationRoutes, { prefix: "/api/v1" });
   await app.register(aiRoutes, { prefix: "/api/v1" });

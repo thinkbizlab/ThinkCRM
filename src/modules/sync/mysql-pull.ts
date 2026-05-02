@@ -231,7 +231,7 @@ function parseQueryConfig(raw: unknown): MysqlQueryConfig {
 
 /** Quote a single identifier or `schema.table` with backticks. Each segment
  *  is already validated by `TABLE_IDENT_RE`, so embedded backticks are impossible. */
-function quoteTableName(table: string): string {
+export function quoteTableName(table: string): string {
   return table.split(".").map(seg => `\`${seg}\``).join(".");
 }
 

@@ -102,7 +102,6 @@ async function createFixture(): Promise<DashboardFixture> {
       ownerId: repId,
       customerCode: `CUST-${suffix.slice(0, 6)}`,
       name: "Acme",
-      defaultTermId: termId,
       addresses: {
         create: {
           addressLine1: "123 Test Road",

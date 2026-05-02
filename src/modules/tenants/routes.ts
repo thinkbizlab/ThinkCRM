@@ -798,10 +798,10 @@ Respond ONLY with valid JSON, no markdown or explanation.`
 
     // Insert everything in a transaction
     const result = await prisma.$transaction(async (tx) => {
-      // 1. Get the default payment term
-      let paymentTerm = await tx.paymentTerm.findFirst({ where: { tenantId } });
-      if (!paymentTerm) {
-        paymentTerm = await tx.paymentTerm.create({
+      // 1. Ensure a default payment term exists for this tenant (used by Quotations).
+      const existingTerm = await tx.paymentTerm.findFirst({ where: { tenantId } });
+      if (!existingTerm) {
+        await tx.paymentTerm.create({
           data: { tenantId, code: "NET30", name: "Net 30", dueDays: 30 }
         });
       }
@@ -845,7 +845,6 @@ Respond ONLY with valid JSON, no markdown or explanation.`
             tenantId,
             customerCode: code,
             name: c.name,
-            defaultTermId: paymentTerm.id,
             isDemo: true
           }
         });

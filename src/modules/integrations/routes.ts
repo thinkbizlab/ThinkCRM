@@ -16,6 +16,8 @@ import { encryptField } from "../../lib/secrets.js";
 import { connectorInputContractSchema, executeConnectorRun } from "./connector-framework.js";
 import { executeRestPull, testRestConnection } from "../sync/rest-pull.js";
 import { executeMysqlPull, testMysqlConnection } from "../sync/mysql-pull.js";
+import { clearFederationCaches } from "../federation/customer-federation.js";
+import { evictPool } from "../federation/mysql-pool.js";
 
 const sourceSchema = z.object({
   sourceName: z.string().min(2),
@@ -163,7 +165,7 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
     if (trimmedName !== undefined && trimmedName.length < 2) {
       throw app.httpErrors.badRequest("sourceName must be at least 2 characters.");
     }
-    return prisma.integrationSource.update({
+    const updated = await prisma.integrationSource.update({
       where: { id: params.id },
       data: {
         status: body.status,
@@ -171,6 +173,15 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
         configJson: nextConfig as Prisma.InputJsonValue | undefined
       }
     });
+    // If this source backs a federated tenant, drop the cached config + the
+    // pooled connection so the next live read picks up new credentials,
+    // table/keyColumn, etc. — otherwise the operator waits up to 60s for the
+    // config TTL to lapse, with a stale pool open the whole time.
+    if (nextConfig) {
+      await evictPool(params.id);
+    }
+    clearFederationCaches(tenantId);
+    return updated;
   });
 
   app.delete("/integrations/master-data/sources/:id", async (request, reply) => {
@@ -185,6 +196,10 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
     // by externalSource string (not FK), so they survive — past correlation
     // history stays intact.
     await prisma.integrationSource.delete({ where: { id: params.id } });
+    // Tenant.customerFederationSourceId FK is ON DELETE SET NULL — the next
+    // hydration call will see federation disabled. Drop pool + cache for safety.
+    await evictPool(params.id);
+    clearFederationCaches(tenantId);
     reply.code(204).send();
   });
 
@@ -235,9 +250,13 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.notFound("Source not found.");
     }
     await prisma.integrationFieldMapping.deleteMany({ where: { sourceId: params.id } });
-    return prisma.integrationFieldMapping.createMany({
+    const result = await prisma.integrationFieldMapping.createMany({
       data: parsed.data.mappings.map((item) => ({ ...item, sourceId: params.id }))
     });
+    // Federation reads cache the source's mappings for 60s — drop the cache so
+    // the new column → CRM-field mapping takes effect on the next request.
+    clearFederationCaches(tenantId);
+    return result;
   });
 
   app.post("/integrations/master-data/sources/:id/test", async (request) => {

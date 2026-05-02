@@ -6,6 +6,7 @@ import {
   IntegrationPlatform,
   Prisma,
   SourceStatus,
+  SourceType,
   TriggerType,
   UserRole
 } from "@prisma/client";
@@ -27,6 +28,7 @@ import {
   zodMsg
 } from "../../lib/http.js";
 import { encryptField, decryptCredential } from "../../lib/secrets.js";
+import { clearFederationCaches } from "../federation/customer-federation.js";
 import { smtpPort } from "../../lib/smtp-port.js";
 import { stableTeamsAppId } from "../../lib/ms-teams-app-id.js";
 import { JOB_DEFS, rescheduleJob, runJobNow } from "../../lib/scheduler.js";
@@ -1171,6 +1173,65 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
         manageCustomerGroupsByApi: true
       }
     });
+  });
+
+  // ── Federated Customer Master config ──────────────────────────────────────
+  // GET returns the current source id (or null). PUT sets/clears it. Setting
+  // it to a non-null value flips the tenant into federated mode — Customer
+  // mutations from the UI/API are blocked, reads hit the tenant's MySQL live.
+  app.get("/tenants/:id/customer-federation", async (request) => {
+    const params = request.params as { id: string };
+    requireRoleAtLeast(request, UserRole.MANAGER);
+    assertTenantPathAccess(request, params.id);
+    const t = await prisma.tenant.findUnique({
+      where: { id: params.id },
+      select: {
+        customerFederationSourceId: true,
+        customerFederationSource: {
+          select: { id: true, sourceName: true, sourceType: true, status: true }
+        }
+      }
+    });
+    if (!t) throw app.httpErrors.notFound("Tenant not found.");
+    return t;
+  });
+
+  app.put("/tenants/:id/customer-federation", async (request) => {
+    const params = request.params as { id: string };
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    assertTenantPathAccess(request, params.id);
+    const parsed = z.object({
+      customerFederationSourceId: z.string().min(1).nullable()
+    }).safeParse(request.body);
+    if (!parsed.success) throw app.httpErrors.badRequest(zodMsg(parsed.error));
+
+    if (parsed.data.customerFederationSourceId) {
+      const source = await prisma.integrationSource.findFirst({
+        where: {
+          id: parsed.data.customerFederationSourceId,
+          tenantId: params.id,
+          sourceType: SourceType.MYSQL
+        },
+        select: { id: true }
+      });
+      if (!source) {
+        throw app.httpErrors.badRequest("customerFederationSourceId must reference a MYSQL IntegrationSource owned by this tenant.");
+      }
+    }
+
+    const updated = await prisma.tenant.update({
+      where: { id: params.id },
+      data: { customerFederationSourceId: parsed.data.customerFederationSourceId },
+      select: {
+        customerFederationSourceId: true,
+        customerFederationSource: {
+          select: { id: true, sourceName: true, sourceType: true, status: true }
+        }
+      }
+    });
+    // Drop cached config so the next request re-resolves.
+    clearFederationCaches(params.id);
+    return updated;
   });
 
   app.post("/users/:id/integrations/ms365/connect", async (request, reply) => {

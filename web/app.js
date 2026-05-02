@@ -87,6 +87,8 @@ let deal360ModulePromise = null;
 let deal360ModuleInitialized = false;
 let visitsModulePromise = null;
 let visitsModuleInitialized = false;
+let prospectsModulePromise = null;
+let prospectsModuleInitialized = false;
 let quickSearchModulePromise = null;
 let quickSearchInitialized = false;
 let delegationsModulePromise = null;
@@ -430,6 +432,7 @@ async function ensureVisitsModule() {
       openVoiceNoteDialog,
       openMapPicker: openMapPickerLazy,
       openDeal360,
+      openProspectDetail,
       loadMyTasks,
       attachOnBehalfOfField
     });
@@ -486,6 +489,29 @@ async function loadVisits(...args) {
   return module.loadVisits(...args);
 }
 
+async function ensureProspectsModule() {
+  if (!prospectsModulePromise) {
+    prospectsModulePromise = import("./modules/prospects.js");
+  }
+  const module = await prospectsModulePromise;
+  if (!prospectsModuleInitialized) {
+    module.setProspectsDeps({ setStatus });
+    prospectsModuleInitialized = true;
+  }
+  return module;
+}
+
+async function loadProspects(...args) {
+  const module = await ensureProspectsModule();
+  return module.loadProspects(...args);
+}
+
+function openProspectDetail(...args) {
+  void ensureProspectsModule()
+    .then((module) => module.openProspectDetail(...args))
+    .catch(handleLazyModuleError);
+}
+
 function openVisitCreateModal(...args) {
   void ensureVisitsModule()
     .then((module) => module.openVisitCreateModal(...args))
@@ -525,6 +551,12 @@ function closeVisitDetailPanel(...args) {
 function syncVisitPlannedAtRequired(...args) {
   void ensureVisitsModule()
     .then((module) => module.syncVisitPlannedAtRequired(...args))
+    .catch(handleLazyModuleError);
+}
+
+function applyVisitSubjectMode(...args) {
+  void ensureVisitsModule()
+    .then((module) => module.applyVisitSubjectMode(...args))
     .catch(handleLazyModuleError);
 }
 
@@ -707,7 +739,6 @@ const CRM_TARGET_FIELDS = {
     { value: "name",               label: "Customer Name",         required: true },
     { value: "customerType",       label: "Customer Type",         required: false },
     { value: "taxId",              label: "Tax ID",                required: false },
-    { value: "defaultTermCode",    label: "Default Payment Term",  required: false },
     { value: "customerGroupCode",  label: "Customer Group",        required: false },
     { value: "ownerId",            label: "Owner User ID",         required: false },
     { value: "siteLat",            label: "Site Latitude",         required: false },
@@ -2035,6 +2066,7 @@ const simpleViewRouteMap = {
   dashboard: "/dashboard",
   deals: "/deals",
   visits: "/visits",
+  prospects: "/prospects",
   calendar: "/calendar",
   integrations: "/integrations",
   superAdmin: "/super-admin"
@@ -2223,18 +2255,15 @@ const MASTER_DATA_IMPORT_SPECS = {
   "customers": {
     label: "Customers",
     endpoint: "/customers/import",
-    columns: ["customerCode", "name", "paymentTermCode", "customerGroupCode", "customerType", "taxId", "externalRef", "siteLat", "siteLng"],
+    columns: ["customerCode", "name", "customerGroupCode", "customerType", "taxId", "externalRef", "siteLat", "siteLng"],
     sample: [
-      { customerCode: "CUST-0001", name: "Acme Co., Ltd.", paymentTermCode: "NET30", customerGroupCode: "CORP", customerType: "COMPANY", taxId: "0105555123456", externalRef: "", siteLat: 13.7563, siteLng: 100.5018 },
-      { customerCode: "CUST-0002", name: "Jane Individual",  paymentTermCode: "COD",   customerGroupCode: "",    customerType: "INDIVIDUAL", taxId: "", externalRef: "", siteLat: "", siteLng: "" }
+      { customerCode: "CUST-0001", name: "Acme Co., Ltd.", customerGroupCode: "CORP", customerType: "COMPANY", taxId: "0105555123456", externalRef: "", siteLat: 13.7563, siteLng: 100.5018 },
+      { customerCode: "CUST-0002", name: "Jane Individual",  customerGroupCode: "",    customerType: "INDIVIDUAL", taxId: "", externalRef: "", siteLat: "", siteLng: "" }
     ],
     sourceRows: () => {
-      const terms = state.cache.paymentTerms || [];
-      const codeById = new Map(terms.map((t) => [t.id, t.code]));
       return (state.cache.customers || []).map((c) => ({
         customerCode: c.customerCode,
         name: c.name,
-        paymentTermCode: c.paymentTerm?.code || codeById.get(c.defaultTermId) || "",
         customerGroupCode: c.customerGroup?.code || "",
         customerType: c.customerType || "COMPANY",
         taxId: c.taxId || "",
@@ -2720,7 +2749,6 @@ function renderMasterData(paymentTerms = []) {
       const rows = (state.cache.customers || []).map((c) => ({
         customerCode: c.customerCode, name: c.name, customerType: c.customerType || "",
         taxId: c.taxId || "", externalRef: c.externalRef || "",
-        paymentTermCode: c.paymentTerm?.code || "", paymentTermName: c.paymentTerm?.name || "",
         customerGroupCode: c.customerGroup?.code || "", customerGroupName: c.customerGroup?.name || "",
         createdAt: c.createdAt ? new Date(c.createdAt).toISOString().slice(0, 10) : ""
       }));
@@ -5387,6 +5415,31 @@ function renderSettings() {
         <p class="muted" style="font-size:0.85rem">Sync Customers, Items, and Payment Terms from external ERP systems. Supports API push, REST pull, and file import.</p>
       </section>
 
+      <!-- Federated Customer Master -->
+      ${(() => {
+        const fed = state.cache.customerFederation || {};
+        const mysqlSources = (state.cache.syncSources || []).filter((s) => s.sourceType === "MYSQL");
+        const currentId = fed.customerFederationSourceId || "";
+        return `
+        <section class="card" style="margin-bottom:var(--sp-4)">
+          <h4 style="margin:0 0 var(--sp-2)">${icon('globe')} Federated Customer Master <span class="badge badge--muted" style="margin-left:var(--sp-1)">Beta</span></h4>
+          <p class="muted" style="font-size:0.82rem;margin-bottom:var(--sp-3)">
+            When enabled, Customer attributes (name, tax ID, addresses, etc.) are read <strong>live</strong> from the chosen MySQL source on every request — the source system is the source of truth and Customer edits are <strong>blocked in this app</strong> (DRAFT customers from drop-in visits stay local). The scheduled MYSQL pull continues to keep thin shadow rows so internal foreign keys (Deals, Quotations, Visits) keep working.
+          </p>
+          <form id="customer-federation-form" style="display:flex;align-items:center;gap:var(--sp-2);flex-wrap:wrap">
+            <label class="form-label" style="margin:0">Federation source
+              <select class="form-control" name="customerFederationSourceId" id="customer-federation-source-select" style="min-width:280px">
+                <option value="">— Disabled (use local Customer master) —</option>
+                ${mysqlSources.map((s) => `<option value="${escHtml(s.id)}" ${s.id === currentId ? "selected" : ""}>${escHtml(s.sourceName)} (${escHtml(s.status)})</option>`).join("")}
+              </select>
+            </label>
+            <button type="submit" class="btn-primary small">Save</button>
+            ${currentId ? `<span class="badge badge--ok">Federation active</span>` : ""}
+          </form>
+          ${mysqlSources.length === 0 ? `<p class="muted small" style="margin-top:var(--sp-2)">No MYSQL data sources configured yet — create one in the Data Sources section below to enable federation.</p>` : ""}
+        </section>`;
+      })()}
+
       <!-- API Keys -->
       <section class="card" style="margin-bottom:var(--sp-4)">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-3)">
@@ -6634,6 +6687,27 @@ function renderSettings() {
   });
 
   // ── Data Sync page listeners ────────────────────────────────────
+  qs("#customer-federation-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const tenantId = state.user?.tenantId;
+    if (!tenantId) return;
+    const value = qs("#customer-federation-source-select")?.value || "";
+    try {
+      const result = await api(`/tenants/${tenantId}/customer-federation`, {
+        method: "PUT",
+        body: { customerFederationSourceId: value || null }
+      });
+      state.cache.customerFederation = result;
+      setStatus(value
+        ? "Customer federation enabled. Customer edits in this app are now blocked; reads come from the chosen MySQL source."
+        : "Customer federation disabled. The local Customer master is back in charge.");
+      // Re-render the Data Sync page to reflect the active badge.
+      renderSettings();
+    } catch (err) {
+      setStatus(err.message, true);
+    }
+  });
+
   qs("#sync-create-key-btn")?.addEventListener("click", () => {
     const f = qs("#sync-new-key-form");
     if (f) f.style.display = f.style.display === "none" ? "block" : "none";
@@ -8949,18 +9023,16 @@ function attachCustBodyDelegation(bodyEl) {
       e.stopPropagation();
       const customer = getCachedCustomerById(editBtn.dataset.id);
       if (!customer) return;
-      const termOptions = bodyEl._custCtx?.termOptions || "";
       openEditCustomerModal({
         id: customer.id,
         customerCode: customer.customerCode,
         name: customer.name,
         customerType: customer.customerType,
         taxId: customer.taxId || "",
-        defaultTermId: customer.paymentTerm?.id || customer.defaultTermId || "",
         externalRef: customer.externalRef || "",
         disabled: !!customer.disabled,
         customerGroupId: customer.customerGroup?.id || ""
-      }, termOptions);
+      });
       return;
     }
 
@@ -9023,10 +9095,8 @@ function attachCustBodyDelegation(bodyEl) {
       e.stopPropagation();
       const customer = getCachedCustomerById(promoteBtn.dataset.id);
       if (!customer) return;
-      const termOptionsHtml = bodyEl._custCtx?.termOptions || "";
       openPromoteDraftModal({
         customer,
-        termOptionsHtml,
         onPromoted: async () => {
           setStatus("Loading…");
           await loadMaster();
@@ -9303,10 +9373,6 @@ function openBulkEditCustomersModal() {
     .sort((a, b) => (a.fullName || "").localeCompare(b.fullName || ""))
     .map((u) => `<option value="${u.id}">${escHtml(u.fullName || u.email || u.id)}</option>`)
     .join("");
-  const terms = (state.cache.paymentTerms || []).filter((t) => t.isActive !== false);
-  const termOpts = terms
-    .map((t) => `<option value="${t.id}">${escHtml(t.code)} — ${escHtml(t.name)}</option>`)
-    .join("");
 
   overlay.innerHTML = `
     <div class="ncm-panel" style="max-width:480px">
@@ -9322,13 +9388,6 @@ function openBulkEditCustomersModal() {
             <option value="">— No change —</option>
             <option value="COMPANY">Company</option>
             <option value="PERSONAL">Personal</option>
-          </select>
-        </div>
-        <div class="ncm-row">
-          <label class="ncm-label" for="be-term">Payment Term</label>
-          <select class="ncm-input" id="be-term" name="defaultTermId">
-            <option value="">— No change —</option>
-            ${termOpts}
           </select>
         </div>
         <div class="ncm-row">
@@ -9354,11 +9413,9 @@ function openBulkEditCustomersModal() {
   overlay.querySelector("#bulk-edit-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const customerType = overlay.querySelector("#be-type").value;
-    const defaultTermId = overlay.querySelector("#be-term").value;
     const ownerId = overlay.querySelector("#be-owner").value;
     const patch = {};
     if (customerType) patch.customerType = customerType;
-    if (defaultTermId) patch.defaultTermId = defaultTermId;
     if (Object.keys(patch).length === 0 && !ownerId) {
       setStatus("Pick at least one field to change.", true);
       return;
@@ -9882,21 +9939,15 @@ function openNewCustomerModal(termOptions) {
             </div>
           </div>
 
-          <div class="ncm-row ncm-row--2">
-            <div class="ncm-field">
-              <label class="ncm-label" for="ncm-term">Payment Term <span class="ncm-req">*</span></label>
-              <select class="ncm-input" id="ncm-term" name="defaultTermId" required>
-                ${termOptions}
-              </select>
-            </div>
-            ${canAssignOwner ? `
+          ${canAssignOwner ? `
+          <div class="ncm-row">
             <div class="ncm-field">
               <label class="ncm-label" for="ncm-owner">Owner</label>
               <select class="ncm-input" id="ncm-owner" name="ownerId">
                 ${ownerOptions}
               </select>
-            </div>` : ""}
-          </div>
+            </div>
+          </div>` : ""}
 
           <div class="ncm-row">
             <div class="ncm-field">
@@ -10310,7 +10361,6 @@ function openNewCustomerModal(termOptions) {
       customerType: String(formData.get("customerType") ?? "COMPANY"),
       taxId:        taxIdRaw || undefined,
       branchCode:   branchCodeRaw || undefined,
-      defaultTermId: String(formData.get("defaultTermId") ?? ""),
       ownerId:      String(formData.get("ownerId") ?? state.user?.id ?? ""),
       externalRef:  externalRefRaw || undefined,
       customerGroupId: customerGroupIdRaw || undefined,
@@ -10346,10 +10396,6 @@ function openEditCustomerModal(cust, termOptions) {
   overlay.id = "edit-cust-modal";
   overlay.className = "ncm-overlay";
 
-  const termOpts = (termOptions || []).map(
-    (t) => `<option value="${t.id}" ${t.id === cust.defaultTermId ? "selected" : ""}>${escHtml(t.code)} — ${escHtml(t.name)}</option>`
-  ).join("");
-
   overlay.innerHTML = `
     <div class="ncm-panel" style="max-width:480px">
       <div class="ncm-header">
@@ -10381,13 +10427,6 @@ function openEditCustomerModal(cust, termOptions) {
         <div class="ncm-row">
           <label class="ncm-label" for="ecm-extref">External Ref <span style="font-weight:400;color:var(--muted-color)">(legacy system ID)</span></label>
           <input class="ncm-input" id="ecm-extref" name="externalRef" value="${escHtml(cust.externalRef || "")}" placeholder="e.g. ERP-00123" maxlength="100" />
-        </div>
-        <div class="ncm-row">
-          <label class="ncm-label" for="ecm-term">Payment Term</label>
-          <select class="ncm-input" id="ecm-term" name="defaultTermId">
-            <option value="">— None —</option>
-            ${termOpts}
-          </select>
         </div>
         <div class="ncm-row">
           <label class="ncm-label" for="ecm-group">Customer Group</label>
@@ -10455,7 +10494,6 @@ function openEditCustomerModal(cust, termOptions) {
       name:          String(formData.get("name") ?? "").trim(),
       customerType:  String(formData.get("customerType") ?? "COMPANY"),
       taxId:         taxId || undefined,
-      defaultTermId: String(formData.get("defaultTermId") ?? "") || undefined,
       externalRef:   externalRefEdit || undefined,
       disabled:      !!formData.get("disabled"),
       customerGroupId: customerGroupIdEdit || null,
@@ -10712,15 +10750,18 @@ async function loadIntegrations() {
 }
 
 async function loadSyncData() {
+  const tenantId = state.user?.tenantId;
   try {
-    const [apiKeys, sources, jobs] = await Promise.all([
+    const [apiKeys, sources, jobs, federation] = await Promise.all([
       api("/sync/api-keys"),
       api("/integrations/master-data/sources"),
-      api("/sync/jobs?limit=20")
+      api("/sync/jobs?limit=20"),
+      tenantId ? api(`/tenants/${tenantId}/customer-federation`).catch(() => null) : Promise.resolve(null)
     ]);
     state.cache.syncApiKeys = apiKeys;
     state.cache.syncSources = sources;
     state.cache.syncJobs = jobs;
+    state.cache.customerFederation = federation || {};
   } catch {
     // Sync endpoints may not exist yet in older deployments
   }
@@ -10959,6 +11000,7 @@ function viewLoadersFor(landingView) {
     case "dashboard":    loaders.push(loadDashboardContext(), loadDashboard()); break;
     case "deals":        loaders.push(loadDeals()); break;
     case "visits":       loaders.push(loadVisits()); break;
+    case "prospects":    loaders.push(loadProspects()); break;
     case "calendar":     loaders.push(loadCalendarContext(), loadCalendar()); break;
     case "integrations": loaders.push(loadIntegrations()); break;
     case "repHub":       loaders.push(loadRepHubContext()); break;
@@ -11572,6 +11614,9 @@ qs("#visit-create-modal")?.addEventListener("change", (e) => {
   if (e.target.matches('[name="visitType"]')) {
     syncVisitPlannedAtRequired(qs("#visit-create-modal"));
   }
+  if (e.target.matches('[name="visitSubject"]')) {
+    applyVisitSubjectMode(qs("#visit-create-modal"), e.target.value);
+  }
 });
 
 // ── Google Maps Picker ─────────────────────────────────────────────────────────
@@ -11605,17 +11650,22 @@ qs("#visit-form")?.addEventListener("submit", async (e) => {
   const modal = qs("#visit-create-modal");
   const form = e.currentTarget;
   const data = Object.fromEntries(new FormData(form).entries());
-  if (!data.customerId) {
+  const subject = data.visitSubject || "CUSTOMER";
+  const isUnidentified = subject === "UNIDENTIFIED";
+
+  if (!isUnidentified && !data.customerId) {
     setStatus("Please select a customer from the list.", true);
     qs("#visit-customer-input")?.focus();
     return;
   }
-  const visitType = data.visitType;
+  // Unidentified site → always UNPLANNED, regardless of the radio's prior state.
+  const visitType = isUnidentified ? "UNPLANNED" : data.visitType;
   const endpoint = visitType === "PLANNED" ? "/visits/planned" : "/visits/unplanned";
-  const body = { customerId: data.customerId };
+  const body = {};
+  if (!isUnidentified) body.customerId = data.customerId;
   const onBehalfOfUserId = readOnBehalfOfValue(form);
   if (onBehalfOfUserId) body.onBehalfOfUserId = onBehalfOfUserId;
-  if (data.dealId)         body.dealId    = data.dealId;
+  if (!isUnidentified && data.dealId) body.dealId = data.dealId;
   if (data.objective?.trim()) body.objective = data.objective.trim();
   if (data.siteLat && data.siteLng) {
     body.siteLat = parseFloat(data.siteLat);
@@ -11626,7 +11676,6 @@ qs("#visit-form")?.addEventListener("submit", async (e) => {
     if (planned < new Date()) {
       setStatus("Date & time cannot be in the past.", true);
       modal.querySelector("#visit-planned-at")?.focus();
-      if (btn) btn.disabled = false;
       return;
     }
     body.plannedAt = planned.toISOString();
@@ -11634,8 +11683,25 @@ qs("#visit-form")?.addEventListener("submit", async (e) => {
   const btn = modal.querySelector("#visit-form-submit");
   if (btn) btn.disabled = true;
   try {
+    // Unidentified path with a user-supplied site name: pre-create the Prospect
+    // so it gets the rep's chosen displayName instead of the coord-derived
+    // server default. Empty name → server auto-creates.
+    if (isUnidentified) {
+      const prospectName = (qs("#visit-prospect-name")?.value || "").trim();
+      if (prospectName) {
+        const created = await api("/prospects", {
+          method: "POST",
+          body: {
+            displayName: prospectName,
+            ...(body.siteLat != null ? { siteLat: body.siteLat } : {}),
+            ...(body.siteLng != null ? { siteLng: body.siteLng } : {})
+          }
+        });
+        body.prospectId = created.id;
+      }
+    }
     await api(endpoint, { method: "POST", body });
-    setStatus("Visit added.");
+    setStatus(isUnidentified ? "Unidentified-site visit added." : "Visit added.");
     closeVisitCreateModal();
     await loadVisits();
   } catch (error) {
@@ -11882,6 +11948,7 @@ document.querySelectorAll(".nav-btn").forEach((btn) => {
       }
       if (target === "deals") await loadDeals();
       if (target === "visits") await loadVisits();
+      if (target === "prospects") await loadProspects();
       if (target === "calendar") {
         await Promise.all([loadCalendarContext(), loadCalendar()]);
       }

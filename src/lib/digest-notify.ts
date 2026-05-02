@@ -146,6 +146,49 @@ function buildTeamDigestMessage(opts: {
   ].join("\n");
 }
 
+/**
+ * Stale-prospect summary appended to team digest. Returns null when there are
+ * no UNIDENTIFIED prospects older than the tenant's threshold — keeps quiet
+ * digests quiet. Surfacing this prevents reps from leaving prospect placeholders
+ * sitting forever after an unplanned visit.
+ */
+async function buildStaleProspectsSection(opts: {
+  tenantId: string;
+  thresholdDays: number;
+}): Promise<string | null> {
+  const { tenantId, thresholdDays } = opts;
+  const cutoff = new Date(Date.now() - thresholdDays * 86400_000);
+  const stale = await prisma.prospect.findMany({
+    where: {
+      tenantId,
+      status: "UNIDENTIFIED",
+      createdAt: { lt: cutoff }
+    },
+    orderBy: { createdAt: "asc" },
+    take: 5,
+    select: { id: true, displayName: true, createdAt: true }
+  });
+  const totalCount = await prisma.prospect.count({
+    where: {
+      tenantId,
+      status: "UNIDENTIFIED",
+      createdAt: { lt: cutoff }
+    }
+  });
+  if (totalCount === 0) return null;
+
+  const lines = stale.map((p) =>
+    `• ${p.displayName ?? "(ไม่มีชื่อ)"} (${fmtThaiDate(p.createdAt)})`
+  );
+  const more = totalCount > stale.length ? `\n…และอีก ${totalCount - stale.length} รายการ` : "";
+  return [
+    ``,
+    `🚧 Prospect ค้างระบุ (>${thresholdDays} วัน) : ${totalCount}`,
+    ...lines,
+    more.trimStart()
+  ].filter(Boolean).join("\n");
+}
+
 // ── Data queries ──────────────────────────────────────────────────────────────
 
 async function fetchRepStats(
@@ -369,6 +412,17 @@ async function runDigestForTenant(opts: {
     }
   });
 
+  const tenantConfig = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { staleProspectAlertDays: true }
+  });
+  const staleProspectsSection = tenantConfig
+    ? await buildStaleProspectsSection({
+        tenantId,
+        thresholdDays: tenantConfig.staleProspectAlertDays
+      })
+    : null;
+
   for (const team of teams) {
     if (team.channels.length === 0) continue;
 
@@ -405,7 +459,10 @@ async function runDigestForTenant(opts: {
         repRanking: repStats.map(r => ({ repName: r.repName, checkins: r.checkins }))
       };
 
-      const teamMsg = buildTeamDigestMessage({ appName, weekLabel, stats: teamStats });
+      const teamMsgBase = buildTeamDigestMessage({ appName, weekLabel, stats: teamStats });
+      const teamMsg = staleProspectsSection
+        ? `${teamMsgBase}\n${staleProspectsSection}`
+        : teamMsgBase;
       await deliverToTeamChannels({ tenantId, teamId: team.id, message: teamMsg, appName });
     }
 

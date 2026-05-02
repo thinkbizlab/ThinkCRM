@@ -7,6 +7,7 @@ import { prisma } from "../../lib/prisma.js";
 import { validateCustomFields, asRecord, extractCustomFieldsFromRow } from "../../lib/custom-fields.js";
 import { logAuditEvent } from "../../lib/audit.js";
 import { buildMergePreview, mergeCustomers, scanDuplicatesForTenant } from "./dedup.js";
+import { getFederationConfig, hydrateCustomer, hydrateCustomers, searchFederatedCustomers } from "../federation/customer-federation.js";
 
 const customFieldValuesSchema = z.record(z.string(), z.unknown());
 
@@ -89,8 +90,6 @@ const customerSchemaBase = z.object({
   // Optional corporate-group link — must be a customer in the same tenant.
   // Cycles and depth are validated in the handler, not here.
   parentCustomerId: z.string().min(1).nullable().optional(),
-  // Payment term is likewise optional for DRAFTs — chosen at promotion.
-  defaultTermId: z.string().min(1).optional(),
   customerGroupId: z.string().min(1).nullable().optional(),
   ownerId: z.string().optional(),
   siteLat: z.number().min(-90).max(90).optional(),
@@ -109,17 +108,9 @@ const customerSchema = customerSchemaBase.superRefine((data, ctx) => {
         message: "customerCode is required for ACTIVE customers."
       });
     }
-    if (!data.defaultTermId) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["defaultTermId"],
-        message: "defaultTermId is required for ACTIVE customers."
-      });
-    }
   }
 });
 const customerUpdateSchema = customerSchemaBase.omit({ customerCode: true, status: true }).partial().extend({
-  defaultTermId: z.string().min(1).optional(),
   customerGroupId: z.string().min(1).nullable().optional(),
   disabled: z.boolean().optional()
 });
@@ -262,6 +253,10 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
   // When a tenant enables "Manage X by API", all web-session mutations on the
   // matching master-data entity are rejected. Sync API-key routes (/sync/*)
   // go through a separate auth layer and are unaffected.
+  //
+  // Federated Customer Master: when Tenant.customerFederationSourceId is set,
+  // Customer is also write-locked (DRAFT customers bypass since the create
+  // path skips this check for drafts; drafts stay local and never hit MySQL).
   async function assertMasterWritable(
     tenantId: string,
     entity: "customer" | "item" | "paymentTerm" | "customerGroup"
@@ -272,24 +267,28 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
         manageCustomersByApi: true,
         manageItemsByApi: true,
         managePaymentTermsByApi: true,
-        manageCustomerGroupsByApi: true
+        manageCustomerGroupsByApi: true,
+        customerFederationSourceId: true
       }
     });
     if (!t) return;
+    const customerFederated = entity === "customer" && t.customerFederationSourceId != null;
     const locked =
       (entity === "customer" && t.manageCustomersByApi) ||
       (entity === "item" && t.manageItemsByApi) ||
       (entity === "paymentTerm" && t.managePaymentTermsByApi) ||
-      (entity === "customerGroup" && t.manageCustomerGroupsByApi);
+      (entity === "customerGroup" && t.manageCustomerGroupsByApi) ||
+      customerFederated;
     if (locked) {
       const label =
         entity === "customer" ? "Customer"
         : entity === "item" ? "Item"
         : entity === "paymentTerm" ? "Payment Term"
         : "Customer Group";
-      throw app.httpErrors.forbidden(
-        `${label} master is managed via API for this tenant. UI changes are disabled.`
-      );
+      const reason = customerFederated
+        ? `${label} master is read live from this tenant's external MySQL. UI changes are disabled — edit in the source system.`
+        : `${label} master is managed via API for this tenant. UI changes are disabled.`;
+      throw app.httpErrors.forbidden(reason);
     }
   }
 
@@ -455,9 +454,9 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
         ? { in: visibleUserIdList }
         : requesterId;
     // List view: skip `addresses` (unused in table + list-derived consumers)
-    // and narrow `contacts` + `paymentTerm` to the fields the UI actually reads.
-    // Full relations are re-fetched by `/customers/:id` on detail open.
-    return prisma.customer.findMany({
+    // and narrow `contacts` to the fields the UI actually reads. Full
+    // relations are re-fetched by `/customers/:id` on detail open.
+    const rows = await prisma.customer.findMany({
       where: { tenantId, ownerId: ownerFilter },
       include: {
         contacts: {
@@ -471,12 +470,12 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
             whatsapp: true
           }
         },
-        paymentTerm: { select: { id: true, code: true, name: true } },
         customerGroup: { select: { id: true, code: true, name: true } },
         owner: { select: { id: true, fullName: true } }
       },
       orderBy: { createdAt: "desc" }
     });
+    return hydrateCustomers(tenantId, rows);
   });
 
   app.get("/customers/search", async (request) => {
@@ -493,7 +492,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
         ? { in: visibleUserIdList }
         : requesterId;
 
-    return prisma.customer.findMany({
+    const localRows = await prisma.customer.findMany({
       where: {
         tenantId,
         ownerId: ownerFilter,
@@ -509,6 +508,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
         customerCode: true,
         status: true,
         draftCreatedByUserId: true,
+        externalRef: true,
         owner: { select: { id: true, fullName: true } }
       },
       orderBy: [
@@ -517,9 +517,53 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       ],
       take: query.limit
     });
+
+    // Federated tenants: also surface upstream customers that haven't been
+    // pulled into shadow yet (e.g. a customer the ERP team just created).
+    // We resolve any new federated hit to a shadow row on the fly so the
+    // returned `id` is FK-targetable for downstream actions like prospect
+    // identify or visit create. Owner-scope is bypassed for federated rows
+    // since federation tenants don't manage customer ownership locally.
+    const federationCfg = await getFederationConfig(tenantId);
+    if (!federationCfg) return localRows;
+
+    const localExternalRefs = new Set(localRows.map((r) => r.externalRef).filter((v): v is string => !!v));
+    const federatedHits = await searchFederatedCustomers(tenantId, query.q, query.limit).catch(() => []);
+    const newRefs = federatedHits.filter((hit) => !localExternalRefs.has(hit.externalRef));
+    if (newRefs.length === 0) return localRows;
+
+    const created: typeof localRows = [];
+    for (const hit of newRefs) {
+      // Upsert by (tenantId, externalRef) — there's a unique constraint on
+      // that pair so concurrent searches won't dupe.
+      const shadow = await prisma.customer.upsert({
+        where: { tenantId_externalRef: { tenantId, externalRef: hit.externalRef } },
+        create: {
+          tenantId,
+          ownerId: requesterId,
+          externalRef: hit.externalRef,
+          name: hit.name,
+          status: "ACTIVE",
+          // customerCode pulled from MySQL when present so list rows show ERP code
+          customerCode: typeof hit.raw.customer_code === "string" ? hit.raw.customer_code : null
+        },
+        update: { name: hit.name },
+        select: {
+          id: true,
+          name: true,
+          customerCode: true,
+          status: true,
+          draftCreatedByUserId: true,
+          externalRef: true,
+          owner: { select: { id: true, fullName: true } }
+        }
+      });
+      created.push(shadow);
+    }
+    return [...localRows, ...created].slice(0, query.limit);
   });
 
-  app.get("/customers/:id", async (request) => {
+  app.get("/customers/:id", async (request, reply) => {
     const tenantId = requireTenantId(request);
     const visibleUserIdList = [...(await listVisibleUserIds(request))];
     const params = request.params as { id: string };
@@ -532,19 +576,22 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       include: {
         addresses: true,
         contacts: true,
-        paymentTerm: true,
         customerGroup: { select: { id: true, code: true, name: true } }
       }
     });
     if (!customer) {
       throw app.httpErrors.notFound("Customer not found.");
     }
-    return customer;
+    const hydrated = await hydrateCustomer(tenantId, customer);
+    if (hydrated && hydrated.federationStatus === "stale") {
+      reply.header("X-Federation-Stale", "true");
+    }
+    return hydrated;
   });
 
   // Unified Customer 360 payload — single round-trip + single hierarchy-scope check.
   // Replaces the customer/deals/visits trio that the C360 page used to fetch separately.
-  app.get("/customers/:id/360", async (request) => {
+  app.get("/customers/:id/360", async (request, reply) => {
     const tenantId = requireTenantId(request);
     const visibleUserIdList = [...(await listVisibleUserIds(request))];
     const params = request.params as { id: string };
@@ -552,20 +599,23 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     const customerWhere = isCode
       ? { customerCode: params.id, tenantId, ownerId: { in: visibleUserIdList } }
       : { id: params.id, tenantId, ownerId: { in: visibleUserIdList } };
-    const customer = await prisma.customer.findFirst({
+    const customerRow = await prisma.customer.findFirst({
       where: customerWhere,
       include: {
         addresses: true,
         contacts: true,
-        paymentTerm: true,
         customerGroup: { select: { id: true, code: true, name: true } },
         parentCustomer: {
           select: { id: true, customerCode: true, name: true, branchCode: true, status: true }
         }
       }
     });
-    if (!customer) {
+    if (!customerRow) {
       throw app.httpErrors.notFound("Customer not found.");
+    }
+    const customer = await hydrateCustomer(tenantId, customerRow);
+    if (customer && customer.federationStatus === "stale") {
+      reply.header("X-Federation-Stale", "true");
     }
     const [deals, visits, children] = await Promise.all([
       prisma.deal.findMany({
@@ -626,16 +676,6 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       await assertMasterWritable(tenantId, "customer");
     }
 
-    if (parsed.data.defaultTermId) {
-      const paymentTerm = await prisma.paymentTerm.findFirst({
-        where: { id: parsed.data.defaultTermId, tenantId, isActive: true },
-        select: { id: true }
-      });
-      if (!paymentTerm) {
-        throw app.httpErrors.badRequest("defaultTermId is invalid or inactive for this tenant.");
-      }
-    }
-
     const ownerId = parsed.data.ownerId ?? changedById;
     if (!visibleUserIds.has(ownerId)) {
       throw app.httpErrors.forbidden("customer owner must be within your hierarchy scope.");
@@ -694,7 +734,6 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
           taxId: parsed.data.taxId,
           branchCode,
           parentCustomerId: parsed.data.parentCustomerId ?? null,
-          defaultTermId: parsed.data.defaultTermId ?? null,
           customerGroupId: parsed.data.customerGroupId ?? null,
           ownerId,
           createdByUserId: changedById,
@@ -735,18 +774,6 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     });
     if (parsed.data.ownerId && !visibleUserIds.has(parsed.data.ownerId)) {
       throw app.httpErrors.forbidden("customer owner must be within your hierarchy scope.");
-    }
-    const nextDefaultTermId = parsed.data.defaultTermId ?? existing.defaultTermId;
-    // Payment term may legitimately be null on a DRAFT customer — only validate
-    // when the caller is providing or keeping a concrete term id.
-    if (nextDefaultTermId) {
-      const paymentTerm = await prisma.paymentTerm.findFirst({
-        where: { id: nextDefaultTermId, tenantId, isActive: true },
-        select: { id: true }
-      });
-      if (!paymentTerm) {
-        throw app.httpErrors.badRequest("defaultTermId is invalid or inactive for this tenant.");
-      }
     }
 
     // Resolve next (taxId, branchCode) pair for the duplicate check. Either
@@ -816,7 +843,6 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
             : undefined,
           parentCustomerId:
             parsed.data.parentCustomerId === undefined ? undefined : parsed.data.parentCustomerId,
-          defaultTermId: parsed.data.defaultTermId,
           customerGroupId:
             parsed.data.customerGroupId === undefined ? undefined : parsed.data.customerGroupId,
           ownerId: parsed.data.ownerId,
@@ -1099,13 +1125,12 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
   });
 
   const promoteBodySchema = z.object({
-    customerCode: z.string().trim().min(2).max(40),
-    defaultTermId: z.string().trim().min(1)
+    customerCode: z.string().trim().min(2).max(40)
   });
 
   // Manual promotion: admin (or the rep who drafted it, for their own prospect)
-  // fills in the ERP customerCode + payment term that ERP sync hasn't delivered
-  // yet, flipping the DRAFT to ACTIVE in place.
+  // fills in the ERP customerCode that ERP sync hasn't delivered yet, flipping
+  // the DRAFT to ACTIVE in place.
   app.post("/customers/:id/promote", async (request, reply) => {
     const tenantId = requireTenantId(request);
     const changedById = requireUserId(request);
@@ -1122,7 +1147,6 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
         id: true,
         status: true,
         customerCode: true,
-        defaultTermId: true,
         name: true,
         taxId: true,
         draftCreatedByUserId: true
@@ -1137,14 +1161,6 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     const isOwnDraft = draft.draftCreatedByUserId === changedById;
     if (!hasAdminTier && !isOwnDraft) {
       throw app.httpErrors.forbidden("Only admins/managers or the draft's creator may promote.");
-    }
-
-    const paymentTerm = await prisma.paymentTerm.findFirst({
-      where: { id: parsed.data.defaultTermId, tenantId, isActive: true },
-      select: { id: true }
-    });
-    if (!paymentTerm) {
-      throw app.httpErrors.badRequest("defaultTermId is invalid or inactive for this tenant.");
     }
 
     // Enforce the partial-unique rule explicitly so the error is clear rather
@@ -1164,7 +1180,6 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       data: {
         status: "ACTIVE",
         customerCode: parsed.data.customerCode,
-        defaultTermId: parsed.data.defaultTermId,
         promotedAt: new Date()
       }
     });
@@ -1426,14 +1441,11 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     if (!existing) {
       throw app.httpErrors.notFound("Payment term not found.");
     }
-    const customerUsageCount = await prisma.customer.count({
-      where: { tenantId, defaultTermId: params.id }
-    });
     const quotationUsageCount = await prisma.quotation.count({
       where: { tenantId, paymentTermId: params.id }
     });
-    if (customerUsageCount > 0 || quotationUsageCount > 0) {
-      throw app.httpErrors.conflict("Payment term is in use by customers or quotations.");
+    if (quotationUsageCount > 0) {
+      throw app.httpErrors.conflict("Payment term is in use by quotations.");
     }
     await prisma.paymentTerm.delete({ where: { id: params.id } });
     return reply.code(204).send();
@@ -1457,27 +1469,19 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
         `${uniqueIds.length - existingRows.length} payment term(s) not found in this tenant.`
       );
     }
-    const [customerUsage, quotationUsage] = await Promise.all([
-      prisma.customer.groupBy({
-        by: ["defaultTermId"],
-        where: { tenantId, defaultTermId: { in: uniqueIds } },
-        _count: { _all: true }
-      }),
-      prisma.quotation.groupBy({
-        by: ["paymentTermId"],
-        where: { tenantId, paymentTermId: { in: uniqueIds } },
-        _count: { _all: true }
-      })
-    ]);
-    const inUse = new Set<string>([
-      ...customerUsage.map((r) => r.defaultTermId).filter((v): v is string => v != null),
-      ...quotationUsage.map((r) => r.paymentTermId).filter((v): v is string => v != null)
-    ]);
+    const quotationUsage = await prisma.quotation.groupBy({
+      by: ["paymentTermId"],
+      where: { tenantId, paymentTermId: { in: uniqueIds } },
+      _count: { _all: true }
+    });
+    const inUse = new Set<string>(
+      quotationUsage.map((r) => r.paymentTermId).filter((v): v is string => v != null)
+    );
     if (inUse.size > 0) {
       const blocked = existingRows.filter((r) => inUse.has(r.id));
       const labels = blocked.map((r) => `${r.code} (${r.name})`).join(", ");
       throw app.httpErrors.conflict(
-        `${blocked.length} payment term(s) in use by customers or quotations: ${labels}.`
+        `${blocked.length} payment term(s) in use by quotations: ${labels}.`
       );
     }
     const deleted = await prisma.paymentTerm.deleteMany({
@@ -1906,7 +1910,6 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
   const customerImportRow = z.object({
     customerCode: z.string().trim().min(2).max(40),
     name: z.string().trim().min(2).max(200),
-    paymentTermCode: z.string().trim().min(1).max(30),
     customerType: z.nativeEnum(CustomerType).optional(),
     customerGroupCode: z.string().trim().min(1).max(50).optional(),
     taxId: z.string().trim().max(20).optional(),
@@ -1923,12 +1926,6 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     const rawRows = readRows(request.body);
     if (!rawRows.length) throw app.httpErrors.badRequest("Expected { rows: [...] } with at least one row.");
     if (rawRows.length > 1000) throw app.httpErrors.badRequest("Maximum 1000 rows per import.");
-
-    const terms = await prisma.paymentTerm.findMany({
-      where: { tenantId, isActive: true },
-      select: { id: true, code: true }
-    });
-    const termIdByCode = new Map(terms.map((t) => [t.code.toLowerCase(), t.id]));
 
     const groups = await prisma.customerGroup.findMany({
       where: { tenantId },
@@ -1950,11 +1947,6 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
         continue;
       }
       const row = parsed.data;
-      const defaultTermId = termIdByCode.get(row.paymentTermCode.toLowerCase());
-      if (!defaultTermId) {
-        errors.push({ row: i + 1, customerCode: row.customerCode, error: `paymentTermCode "${row.paymentTermCode}" not found.` });
-        continue;
-      }
       let customerGroupId: string | null = null;
       if (row.customerGroupCode) {
         const found = groupIdByCode.get(row.customerGroupCode.toLowerCase());
@@ -1995,7 +1987,6 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
             where: { id: existing.id },
             data: {
               name: row.name,
-              defaultTermId,
               customerType: row.customerType,
               ...(row.customerGroupCode !== undefined ? { customerGroupId } : {}),
               taxId: row.taxId || null,
@@ -2012,7 +2003,6 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
               ownerId,
               customerCode: row.customerCode,
               name: row.name,
-              defaultTermId,
               customerGroupId,
               customerType: row.customerType ?? CustomerType.COMPANY,
               taxId: row.taxId || null,

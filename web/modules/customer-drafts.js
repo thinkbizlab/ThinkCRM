@@ -137,7 +137,7 @@ export function openDraftCustomerModal({ onCreated } = {}) {
   });
 }
 
-export function openPromoteDraftModal({ customer, termOptionsHtml, onPromoted } = {}) {
+export function openPromoteDraftModal({ customer, onPromoted } = {}) {
   if (!customer) return;
   document.querySelector("#promote-draft-modal")?.remove();
   const overlay = document.createElement("div");
@@ -148,7 +148,7 @@ export function openPromoteDraftModal({ customer, termOptionsHtml, onPromoted } 
       <div class="ncm-header">
         <div>
           <h2 class="ncm-title">Promote Draft → Active</h2>
-          <p class="ncm-subtitle muted small">${escHtml(customer.name || "")} — assign an ERP customer code and payment term. After this, quotations can be created against this customer.</p>
+          <p class="ncm-subtitle muted small">${escHtml(customer.name || "")} — assign an ERP customer code. After this, quotations can be created against this customer.</p>
         </div>
         <button class="ncm-close" type="button" aria-label="Close">
           <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -156,14 +156,10 @@ export function openPromoteDraftModal({ customer, termOptionsHtml, onPromoted } 
       </div>
       <form id="promote-draft-form" class="ncm-form" novalidate>
         <div class="ncm-section">
-          <div class="ncm-row ncm-row--2">
+          <div class="ncm-row">
             <div class="ncm-field">
               <label class="ncm-label">Customer Code <span class="ncm-req">*</span></label>
               <input class="ncm-input" name="customerCode" required maxlength="40" placeholder="ERP code (must be unique)" />
-            </div>
-            <div class="ncm-field">
-              <label class="ncm-label">Default Payment Term <span class="ncm-req">*</span></label>
-              <select class="ncm-input" name="defaultTermId" required>${termOptionsHtml || ""}</select>
             </div>
           </div>
         </div>
@@ -184,9 +180,8 @@ export function openPromoteDraftModal({ customer, termOptionsHtml, onPromoted } 
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
     const customerCode = String(fd.get("customerCode") || "").trim();
-    const defaultTermId = String(fd.get("defaultTermId") || "").trim();
-    if (!customerCode || !defaultTermId) {
-      setStatus("Customer code and payment term are required.", true);
+    if (!customerCode) {
+      setStatus("Customer code is required.", true);
       return;
     }
     const submitBtn = overlay.querySelector('[data-act="submit"]');
@@ -194,7 +189,7 @@ export function openPromoteDraftModal({ customer, termOptionsHtml, onPromoted } 
     try {
       const result = await api(`/customers/${customer.id}/promote`, {
         method: "POST",
-        body: JSON.stringify({ customerCode, defaultTermId }),
+        body: JSON.stringify({ customerCode }),
       });
       setStatus("Draft promoted.");
       closeOverlay(overlay);
