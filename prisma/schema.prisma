@@ -164,6 +164,7 @@ model Subscription {
   billingPeriodStart DateTime           @default(now())
   billingPeriodEnd   DateTime           @default(now())
   externalCustomerId String?
+  stripeSubscriptionId String?          @unique
   trialEndsAt        DateTime?
   planFeatures       Json?
   createdAt          DateTime           @default(now())

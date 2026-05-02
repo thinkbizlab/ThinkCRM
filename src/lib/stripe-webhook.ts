@@ -154,18 +154,26 @@ export async function recordStripeWebhookAndSyncSubscription(
   const stripeStatus = typeof obj.status === "string" ? obj.status : undefined;
   const mapped = mapStripeSubscriptionStatus(stripeStatus);
   const tenantId = extractTenantIdFromStripePayload(payload);
+  const stripeSubId = extractStripeSubscriptionId(payload);
 
   let subscriptionId: string | null = null;
-  if (tenantId && mapped) {
-    const sub = await db.subscription.findFirst({
-      where: { tenantId },
-      orderBy: { createdAt: "desc" }
-    });
-    if (sub) {
-      await db.subscription.update({
-        where: { id: sub.id },
-        data: { status: mapped }
+  if (mapped || stripeSubId) {
+    let sub = stripeSubId
+      ? await db.subscription.findUnique({ where: { stripeSubscriptionId: stripeSubId } })
+      : null;
+    if (!sub && tenantId) {
+      sub = await db.subscription.findFirst({
+        where: { tenantId },
+        orderBy: { createdAt: "desc" }
       });
+    }
+    if (sub) {
+      const data: { status?: SubscriptionStatus; stripeSubscriptionId?: string } = {};
+      if (mapped) data.status = mapped;
+      if (stripeSubId && !sub.stripeSubscriptionId) data.stripeSubscriptionId = stripeSubId;
+      if (Object.keys(data).length > 0) {
+        await db.subscription.update({ where: { id: sub.id }, data });
+      }
       subscriptionId = sub.id;
     }
   }
@@ -186,6 +194,19 @@ function extractTenantIdFromStripePayload(payload: z.infer<typeof stripeEnvelope
     if (typeof tenantId === "string" && tenantId.length > 0) {
       return tenantId;
     }
+  }
+  return null;
+}
+
+function extractStripeSubscriptionId(payload: z.infer<typeof stripeEnvelopeSchema>): string | null {
+  const obj = payload.data?.object ?? {};
+  // customer.subscription.* events: obj.id IS the Stripe subscription id.
+  if (typeof obj.object === "string" && obj.object === "subscription" && typeof obj.id === "string" && obj.id.startsWith("sub_")) {
+    return obj.id;
+  }
+  // checkout.session.completed, invoice.*: obj.subscription holds the subscription id.
+  if (typeof obj.subscription === "string" && obj.subscription.startsWith("sub_")) {
+    return obj.subscription;
   }
   return null;
 }
