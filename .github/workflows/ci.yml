@@ -37,7 +37,12 @@ jobs:
           --health-timeout=5s
           --health-retries=5
     env:
+      # Prisma schema requires both: in production DATABASE_URL points at a
+      # pooled connection (Neon/Vercel Postgres) and DIRECT_URL bypasses the
+      # pooler for migrations. CI uses a plain Postgres container so the two
+      # are the same string.
       DATABASE_URL: postgresql://test:test@localhost:5432/thinkcrm_test
+      DIRECT_URL: postgresql://test:test@localhost:5432/thinkcrm_test
       JWT_SECRET: ci-test-secret-not-for-production
       APP_URL: http://localhost:3000
     steps:
@@ -69,6 +74,7 @@ jobs:
           --health-retries=5
     env:
       DATABASE_URL: postgresql://test:test@localhost:5432/thinkcrm_e2e
+      DIRECT_URL: postgresql://test:test@localhost:5432/thinkcrm_e2e
       JWT_SECRET: ci-test-secret-not-for-production
       APP_URL: http://localhost:3000
       E2E_BASE_URL: http://localhost:3000
