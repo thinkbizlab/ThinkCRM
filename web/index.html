@@ -257,6 +257,10 @@
               <svg class="nav-ic" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s-7-6.5-7-12a7 7 0 0 1 14 0c0 5.5-7 12-7 12z"/><circle cx="12" cy="10" r="2.5"/></svg>
               Visits
             </button>
+            <button class="nav-btn" data-view="prospects" id="prospects-nav-btn">
+              <svg class="nav-ic" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 21V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2v13"/><path d="M3 21h18"/><path d="M9 12l3 3 3-3"/></svg>
+              Prospects
+            </button>
             <button class="nav-btn" data-view="calendar">
               <svg class="nav-ic" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18"/><path d="M8 3v4"/><path d="M16 3v4"/></svg>
               Calendar
@@ -392,6 +396,7 @@
           <section id="view-master" class="view"></section>
           <section id="view-deals" class="view"></section>
           <section id="view-visits" class="view"></section>
+          <section id="view-prospects" class="view"></section>
           <section id="view-calendar" class="view"></section>
           <section id="view-integrations" class="view"></section>
           <section id="view-settings" class="view"></section>
@@ -565,7 +570,19 @@
         </header>
         <form id="visit-form" class="visit-modal-form">
           <div class="visit-modal-fields">
-            <label class="form-label visit-type-label">Visit type
+            <label class="form-label visit-type-label">Subject
+              <div class="visit-type-toggle">
+                <label class="visit-type-option">
+                  <input type="radio" name="visitSubject" value="CUSTOMER" checked />
+                  <span>Existing customer</span>
+                </label>
+                <label class="visit-type-option">
+                  <input type="radio" name="visitSubject" value="UNIDENTIFIED" />
+                  <span>Unidentified site</span>
+                </label>
+              </div>
+            </label>
+            <label class="form-label visit-type-label" id="visit-type-label">Visit type
               <div class="visit-type-toggle">
                 <label class="visit-type-option">
                   <input type="radio" name="visitType" value="PLANNED" checked />
@@ -577,12 +594,15 @@
                 </label>
               </div>
             </label>
-            <label class="form-label">Customer
+            <label class="form-label" id="visit-customer-label">Customer
               <div class="ac-wrap" id="visit-customer-wrap">
                 <input class="form-input" id="visit-customer-input" type="text" placeholder="Type name or code…" autocomplete="off" />
                 <div class="ac-list" id="visit-customer-list" hidden></div>
-                <input type="hidden" name="customerId" id="visit-customer-id" required />
+                <input type="hidden" name="customerId" id="visit-customer-id" />
               </div>
+            </label>
+            <label class="form-label" id="visit-prospect-fields" hidden>Site name <span class="muted small">(optional — leave blank to auto-name from coordinates)</span>
+              <input class="form-input" id="visit-prospect-name" type="text" placeholder="e.g. Construction site at Sukhumvit 21" maxlength="200" />
             </label>
             <label class="form-label" id="visit-deal-label" hidden>Associated deal
               <select class="form-input" name="dealId" id="visit-deal-select">
@@ -1000,6 +1020,6 @@
       </div>
     </div>
 
-    <script type="module" src="/app.js?v=20260427d-flyin"></script>
+    <script type="module" src="/app.js?v=20260503-federation"></script>
   </body>
 </html>

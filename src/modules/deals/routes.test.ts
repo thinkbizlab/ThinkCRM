@@ -139,7 +139,6 @@ describe("deal kanban stage management", () => {
         ownerId: rep.id,
         customerCode: `CUST-${suffix}`,
         name: "Kanban Customer",
-        defaultTermId: paymentTerm.id,
         addresses: {
           create: {
             addressLine1: "123 Kanban Street",

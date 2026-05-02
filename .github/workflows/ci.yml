@@ -37,7 +37,12 @@ jobs:
           --health-timeout=5s
           --health-retries=5
     env:
+      # Prisma schema requires both: in production DATABASE_URL points at a
+      # pooled connection (Neon/Vercel Postgres) and DIRECT_URL bypasses the
+      # pooler for migrations. CI uses a plain Postgres container so the two
+      # are the same string.
       DATABASE_URL: postgresql://test:test@localhost:5432/thinkcrm_test
+      DIRECT_URL: postgresql://test:test@localhost:5432/thinkcrm_test
       JWT_SECRET: ci-test-secret-not-for-production
       APP_URL: http://localhost:3000
     steps:
@@ -69,6 +74,7 @@ jobs:
           --health-retries=5
     env:
       DATABASE_URL: postgresql://test:test@localhost:5432/thinkcrm_e2e
+      DIRECT_URL: postgresql://test:test@localhost:5432/thinkcrm_e2e
       JWT_SECRET: ci-test-secret-not-for-production
       APP_URL: http://localhost:3000
       E2E_BASE_URL: http://localhost:3000
@@ -88,6 +94,23 @@ jobs:
         run: |
           npm start &
           npx wait-on http://localhost:3000 --timeout 30000
+          # Seed the e2e admin user via the public signup endpoint so the
+          # auth.spec.ts login test has credentials. Idempotent — a re-run
+          # against an already-seeded DB returns 409 which we treat as OK.
+          curl -fsS -X POST http://localhost:3000/api/v1/tenants/signup \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"companyName\":   \"E2E Test Tenant\",
+              \"slug\":          \"${E2E_TENANT_SLUG}\",
+              \"adminFullName\": \"E2E Admin\",
+              \"adminEmail\":    \"${E2E_ADMIN_EMAIL}\",
+              \"adminPassword\": \"${E2E_ADMIN_PASSWORD}\"
+            }" || echo "Signup returned non-zero (likely already exists from a previous run); continuing."
+          # Signup leaves the user unverified; login then returns
+          # `needsEmailVerification:true` instead of a JWT. Flip the flag
+          # directly so the login spec lands on the dashboard.
+          PGPASSWORD=test psql -h localhost -U test -d thinkcrm_e2e -c \
+            "UPDATE \"User\" SET \"emailVerified\"=true WHERE email='${E2E_ADMIN_EMAIL}';"
           npm run test:e2e
       - uses: actions/upload-artifact@v4
         if: failure()

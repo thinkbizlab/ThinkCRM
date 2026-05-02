@@ -54,7 +54,6 @@ async function createVisitFixture(): Promise<VisitFixture> {
       ownerId: repId,
       customerCode: `CUST-${token.slice(0, 8)}`,
       name: "Customer Test",
-      defaultTermId: paymentTermId,
       addresses: {
         create: {
           addressLine1: "123 Test Street",
@@ -556,7 +555,6 @@ describe("visit check-in/out evidence", () => {
         tenantId: tenant.id,
         customerCode: `CUST-${suffix}`,
         name: "Acme Test",
-        defaultTermId: paymentTerm.id,
         addresses: {
           create: {
             addressLine1: "123 Test Road",

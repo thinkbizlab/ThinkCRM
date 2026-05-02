@@ -116,22 +116,19 @@ describe("customer search", () => {
           tenantId,
           ownerId: managerId,
           customerCode: `CUST-M-${suffix.slice(0, 6)}`,
-          name: "Acme HQ",
-          defaultTermId: termId
+          name: "Acme HQ"
         },
         {
           tenantId,
           ownerId: repId,
           customerCode: `CUST-R-${suffix.slice(0, 6)}`,
-          name: "Acme Retail",
-          defaultTermId: termId
+          name: "Acme Retail"
         },
         {
           tenantId,
           ownerId: repId,
           customerCode: `CUST-D-${suffix.slice(0, 6)}`,
           name: "Acme Dormant",
-          defaultTermId: termId,
           disabled: true
         }
       ]
@@ -255,8 +252,7 @@ describe("draft customer workflow", () => {
       payload: {
         customerCode: "CUST-SHOULD-FAIL",
         name: "Regular Create",
-        customerType: "COMPANY",
-        defaultTermId: fixture.termId
+        customerType: "COMPANY"
       }
     });
     expect(blocked.statusCode).toBe(403);
@@ -276,7 +272,6 @@ describe("draft customer workflow", () => {
     const created = draft.json();
     expect(created.status).toBe(CustomerStatus.DRAFT);
     expect(created.customerCode).toBeNull();
-    expect(created.defaultTermId).toBeNull();
     expect(created.draftCreatedByUserId).toBe(fixture.adminId);
   });
 
@@ -291,7 +286,10 @@ describe("draft customer workflow", () => {
         customerCode: `ERP-${randomUUID().slice(0, 8)}`,
         customerType: "COMPANY",
         taxId: "0105555123456",
-        defaultTermId: fixture.termId,
+        // The route's create path defaults branchCode to "00000" when taxId
+        // is set, and the duplicate lookup keys on (taxId, branchCode). The
+        // fixture must mirror that pair to be discoverable.
+        branchCode: "00000",
         status: CustomerStatus.ACTIVE
       }
     });
@@ -314,7 +312,7 @@ describe("draft customer workflow", () => {
     expect(body.id).toBe(original.id);
   });
 
-  it("promotes a DRAFT to ACTIVE with a customer code and payment term", async () => {
+  it("promotes a DRAFT to ACTIVE with a customer code", async () => {
     const fixture = await setupErpLockedTenant();
 
     const draft = await prisma.customer.create({
@@ -333,13 +331,12 @@ describe("draft customer workflow", () => {
       method: "POST",
       url: `/api/v1/customers/${draft.id}/promote`,
       headers: fixture.auth,
-      payload: { customerCode: code, defaultTermId: fixture.termId }
+      payload: { customerCode: code }
     });
     expect(res.statusCode).toBe(200);
     const promoted = res.json();
     expect(promoted.status).toBe(CustomerStatus.ACTIVE);
     expect(promoted.customerCode).toBe(code);
-    expect(promoted.defaultTermId).toBe(fixture.termId);
     expect(promoted.promotedAt).toBeTruthy();
   });
 });

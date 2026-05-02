@@ -44,8 +44,6 @@ const customerMappedSchema = z.object({
   // Thai-style branch code (e.g. "00000" = HQ). Defaults to "00000"
   // server-side when taxId is set but branchCode is missing.
   branchCode: z.string().regex(/^[0-9]{1,5}$/).optional(),
-  defaultTermId: z.string().min(1).optional(),
-  defaultTermCode: z.string().min(1).optional(),
   ownerId: z.string().min(1).optional(),
   siteLat: z.number().min(-90).max(90).optional(),
   siteLng: z.number().min(-180).max(180).optional(),
@@ -364,43 +362,6 @@ function dedupeKey(entityType: EntityType, mapped: Record<string, unknown>): str
   return null;
 }
 
-async function resolvePaymentTermId(
-  tenantId: string,
-  mappedCustomer: z.infer<typeof customerMappedSchema>
-): Promise<string> {
-  if (mappedCustomer.defaultTermId) {
-    const term = await prisma.paymentTerm.findFirst({
-      where: { tenantId, id: mappedCustomer.defaultTermId, isActive: true },
-      select: { id: true }
-    });
-    if (!term) {
-      throw new Error(`Payment term id "${mappedCustomer.defaultTermId}" not found.`);
-    }
-    return term.id;
-  }
-
-  if (mappedCustomer.defaultTermCode) {
-    const term = await prisma.paymentTerm.findFirst({
-      where: { tenantId, code: mappedCustomer.defaultTermCode, isActive: true },
-      select: { id: true }
-    });
-    if (!term) {
-      throw new Error(`Payment term code "${mappedCustomer.defaultTermCode}" not found.`);
-    }
-    return term.id;
-  }
-
-  const fallback = await prisma.paymentTerm.findFirst({
-    where: { tenantId, isActive: true },
-    orderBy: { createdAt: "asc" },
-    select: { id: true }
-  });
-  if (!fallback) {
-    throw new Error("No active payment term found for customer import.");
-  }
-  return fallback.id;
-}
-
 async function resolveOwnerId(tenantId: string, raw: string | undefined): Promise<string | undefined> {
   if (!raw) return undefined;
   const trimmed = raw.trim();
@@ -424,8 +385,26 @@ async function upsertEntity(
   mapped: Record<string, unknown>
 ): Promise<void> {
   if (entityType === EntityType.CUSTOMER) {
+    // Federated tenants: this scheduled pull is allowed to keep shadow rows
+    // populated (so FKs from Deal/Quotation/Visit have a target) but it must
+    // NOT overwrite attributes that are read live from the upstream MySQL.
+    // Strip everything outside the shadow allowlist before upserting.
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { customerFederationSourceId: true }
+    });
+    if (tenant?.customerFederationSourceId) {
+      const SHADOW_FIELDS = new Set([
+        "customerCode",
+        "name",
+        "externalRef",
+        "customerType"
+      ]);
+      mapped = Object.fromEntries(
+        Object.entries(mapped).filter(([k]) => SHADOW_FIELDS.has(k))
+      );
+    }
     const payload = customerMappedSchema.parse(mapped);
-    const defaultTermId = await resolvePaymentTermId(tenantId, payload);
     const resolvedOwnerId = await resolveOwnerId(tenantId, payload.ownerId);
     let validatedCf: Prisma.InputJsonValue | undefined;
     if (payload.customFields && Object.keys(payload.customFields).length > 0) {
@@ -457,7 +436,6 @@ async function upsertEntity(
           id: true,
           customerCode: true,
           name: true,
-          defaultTermId: true,
           status: true,
           externalRef: true,
           customerType: true
@@ -478,7 +456,6 @@ async function upsertEntity(
             siteLng: payload.siteLng ?? undefined,
             externalRef: payload.externalRef ?? undefined,
             disabled: payload.disabled ?? undefined,
-            defaultTermId,
             customFields: validatedCf ?? undefined
           }
         });
@@ -543,7 +520,6 @@ async function upsertEntity(
             siteLat: payload.siteLat ?? undefined,
             siteLng: payload.siteLng ?? undefined,
             disabled: payload.disabled ?? undefined,
-            defaultTermId,
             customFields: validatedCf ?? undefined
           }
         });
@@ -570,7 +546,6 @@ async function upsertEntity(
           siteLng: payload.siteLng ?? undefined,
           externalRef: payload.externalRef ?? undefined,
           disabled: payload.disabled ?? undefined,
-          defaultTermId,
           customFields: validatedCf ?? undefined
         }
       });
@@ -589,7 +564,6 @@ async function upsertEntity(
           siteLng: payload.siteLng ?? undefined,
           externalRef: payload.externalRef ?? undefined,
           disabled: payload.disabled ?? false,
-          defaultTermId,
           customFields: validatedCf ?? undefined
         }
       });

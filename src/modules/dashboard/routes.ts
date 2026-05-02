@@ -436,7 +436,10 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
 
     const visits = await prisma.visit.findMany({
       where: { tenantId, repId: userId, plannedAt: { gte: now, lte: nextMonth } },
-      include: { customer: true }
+      include: {
+        customer: true,
+        prospect: { select: { id: true, displayName: true } }
+      }
     });
 
     const bucketOf = (at: Date) => {
@@ -453,7 +456,11 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
         acc[bucket] = acc[bucket] ?? [];
         acc[bucket].push({
           id: visit.id,
-          customer: visit.customer.name,
+          customer: visit.customer
+            ? visit.customer.name
+            : visit.prospect
+              ? `Prospect: ${visit.prospect.displayName ?? "(unnamed)"}`
+              : "—",
           at: visit.plannedAt,
           status: visit.status,
           action: visit.status === VisitStatus.CHECKED_IN ? "CHECK_OUT" : "CHECK_IN"
