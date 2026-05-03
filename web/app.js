@@ -179,6 +179,24 @@ async function ensureThemePresetsModule() {
   return themePresetsModulePromise;
 }
 
+let aiUsageModulePromise = null;
+let aiUsageModule = null;
+async function ensureAiUsageModule() {
+  if (!aiUsageModulePromise) {
+    aiUsageModulePromise = import(`./modules/ai-usage.js${MV}`).then((module) => {
+      module.setAiUsageDeps({
+        state,
+        api,
+        escHtml,
+        navigateToSettingsPage,
+      });
+      aiUsageModule = module;
+      return module;
+    });
+  }
+  return aiUsageModulePromise;
+}
+
 async function ensureSettingsAdminModule() {
   if (!settingsAdminModulePromise) {
     settingsAdminModulePromise = import(`./modules/settings-admin.js${MV}`).then((module) => {
@@ -4486,6 +4504,7 @@ function renderSettings() {
     { page: "data-sync",      label: "Data Sync",              ic: "refresh", roles: ["ADMIN"] },
     { page: "custom-fields",  label: "Custom Fields",         ic: "clipboard", roles: ["ADMIN"] },
     { page: "cron-jobs",      label: "Scheduled Jobs",         ic: "clock", roles: ["ADMIN"] },
+    { page: "ai-usage",       label: "AI Usage",               ic: "activity", roles: ["ADMIN"] },
     { page: "logs",           label: "Logs",                   ic: "activity", roles: ["ADMIN"], view: "integrations" }
   ];
   const navItems = allNavItems.filter(item => item.roles.includes(role));
@@ -6350,6 +6369,8 @@ function renderSettings() {
         }).join("")}
       `;
     }
+  } else if (page === "ai-usage") {
+    pageHtml = `<div id="ai-usage-mount"></div>`;
   }
 
   // ── Shell ─────────────────────────────────────────────────────
@@ -6458,6 +6479,13 @@ function renderSettings() {
 
   if (page === "my-profile" && window.PublicKeyCredential) {
     void initPasskeySectionLazy();
+  }
+
+  if (page === "ai-usage") {
+    ensureAiUsageModule().then((m) => m.loadAiUsage()).catch((err) => {
+      const mount = document.querySelector("#ai-usage-mount");
+      if (mount) mount.innerHTML = `<section class="card"><div class="muted" style="color:var(--danger)">${escHtml(err?.message || "Failed to load AI usage module.")}</div></section>`;
+    });
   }
 
   // ── Notification channel help panel toggle ───────────────────
@@ -10342,6 +10370,8 @@ function openNewCustomerModal(_termOptions) {
           <p class="ncm-contacts-hint muted small" id="ncm-contacts-hint">Each contact must have at least one of: Tel, Email, LINE ID, WhatsApp.</p>
         </div>
 
+        <div id="ncm-dupe-panel" style="display:none"></div>
+
         <div class="ncm-footer">
           <button type="button" class="ghost ncm-cancel-btn" id="ncm-cancel">Cancel</button>
           <button type="submit" class="ncm-submit-btn" id="ncm-submit">
@@ -10727,6 +10757,46 @@ function openNewCustomerModal(_termOptions) {
 
 
     if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "Creating…"; }
+
+    // Inline AI duplicate pre-check (skip on second submit after user chose
+    // [Continue creating new]). Soft-fails — a check error never blocks create.
+    const dupePanel = overlay.querySelector("#ncm-dupe-panel");
+    if (!event.target.dataset.skipDupeCheck) {
+      try {
+        if (submitBtn) submitBtn.textContent = "Checking for duplicates…";
+        const checkPayload = {
+          name: payload.name,
+          taxId: payload.taxId ?? null,
+          branchCode: payload.branchCode ?? null,
+          contacts: contacts.map((c) => ({ tel: c.tel ?? null, email: c.email ?? null })),
+        };
+        const res = await api("/customers/duplicates/check-new", { method: "POST", body: checkPayload });
+        if (res.matches && res.matches.length > 0) {
+          renderInlineDupePanel(dupePanel, res, {
+            onUseExisting: (id) => {
+              window.location.assign("/customers/" + id);
+            },
+            onContinueAnyway: () => {
+              event.target.dataset.skipDupeCheck = "1";
+              dupePanel.style.display = "none";
+              if (submitBtn) submitBtn.textContent = "Create Customer";
+              event.target.requestSubmit();
+            },
+            onCancel: () => {
+              dupePanel.style.display = "none";
+              if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = "Create Customer"; }
+            },
+          });
+          return;
+        }
+      } catch (err) {
+        // Pre-check failure must never block create — log and proceed.
+        console.warn("dedup pre-check failed", err);
+      } finally {
+        if (submitBtn) submitBtn.textContent = "Creating…";
+      }
+    }
+
     try {
       const created = await api("/customers", { method: "POST", body: payload });
       // Post addresses sequentially
@@ -10745,6 +10815,85 @@ function openNewCustomerModal(_termOptions) {
       if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = "Create Customer"; }
     }
   });
+}
+
+// Render the inline duplicate-check panel inside the New Customer modal.
+// Owner-aware behavior:
+//   - match owned by current user OR unassigned → [Use existing] navigates to 360
+//   - match owned by another rep AND confidence ≥ 0.85 AND user is not admin-tier
+//     → hard block, hide [Continue creating new], show owner contact hint
+//   - otherwise → soft warning, both buttons available
+function renderInlineDupePanel(container, res, handlers) {
+  const me = state.user || {};
+  const myId = me.id || "";
+  const myRole = me.role || "";
+  const adminTier = myRole === "ADMIN" || myRole === "DIRECTOR" || myRole === "MANAGER" || myRole === "ASSISTANT_MANAGER";
+  const HARD_BLOCK_THRESHOLD = 0.85;
+
+  // Compute the strictest verdict across all matches: any match that triggers a
+  // hard block makes [Continue creating new] hidden.
+  let anyHardBlock = false;
+  const cards = res.matches.map((m) => {
+    const c = m.customer;
+    const ownedByMe = c.ownerId === myId;
+    const unassigned = !c.ownerId;
+    const ownedByOther = !ownedByMe && !unassigned;
+    const isHighConfidence = m.confidence >= HARD_BLOCK_THRESHOLD;
+    const isHardBlock = ownedByOther && isHighConfidence && !adminTier;
+    if (isHardBlock) anyHardBlock = true;
+    const ownerLabel = unassigned ? '<span class="muted">Unassigned</span>'
+      : ownedByMe ? "You"
+      : escHtml(c.owner?.fullName || "Another sales rep");
+    const kindLabel = ({
+      taxid_collision: "Same TaxID + branch",
+      taxid_typo_suspected: "⚠ Possible TaxID typo",
+      phone_match: "Shared phone",
+      email_match: "Shared email",
+      name_exact: "Identical name",
+      name_fuzz: "AI: similar name",
+    })[m.kind] || m.kind;
+    const blockNote = isHardBlock
+      ? `<div class="dupe-block-note" style="color:var(--danger);font-weight:600;margin-top:var(--sp-1)">Owned by ${escHtml(c.owner?.fullName || "another rep")} — please contact them to coordinate. Cannot create a duplicate.</div>`
+      : "";
+    const useBtn = (ownedByMe || unassigned || adminTier)
+      ? `<button type="button" class="ncm-submit-btn dupe-use-existing" data-id="${escHtml(c.id)}">Use existing</button>`
+      : "";
+    return `
+      <div class="dupe-card" style="border:1px solid var(--border-color);border-radius:6px;padding:var(--sp-3);margin-bottom:var(--sp-2);background:var(--card-bg)">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:var(--sp-2)">
+          <div>
+            <div><strong>${escHtml(c.customerCode || "(no code)")} — ${escHtml(c.name)}</strong></div>
+            <div class="muted small">TaxID: ${escHtml(c.taxId || "—")} · Owner: ${ownerLabel}</div>
+            <div class="muted small">${escHtml(kindLabel)} · confidence ${(m.confidence * 100).toFixed(0)}%</div>
+            <div class="muted small" style="margin-top:var(--sp-1)">${escHtml(m.reasonText || "")}</div>
+            ${blockNote}
+          </div>
+          <div style="display:flex;flex-direction:column;gap:var(--sp-1)">${useBtn}</div>
+        </div>
+      </div>`;
+  }).join("");
+
+  const aiHint = (!res.aiEnabled && adminTier)
+    ? `<p class="muted small" style="margin-top:var(--sp-2)">AI duplicate check is disabled. <a href="/settings/integrations">Enable in Settings → Integrations</a> to catch typo-style duplicates.</p>`
+    : "";
+
+  container.innerHTML = `
+    <div style="border:2px solid var(--accent);border-radius:8px;padding:var(--sp-3);margin:var(--sp-3) 0;background:var(--bg-subtle)">
+      <h4 style="margin:0 0 var(--sp-2) 0">Possible existing match${res.matches.length > 1 ? "es" : ""}</h4>
+      ${cards}
+      ${aiHint}
+      <div class="ncm-footer" style="margin-top:var(--sp-3);justify-content:flex-end">
+        <button type="button" class="ghost dupe-cancel">Cancel</button>
+        ${anyHardBlock ? "" : `<button type="button" class="dupe-continue">Continue creating new</button>`}
+      </div>
+    </div>`;
+  container.style.display = "";
+
+  container.querySelectorAll(".dupe-use-existing").forEach((btn) => {
+    btn.addEventListener("click", () => handlers.onUseExisting(btn.dataset.id));
+  });
+  container.querySelector(".dupe-continue")?.addEventListener("click", handlers.onContinueAnyway);
+  container.querySelector(".dupe-cancel")?.addEventListener("click", handlers.onCancel);
 }
 
 // ── Edit Customer Modal ───────────────────────────────────────────────────────

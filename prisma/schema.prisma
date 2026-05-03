@@ -9,116 +9,118 @@ datasource db {
 }
 
 model Tenant {
-  id                    String                   @id @default(cuid())
-  name                  String
-  slug                  String                   @unique
-  timezone              String                   @default("Asia/Bangkok")
-  isActive              Boolean                  @default(true)
-  deactivatedAt         DateTime?
-  manageCustomersByApi  Boolean                  @default(false)
-  manageItemsByApi      Boolean                  @default(false)
-  managePaymentTermsByApi Boolean                 @default(false)
-  manageCustomerGroupsByApi Boolean               @default(false)
-  staleProspectAlertDays Int                     @default(14)
+  id                          String                        @id @default(cuid())
+  name                        String
+  slug                        String                        @unique
+  timezone                    String                        @default("Asia/Bangkok")
+  isActive                    Boolean                       @default(true)
+  deactivatedAt               DateTime?
+  manageCustomersByApi        Boolean                       @default(false)
+  manageItemsByApi            Boolean                       @default(false)
+  managePaymentTermsByApi     Boolean                       @default(false)
+  manageCustomerGroupsByApi   Boolean                       @default(false)
+  staleProspectAlertDays      Int                           @default(14)
   // When non-null, this tenant's Customer master is read live from the MySQL
   // IntegrationSource at this id. We keep thin shadow rows in our DB so FKs
   // (Deal/Quotation/Visit → Customer) keep working; attribute reads hit the
   // tenant's MySQL on demand. See src/modules/federation/customer-federation.ts.
-  customerFederationSourceId String?
-  customerFederationSource   IntegrationSource? @relation("CustomerFederationSource", fields: [customerFederationSourceId], references: [id], onDelete: SetNull)
-  stripeCustomerId      String?
-  createdAt             DateTime                 @default(now())
-  updatedAt             DateTime                 @updatedAt
-  users                 User[]
-  subscriptions         Subscription[]
+  customerFederationSourceId  String?
+  customerFederationSource    IntegrationSource?            @relation("CustomerFederationSource", fields: [customerFederationSourceId], references: [id], onDelete: SetNull)
+  stripeCustomerId            String?
+  createdAt                   DateTime                      @default(now())
+  updatedAt                   DateTime                      @updatedAt
+  users                       User[]
+  subscriptions               Subscription[]
   subscriptionProrationEvents SubscriptionProrationEvent[]
-  invoices              TenantInvoice[]
-  storageQuotas         TenantStorageQuota[]
-  storageUsageDaily     TenantStorageUsageDaily[]
-  paymentTerms          PaymentTerm[]
-  customerGroups        CustomerGroup[]
-  customers             Customer[]
-  prospects             Prospect[]
-  items                 Item[]
-  deals                 Deal[]
-  quotations            Quotation[]
-  visits                Visit[]
-  integrations          IntegrationSource[]
-  integrationCredentials TenantIntegrationCredential[]
-  integrationLogs       IntegrationExecutionLog[]
-  integrationSyncJobs   IntegrationSyncJob[]
-  teams                 Team[]
-  branding              TenantBranding?
-  taxConfig             TenantTaxConfig?
-  visitConfig           TenantVisitConfig?
-  kpiTargets            SalesKpiTarget[]
-  aiAnalysisRuns        AiAnalysisRun[]
-  aiVisitRecommendationRuns AiVisitRecommendationRun[]
-  voiceNoteJobs         VoiceNoteJob[]
-  notificationChannels  TeamNotificationChannel[]
-  customFieldDefinitions CustomFieldDefinition[]
-  quotationFormConfig    QuotationFormConfig?
-  entityChangelogs       EntityChangelog[]
+  invoices                    TenantInvoice[]
+  storageQuotas               TenantStorageQuota[]
+  storageUsageDaily           TenantStorageUsageDaily[]
+  paymentTerms                PaymentTerm[]
+  customerGroups              CustomerGroup[]
+  customers                   Customer[]
+  prospects                   Prospect[]
+  items                       Item[]
+  deals                       Deal[]
+  quotations                  Quotation[]
+  visits                      Visit[]
+  integrations                IntegrationSource[]
+  integrationCredentials      TenantIntegrationCredential[]
+  integrationLogs             IntegrationExecutionLog[]
+  integrationSyncJobs         IntegrationSyncJob[]
+  teams                       Team[]
+  branding                    TenantBranding?
+  taxConfig                   TenantTaxConfig?
+  visitConfig                 TenantVisitConfig?
+  kpiTargets                  SalesKpiTarget[]
+  aiAnalysisRuns              AiAnalysisRun[]
+  aiVisitRecommendationRuns   AiVisitRecommendationRun[]
+  voiceNoteJobs               VoiceNoteJob[]
+  notificationChannels        TeamNotificationChannel[]
+  customFieldDefinitions      CustomFieldDefinition[]
+  quotationFormConfig         QuotationFormConfig?
+  entityChangelogs            EntityChangelog[]
   customerDuplicateCandidates CustomerDuplicateCandidate[]
-  userDelegations        UserDelegation[]
-  roleChainEntries       TenantRoleChain[]
-  customDomain           TenantCustomDomain?
-  cronJobConfigs         CronJobConfig[]
-  cronJobRuns            CronJobRun[]
-  userInvites            UserInvite[]
-  auditLogs              AuditLog[]
-  stripeWebhookDeliveries StripeWebhookDelivery[]
-  syncApiKeys            SyncApiKey[]
-  syncExternalRefs       SyncExternalRef[]
-  transformTemplates     TransformTemplate[]
+  userDelegations             UserDelegation[]
+  roleChainEntries            TenantRoleChain[]
+  customDomain                TenantCustomDomain?
+  cronJobConfigs              CronJobConfig[]
+  cronJobRuns                 CronJobRun[]
+  userInvites                 UserInvite[]
+  auditLogs                   AuditLog[]
+  stripeWebhookDeliveries     StripeWebhookDelivery[]
+  syncApiKeys                 SyncApiKey[]
+  syncExternalRefs            SyncExternalRef[]
+  transformTemplates          TransformTemplate[]
+  aiUsageEvents               AiUsageEvent[]
 }
 
 model User {
-  id                  String                @id @default(cuid())
-  tenantId            String
-  email               String
-  passwordHash        String                @default("")
-  fullName            String
-  role                UserRole
-  isActive            Boolean               @default(true)
-  mustResetPassword   Boolean               @default(false)
-  emailVerified       Boolean               @default(false)
-  emailVerifyToken    String?               @unique
-  emailVerifyExpiresAt DateTime?
-  managerUserId       String?
-  teamId              String?
-  notifPrefs          Json?
-  avatarUrl           String?
-  isDemo              Boolean               @default(false)
-  lastSeenAt          DateTime?
-  externalAccounts    UserExternalAccount[]
-  createdAt           DateTime              @default(now())
-  updatedAt           DateTime              @updatedAt
-  tenant              Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  manager             User?                 @relation("UserManager", fields: [managerUserId], references: [id], onDelete: SetNull)
-  team                Team?                 @relation(fields: [teamId], references: [id], onDelete: SetNull)
-  reports             User[]                @relation("UserManager")
-  directedTeams       Team[]                @relation("TeamDirector")
-  dealUpdates         DealProgressUpdate[]
-  integrationLogs     IntegrationExecutionLog[]
-  ownedDeals          Deal[]                @relation("DealOwner")
-  ownedVisits         Visit[]               @relation("VisitRep")
-  ownedCustomers      Customer[]            @relation("CustomerOwner")
-  createdCustomers    Customer[]            @relation("CustomerCreatedBy")
-  draftedCustomers    Customer[]            @relation("CustomerDraftCreatedBy")
-  createdDeals        Deal[]                @relation("DealCreatedBy")
-  createdVisits       Visit[]               @relation("VisitCreatedBy")
-  createdProspects    Prospect[]            @relation("ProspectCreatedBy")
-  updatedProspects    Prospect[]            @relation("ProspectUpdatedBy")
-  uploadedProspectPhotos ProspectPhoto[]    @relation("ProspectPhotoUploadedBy")
-  delegatedAs         UserDelegation[]      @relation("UserDelegationDelegate")
-  principalFor        UserDelegation[]      @relation("UserDelegationPrincipal")
-  voiceNoteRequested  VoiceNoteJob[]        @relation("VoiceRequestedBy")
-  voiceNoteConfirmed  VoiceNoteTranscript[] @relation("VoiceConfirmedBy")
+  id                        String                     @id @default(cuid())
+  tenantId                  String
+  email                     String
+  passwordHash              String                     @default("")
+  fullName                  String
+  role                      UserRole
+  isActive                  Boolean                    @default(true)
+  mustResetPassword         Boolean                    @default(false)
+  emailVerified             Boolean                    @default(false)
+  emailVerifyToken          String?                    @unique
+  emailVerifyExpiresAt      DateTime?
+  managerUserId             String?
+  teamId                    String?
+  notifPrefs                Json?
+  avatarUrl                 String?
+  isDemo                    Boolean                    @default(false)
+  lastSeenAt                DateTime?
+  externalAccounts          UserExternalAccount[]
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
+  tenant                    Tenant                     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  manager                   User?                      @relation("UserManager", fields: [managerUserId], references: [id], onDelete: SetNull)
+  team                      Team?                      @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  reports                   User[]                     @relation("UserManager")
+  directedTeams             Team[]                     @relation("TeamDirector")
+  dealUpdates               DealProgressUpdate[]
+  integrationLogs           IntegrationExecutionLog[]
+  ownedDeals                Deal[]                     @relation("DealOwner")
+  ownedVisits               Visit[]                    @relation("VisitRep")
+  ownedCustomers            Customer[]                 @relation("CustomerOwner")
+  createdCustomers          Customer[]                 @relation("CustomerCreatedBy")
+  draftedCustomers          Customer[]                 @relation("CustomerDraftCreatedBy")
+  createdDeals              Deal[]                     @relation("DealCreatedBy")
+  createdVisits             Visit[]                    @relation("VisitCreatedBy")
+  createdProspects          Prospect[]                 @relation("ProspectCreatedBy")
+  updatedProspects          Prospect[]                 @relation("ProspectUpdatedBy")
+  uploadedProspectPhotos    ProspectPhoto[]            @relation("ProspectPhotoUploadedBy")
+  delegatedAs               UserDelegation[]           @relation("UserDelegationDelegate")
+  principalFor              UserDelegation[]           @relation("UserDelegationPrincipal")
+  voiceNoteRequested        VoiceNoteJob[]             @relation("VoiceRequestedBy")
+  voiceNoteConfirmed        VoiceNoteTranscript[]      @relation("VoiceConfirmedBy")
   aiVisitRecommendationRuns AiVisitRecommendationRun[] @relation("AiVisitRecommendationRunRep")
-  entityChangelogs      EntityChangelog[]      @relation("EntityChangelogChangedBy")
-  devices               UserDevice[]
-  passkeys              UserPasskey[]
+  entityChangelogs          EntityChangelog[]          @relation("EntityChangelogChangedBy")
+  devices                   UserDevice[]
+  passkeys                  UserPasskey[]
+  aiUsageEvents             AiUsageEvent[]
 
   @@unique([tenantId, email])
   @@index([tenantId, isActive, role])
@@ -135,7 +137,7 @@ model UserDelegation {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
   tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  delegate        User     @relation("UserDelegationDelegate",  fields: [delegateUserId],  references: [id], onDelete: Cascade)
+  delegate        User     @relation("UserDelegationDelegate", fields: [delegateUserId], references: [id], onDelete: Cascade)
   principal       User     @relation("UserDelegationPrincipal", fields: [principalUserId], references: [id], onDelete: Cascade)
 
   @@unique([delegateUserId, principalUserId])
@@ -144,7 +146,7 @@ model UserDelegation {
 }
 
 model EntityChangelog {
-  id          String    @id @default(cuid())
+  id          String     @id @default(cuid())
   tenantId    String
   entityType  EntityType
   entityId    String
@@ -153,35 +155,35 @@ model EntityChangelog {
   afterJson   Json?
   contextJson Json?
   changedById String?
-  createdAt   DateTime  @default(now())
-  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  changedBy   User?     @relation("EntityChangelogChangedBy", fields: [changedById], references: [id], onDelete: SetNull)
+  createdAt   DateTime   @default(now())
+  tenant      Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  changedBy   User?      @relation("EntityChangelogChangedBy", fields: [changedById], references: [id], onDelete: SetNull)
 
   @@index([tenantId, createdAt])
   @@index([tenantId, entityType, entityId, createdAt])
 }
 
 model Subscription {
-  id                 String             @id @default(cuid())
-  tenantId           String
-  provider           BillingProvider
-  pricingModel       PricingModel       @default(FIXED_PER_USER)
-  status             SubscriptionStatus
-  seatPriceCents     Int
-  seatCount          Int                @default(1)
-  currency           String             @default("THB")
-  paymentMethodRef   String?
-  billingCycle       BillingCycle       @default(MONTHLY)
-  billingPeriodStart DateTime           @default(now())
-  billingPeriodEnd   DateTime           @default(now())
-  externalCustomerId String?
-  stripeSubscriptionId String?          @unique
-  trialEndsAt        DateTime?
-  planFeatures       Json?
-  createdAt          DateTime           @default(now())
-  updatedAt          DateTime           @updatedAt
-  tenant             Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  prorationEvents    SubscriptionProrationEvent[]
+  id                   String                       @id @default(cuid())
+  tenantId             String
+  provider             BillingProvider
+  pricingModel         PricingModel                 @default(FIXED_PER_USER)
+  status               SubscriptionStatus
+  seatPriceCents       Int
+  seatCount            Int                          @default(1)
+  currency             String                       @default("THB")
+  paymentMethodRef     String?
+  billingCycle         BillingCycle                 @default(MONTHLY)
+  billingPeriodStart   DateTime                     @default(now())
+  billingPeriodEnd     DateTime                     @default(now())
+  externalCustomerId   String?
+  stripeSubscriptionId String?                      @unique
+  trialEndsAt          DateTime?
+  planFeatures         Json?
+  createdAt            DateTime                     @default(now())
+  updatedAt            DateTime                     @updatedAt
+  tenant               Tenant                       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  prorationEvents      SubscriptionProrationEvent[]
 }
 
 model TenantStorageQuota {
@@ -209,54 +211,54 @@ model TenantStorageUsageDaily {
 }
 
 model SubscriptionProrationEvent {
-  id                    String       @id @default(cuid())
-  tenantId              String
-  subscriptionId        String
-  oldSeatCount          Int
-  newSeatCount          Int
-  seatDelta             Int
-  daysRemaining         Int
-  totalPeriodDays       Int
-  proratedAmountCents   Int
-  effectiveAt           DateTime
-  createdAt             DateTime     @default(now())
-  tenant                Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  subscription          Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  id                  String       @id @default(cuid())
+  tenantId            String
+  subscriptionId      String
+  oldSeatCount        Int
+  newSeatCount        Int
+  seatDelta           Int
+  daysRemaining       Int
+  totalPeriodDays     Int
+  proratedAmountCents Int
+  effectiveAt         DateTime
+  createdAt           DateTime     @default(now())
+  tenant              Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  subscription        Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
 }
 
 model TenantInvoice {
-  id                       String        @id @default(cuid())
-  tenantId                 String
-  invoiceMonth             String
-  periodStart              String
-  periodEnd                String
-  currency                 String
-  seatsBaseCents           Int
-  storageOverageCents      Int
+  id                        String        @id @default(cuid())
+  tenantId                  String
+  invoiceMonth              String
+  periodStart               String
+  periodEnd                 String
+  currency                  String
+  seatsBaseCents            Int
+  storageOverageCents       Int
   prorationAdjustmentsCents Int
-  totalDueCents            Int
-  status                   InvoiceStatus @default(DRAFT)
-  finalizedAt              DateTime?
-  createdAt                DateTime      @default(now())
-  updatedAt                DateTime      @updatedAt
-  tenant                   Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  totalDueCents             Int
+  status                    InvoiceStatus @default(DRAFT)
+  finalizedAt               DateTime?
+  createdAt                 DateTime      @default(now())
+  updatedAt                 DateTime      @updatedAt
+  tenant                    Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, invoiceMonth])
 }
 
 model Team {
-  id          String                  @id @default(cuid())
-  tenantId    String
-  teamName    String
-  isActive    Boolean                 @default(true)
-  isDemo      Boolean                 @default(false)
-  directorId  String?
-  createdAt   DateTime                @default(now())
-  updatedAt   DateTime                @updatedAt
-  tenant      Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  director    User?                   @relation("TeamDirector", fields: [directorId], references: [id], onDelete: SetNull)
-  users       User[]
-  channels    TeamNotificationChannel[]
+  id         String                    @id @default(cuid())
+  tenantId   String
+  teamName   String
+  isActive   Boolean                   @default(true)
+  isDemo     Boolean                   @default(false)
+  directorId String?
+  createdAt  DateTime                  @default(now())
+  updatedAt  DateTime                  @updatedAt
+  tenant     Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  director   User?                     @relation("TeamDirector", fields: [directorId], references: [id], onDelete: SetNull)
+  users      User[]
+  channels   TeamNotificationChannel[]
 }
 
 model TeamNotificationChannel {
@@ -292,33 +294,33 @@ model TenantIntegrationCredential {
 }
 
 model TenantBranding {
-  id                     String    @id @default(cuid())
-  tenantId               String    @unique
-  appName                String?
-  logoUrl                String?
-  faviconUrl             String?
-  primaryColor           String    @default("#2563eb")
-  secondaryColor         String    @default("#0f172a")
-  accentGradientEnabled  Boolean   @default(false)
-  accentGradientColor    String    @default("#ec4899")
-  accentGradientAngle    Int       @default(135)
-  themeTokens            Json      @default("{}")
-  themeMode              ThemeMode @default(LIGHT)
-  loginTaglineHeadline   String?
-  loginTaglineSubtext    String?
-  loginHeroImageUrl      String?
-  loginWelcomeMessage    String?
-  loginFooterText        String?
-  loginTermsUrl          String?
-  loginPrivacyUrl        String?
-  loginSupportEmail      String?
-  loginShowSignup        Boolean   @default(true)
-  loginShowGoogle        Boolean   @default(true)
-  loginShowMicrosoft     Boolean   @default(true)
-  loginShowPasskey       Boolean   @default(true)
-  createdAt              DateTime  @default(now())
-  updatedAt              DateTime  @updatedAt
-  tenant                 Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id                    String    @id @default(cuid())
+  tenantId              String    @unique
+  appName               String?
+  logoUrl               String?
+  faviconUrl            String?
+  primaryColor          String    @default("#2563eb")
+  secondaryColor        String    @default("#0f172a")
+  accentGradientEnabled Boolean   @default(false)
+  accentGradientColor   String    @default("#ec4899")
+  accentGradientAngle   Int       @default(135)
+  themeTokens           Json      @default("{}")
+  themeMode             ThemeMode @default(LIGHT)
+  loginTaglineHeadline  String?
+  loginTaglineSubtext   String?
+  loginHeroImageUrl     String?
+  loginWelcomeMessage   String?
+  loginFooterText       String?
+  loginTermsUrl         String?
+  loginPrivacyUrl       String?
+  loginSupportEmail     String?
+  loginShowSignup       Boolean   @default(true)
+  loginShowGoogle       Boolean   @default(true)
+  loginShowMicrosoft    Boolean   @default(true)
+  loginShowPasskey      Boolean   @default(true)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  tenant                Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
 
 model TenantTaxConfig {
@@ -332,27 +334,27 @@ model TenantTaxConfig {
 }
 
 model TenantVisitConfig {
-  id                       String   @id @default(cuid())
-  tenantId                 String   @unique
-  checkInMaxDistanceM      Int      @default(1000)
-  minVisitDurationMinutes  Int      @default(15)
-  createdAt                DateTime @default(now())
-  updatedAt                DateTime @updatedAt
-  tenant                   Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id                      String   @id @default(cuid())
+  tenantId                String   @unique
+  checkInMaxDistanceM     Int      @default(1000)
+  minVisitDurationMinutes Int      @default(15)
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+  tenant                  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
 
 model PaymentTerm {
-  id          String   @id @default(cuid())
-  tenantId    String
-  code        String
-  name        String
-  dueDays     Int
-  isActive    Boolean  @default(true)
+  id           String      @id @default(cuid())
+  tenantId     String
+  code         String
+  name         String
+  dueDays      Int
+  isActive     Boolean     @default(true)
   customFields Json?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  quotations  Quotation[]
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  tenant       Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  quotations   Quotation[]
 
   @@unique([tenantId, code])
 }
@@ -375,13 +377,13 @@ model CustomerGroup {
 }
 
 model Customer {
-  id                   String             @id @default(cuid())
+  id                   String            @id @default(cuid())
   tenantId             String
   ownerId              String?
   customerCode         String?
   name                 String
   externalRef          String?
-  customerType         CustomerType       @default(COMPANY)
+  customerType         CustomerType      @default(COMPANY)
   taxId                String?
   // Thai-style branch code (e.g. "00000" = HQ, "00001" = first branch).
   // Required whenever taxId is set so (taxId, branchCode) uniquely identifies
@@ -391,30 +393,30 @@ model Customer {
   // (e.g. holding company → subsidiary). Independent of taxId/branchCode.
   parentCustomerId     String?
   customerGroupId      String?
-  status               CustomerStatus     @default(ACTIVE)
+  status               CustomerStatus    @default(ACTIVE)
   draftCreatedByUserId String?
   promotedAt           DateTime?
   siteLat              Float?
   siteLng              Float?
   customFields         Json?
-  disabled             Boolean            @default(false)
-  isDemo               Boolean            @default(false)
+  disabled             Boolean           @default(false)
+  isDemo               Boolean           @default(false)
   createdByUserId      String?
-  createdAt            DateTime           @default(now())
-  updatedAt            DateTime           @updatedAt
-  tenant               Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  customerGroup        CustomerGroup?     @relation(fields: [customerGroupId], references: [id], onDelete: SetNull)
-  owner                User?              @relation("CustomerOwner", fields: [ownerId], references: [id], onDelete: SetNull)
-  createdBy            User?              @relation("CustomerCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
-  draftCreatedBy       User?              @relation("CustomerDraftCreatedBy", fields: [draftCreatedByUserId], references: [id], onDelete: SetNull)
-  parentCustomer       Customer?          @relation("CustomerHierarchy", fields: [parentCustomerId], references: [id], onDelete: SetNull)
-  childCustomers       Customer[]         @relation("CustomerHierarchy")
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+  tenant               Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customerGroup        CustomerGroup?    @relation(fields: [customerGroupId], references: [id], onDelete: SetNull)
+  owner                User?             @relation("CustomerOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  createdBy            User?             @relation("CustomerCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  draftCreatedBy       User?             @relation("CustomerDraftCreatedBy", fields: [draftCreatedByUserId], references: [id], onDelete: SetNull)
+  parentCustomer       Customer?         @relation("CustomerHierarchy", fields: [parentCustomerId], references: [id], onDelete: SetNull)
+  childCustomers       Customer[]        @relation("CustomerHierarchy")
   addresses            CustomerAddress[]
   contacts             CustomerContact[]
   deals                Deal[]
   visits               Visit[]
   quotations           Quotation[]
-  linkedProspects      Prospect[]         @relation("ProspectLinkedCustomer")
+  linkedProspects      Prospect[]        @relation("ProspectLinkedCustomer")
 
   @@unique([tenantId, taxId, branchCode])
   @@unique([tenantId, externalRef])
@@ -447,43 +449,43 @@ enum CustomerDuplicateStatus {
 }
 
 model CustomerDuplicateCandidate {
-  id            String                   @id @default(cuid())
-  tenantId      String
-  customerAId   String
-  customerBId   String
-  signal        CustomerDuplicateSignal
-  confidence    Float                    @default(1.0)
-  reasonText    String?
-  status        CustomerDuplicateStatus  @default(OPEN)
-  decidedById   String?
-  decidedAt     DateTime?
-  createdAt     DateTime                 @default(now())
-  updatedAt     DateTime                 @updatedAt
-  tenant        Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id          String                  @id @default(cuid())
+  tenantId    String
+  customerAId String
+  customerBId String
+  signal      CustomerDuplicateSignal
+  confidence  Float                   @default(1.0)
+  reasonText  String?
+  status      CustomerDuplicateStatus @default(OPEN)
+  decidedById String?
+  decidedAt   DateTime?
+  createdAt   DateTime                @default(now())
+  updatedAt   DateTime                @updatedAt
+  tenant      Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, customerAId, customerBId, signal])
   @@index([tenantId, status, createdAt])
 }
 
 model CustomerAddress {
-  id               String   @id @default(cuid())
-  customerId       String
-  addressLine1     String
-  subDistrict      String?
-  district         String?
-  province         String?
-  city             String?
-  state            String?
-  country          String?
-  postalCode       String?
-  latitude         Float?
-  longitude        Float?
-  isDefaultBilling Boolean  @default(false)
-  isDefaultShipping Boolean @default(false)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-  customer         Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  billingQuotations Quotation[] @relation("QuotationBillingAddress")
+  id                 String      @id @default(cuid())
+  customerId         String
+  addressLine1       String
+  subDistrict        String?
+  district           String?
+  province           String?
+  city               String?
+  state              String?
+  country            String?
+  postalCode         String?
+  latitude           Float?
+  longitude          Float?
+  isDefaultBilling   Boolean     @default(false)
+  isDefaultShipping  Boolean     @default(false)
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+  customer           Customer    @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  billingQuotations  Quotation[] @relation("QuotationBillingAddress")
   shippingQuotations Quotation[] @relation("QuotationShippingAddress")
 }
 
@@ -503,17 +505,17 @@ model CustomerContact {
 }
 
 model Item {
-  id           String   @id @default(cuid())
+  id           String          @id @default(cuid())
   tenantId     String
   itemCode     String
   name         String
   externalRef  String?
   unitPrice    Float
-  isActive     Boolean  @default(true)
+  isActive     Boolean         @default(true)
   customFields Json?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  tenant       Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   quoteItems   QuotationItem[]
 
   @@unique([tenantId, itemCode])
@@ -541,50 +543,50 @@ model CustomFieldDefinition {
 }
 
 model DealStage {
-  id          String   @id @default(cuid())
-  tenantId    String
-  stageName   String
-  stageOrder  Int
-  isClosedWon Boolean  @default(false)
-  isClosedLost Boolean @default(false)
-  isDefault   Boolean  @default(false)
-  allowForwardMove Boolean @default(true)
-  allowBackwardMove Boolean @default(false)
-  allowStageSkip Boolean @default(false)
+  id                    String   @id @default(cuid())
+  tenantId              String
+  stageName             String
+  stageOrder            Int
+  isClosedWon           Boolean  @default(false)
+  isClosedLost          Boolean  @default(false)
+  isDefault             Boolean  @default(false)
+  allowForwardMove      Boolean  @default(true)
+  allowBackwardMove     Boolean  @default(false)
+  allowStageSkip        Boolean  @default(false)
   allowedSourceStageIds Json?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  deals       Deal[]
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  deals                 Deal[]
 
   @@unique([tenantId, stageOrder])
 }
 
 model Deal {
-  id             String               @id @default(cuid())
-  tenantId       String
-  ownerId        String
-  dealNo         String
-  dealName       String
-  customerId     String
-  stageId        String
-  estimatedValue Float
-  followUpAt     DateTime
-  closedAt       DateTime?
-  status         DealStatus           @default(OPEN)
-  lostNote       String?
-  customFields   Json?
-  isDemo         Boolean              @default(false)
+  id              String               @id @default(cuid())
+  tenantId        String
+  ownerId         String
+  dealNo          String
+  dealName        String
+  customerId      String
+  stageId         String
+  estimatedValue  Float
+  followUpAt      DateTime
+  closedAt        DateTime?
+  status          DealStatus           @default(OPEN)
+  lostNote        String?
+  customFields    Json?
+  isDemo          Boolean              @default(false)
   createdByUserId String?
-  createdAt      DateTime             @default(now())
-  updatedAt      DateTime             @updatedAt
-  tenant         Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  owner          User                 @relation("DealOwner", fields: [ownerId], references: [id], onDelete: Restrict)
-  createdBy      User?                @relation("DealCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
-  customer       Customer             @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  stage          DealStage            @relation(fields: [stageId], references: [id], onDelete: Restrict)
-  progress       DealProgressUpdate[]
-  quotations     Quotation[]
-  visits         Visit[]
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  tenant          Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  owner           User                 @relation("DealOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  createdBy       User?                @relation("DealCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  customer        Customer             @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  stage           DealStage            @relation(fields: [stageId], references: [id], onDelete: Restrict)
+  progress        DealProgressUpdate[]
+  quotations      Quotation[]
+  visits          Visit[]
 
   @@unique([tenantId, dealNo])
   @@index([tenantId, ownerId, status, closedAt])
@@ -594,40 +596,40 @@ model Deal {
 }
 
 model DealProgressUpdate {
-  id           String   @id @default(cuid())
-  dealId       String
-  createdById  String
-  note         String
+  id             String   @id @default(cuid())
+  dealId         String
+  createdById    String
+  note           String
   attachmentUrls Json?
-  createdAt    DateTime @default(now())
-  deal         Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
-  createdBy    User     @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  createdAt      DateTime @default(now())
+  deal           Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  createdBy      User     @relation(fields: [createdById], references: [id], onDelete: Restrict)
 }
 
 model Quotation {
-  id             String           @id @default(cuid())
-  tenantId       String
-  dealId         String
-  quotationNo    String
-  customerId     String
-  paymentTermId  String
-  billingAddressId String?
+  id                String           @id @default(cuid())
+  tenantId          String
+  dealId            String
+  quotationNo       String
+  customerId        String
+  paymentTermId     String
+  billingAddressId  String?
   shippingAddressId String?
-  validTo        DateTime
-  status         QuotationStatus  @default(DRAFT)
-  subtotal       Float
-  vatRate        Float            @default(7.0)
-  vatAmount      Float
-  grandTotal     Float
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
-  tenant         Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  deal           Deal             @relation(fields: [dealId], references: [id], onDelete: Cascade)
-  customer       Customer         @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  paymentTerm    PaymentTerm      @relation(fields: [paymentTermId], references: [id], onDelete: Restrict)
-  billingAddress CustomerAddress? @relation("QuotationBillingAddress", fields: [billingAddressId], references: [id], onDelete: SetNull)
-  shippingAddress CustomerAddress? @relation("QuotationShippingAddress", fields: [shippingAddressId], references: [id], onDelete: SetNull)
-  items          QuotationItem[]
+  validTo           DateTime
+  status            QuotationStatus  @default(DRAFT)
+  subtotal          Float
+  vatRate           Float            @default(7.0)
+  vatAmount         Float
+  grandTotal        Float
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  tenant            Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  deal              Deal             @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  customer          Customer         @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  paymentTerm       PaymentTerm      @relation(fields: [paymentTermId], references: [id], onDelete: Restrict)
+  billingAddress    CustomerAddress? @relation("QuotationBillingAddress", fields: [billingAddressId], references: [id], onDelete: SetNull)
+  shippingAddress   CustomerAddress? @relation("QuotationShippingAddress", fields: [shippingAddressId], references: [id], onDelete: SetNull)
+  items             QuotationItem[]
 
   @@unique([tenantId, quotationNo])
   @@index([tenantId, dealId])
@@ -739,38 +741,38 @@ model ProspectPhoto {
 }
 
 model Visit {
-  id            String      @id @default(cuid())
-  tenantId      String
-  repId         String
-  customerId    String?
-  prospectId    String?
-  dealId        String?
-  visitNo       String      @default("")
-  siteLat       Float?
-  siteLng       Float?
-  visitType     VisitType
-  status        VisitStatus @default(PLANNED)
-  plannedAt     DateTime
-  objective     String?
-  checkInAt     DateTime?
-  checkInLat    Float?
-  checkInLng    Float?
+  id               String      @id @default(cuid())
+  tenantId         String
+  repId            String
+  customerId       String?
+  prospectId       String?
+  dealId           String?
+  visitNo          String      @default("")
+  siteLat          Float?
+  siteLng          Float?
+  visitType        VisitType
+  status           VisitStatus @default(PLANNED)
+  plannedAt        DateTime
+  objective        String?
+  checkInAt        DateTime?
+  checkInLat       Float?
+  checkInLng       Float?
   checkInDistanceM Float?
-  checkInSelfie String?
-  checkOutAt    DateTime?
-  checkOutLat   Float?
-  checkOutLng   Float?
-  result        String?
-  isDemo        Boolean     @default(false)
-  createdByUserId String?
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
-  tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  rep           User        @relation("VisitRep", fields: [repId], references: [id], onDelete: Restrict)
-  createdBy     User?       @relation("VisitCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
-  customer      Customer?   @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  prospect      Prospect?   @relation(fields: [prospectId], references: [id], onDelete: Restrict)
-  deal          Deal?       @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  checkInSelfie    String?
+  checkOutAt       DateTime?
+  checkOutLat      Float?
+  checkOutLng      Float?
+  result           String?
+  isDemo           Boolean     @default(false)
+  createdByUserId  String?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+  tenant           Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  rep              User        @relation("VisitRep", fields: [repId], references: [id], onDelete: Restrict)
+  createdBy        User?       @relation("VisitCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  customer         Customer?   @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  prospect         Prospect?   @relation(fields: [prospectId], references: [id], onDelete: Restrict)
+  deal             Deal?       @relation(fields: [dealId], references: [id], onDelete: SetNull)
 
   @@unique([tenantId, visitNo])
   @@index([tenantId, repId, checkInAt])
@@ -780,46 +782,46 @@ model Visit {
 }
 
 model SalesKpiTarget {
-  id                  String   @id @default(cuid())
-  tenantId            String
-  userId              String
-  targetMonth         String
-  visitTargetCount    Int
-  newDealValueTarget  Float
-  revenueTarget       Float
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
-  tenant              Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id                 String   @id @default(cuid())
+  tenantId           String
+  userId             String
+  targetMonth        String
+  visitTargetCount   Int
+  newDealValueTarget Float
+  revenueTarget      Float
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  tenant             Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, userId, targetMonth])
 }
 
 model IntegrationSource {
-  id             String      @id @default(cuid())
-  tenantId       String
-  sourceName     String
-  sourceType     SourceType
-  configJson     Json
-  status         SourceStatus @default(DISABLED)
-  lastSyncAt     DateTime?
-  createdAt      DateTime    @default(now())
-  updatedAt      DateTime    @updatedAt
-  tenant         Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  mappings       IntegrationFieldMapping[]
-  jobs           IntegrationSyncJob[]
-  federatedFor   Tenant[]    @relation("CustomerFederationSource")
+  id           String                    @id @default(cuid())
+  tenantId     String
+  sourceName   String
+  sourceType   SourceType
+  configJson   Json
+  status       SourceStatus              @default(DISABLED)
+  lastSyncAt   DateTime?
+  createdAt    DateTime                  @default(now())
+  updatedAt    DateTime                  @updatedAt
+  tenant       Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  mappings     IntegrationFieldMapping[]
+  jobs         IntegrationSyncJob[]
+  federatedFor Tenant[]                  @relation("CustomerFederationSource")
 }
 
 model IntegrationFieldMapping {
-  id            String   @id @default(cuid())
+  id            String            @id @default(cuid())
   sourceId      String
   entityType    EntityType
   sourceField   String
   targetField   String
   transformRule String?
-  isRequired    Boolean  @default(false)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  isRequired    Boolean           @default(false)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
   source        IntegrationSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
 }
 
@@ -838,37 +840,37 @@ model TransformTemplate {
 }
 
 model IntegrationSyncJob {
-  id            String      @id @default(cuid())
-  tenantId      String
-  sourceId      String
-  runType       RunType
-  status        JobStatus
-  startedAt     DateTime    @default(now())
-  finishedAt    DateTime?
-  summaryJson   Json?
-  tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  source        IntegrationSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
-  errors        IntegrationSyncError[]
+  id          String                 @id @default(cuid())
+  tenantId    String
+  sourceId    String
+  runType     RunType
+  status      JobStatus
+  startedAt   DateTime               @default(now())
+  finishedAt  DateTime?
+  summaryJson Json?
+  tenant      Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  source      IntegrationSource      @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  errors      IntegrationSyncError[]
 
   @@index([tenantId, status])
   @@index([sourceId, status])
 }
 
 model IntegrationSyncError {
-  id           String   @id @default(cuid())
+  id           String             @id @default(cuid())
   jobId        String
   entityType   EntityType
   rowRef       String
   errorCode    String
   errorMessage String
-  createdAt    DateTime @default(now())
+  createdAt    DateTime           @default(now())
   job          IntegrationSyncJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
   @@index([jobId])
 }
 
 model IntegrationExecutionLog {
-  id              String       @id @default(cuid())
+  id              String              @id @default(cuid())
   tenantId        String
   executedById    String?
   platform        IntegrationPlatform
@@ -880,68 +882,68 @@ model IntegrationExecutionLog {
   responseSummary String?
   errorCode       String?
   errorMessage    String?
-  startedAt       DateTime      @default(now())
+  startedAt       DateTime            @default(now())
   completedAt     DateTime?
   payloadMasked   Json?
-  tenant          Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  executedBy      User?         @relation(fields: [executedById], references: [id], onDelete: SetNull)
+  tenant          Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  executedBy      User?               @relation(fields: [executedById], references: [id], onDelete: SetNull)
 }
 
 model UserExternalAccount {
-  id             String   @id @default(cuid())
+  id             String              @id @default(cuid())
   userId         String
   provider       IntegrationPlatform
   externalUserId String
   metadata       Json?
-  status         AccountStatus @default(CONNECTED)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status         AccountStatus       @default(CONNECTED)
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  user           User                @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, provider])
 }
 
 model AiAnalysisRun {
-  id           String   @id @default(cuid())
-  tenantId     String
-  requestedBy  String
-  filtersJson  Json?
-  status       JobStatus
-  createdAt    DateTime @default(now())
-  completedAt  DateTime?
-  findings     AiAnalysisFinding[]
-  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id          String              @id @default(cuid())
+  tenantId    String
+  requestedBy String
+  filtersJson Json?
+  status      JobStatus
+  createdAt   DateTime            @default(now())
+  completedAt DateTime?
+  findings    AiAnalysisFinding[]
+  tenant      Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
 
 model AiVisitRecommendationRun {
-  id              String                      @id @default(cuid())
+  id              String                  @id @default(cuid())
   tenantId        String
   repId           String
   dateFrom        DateTime
   dateTo          DateTime
-  generatedAt     DateTime                    @default(now())
+  generatedAt     DateTime                @default(now())
   recommendations AiVisitRecommendation[]
-  tenant          Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  rep             User                        @relation("AiVisitRecommendationRunRep", fields: [repId], references: [id], onDelete: Cascade)
+  tenant          Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  rep             User                    @relation("AiVisitRecommendationRunRep", fields: [repId], references: [id], onDelete: Cascade)
 }
 
 model AiVisitRecommendation {
-  id             String                           @id @default(cuid())
-  runId          String
-  sourceType     AiVisitRecommendationSourceType
-  customerId     String
-  dealId         String?
-  score          Float
-  reason         String
-  proposedDate   DateTime
-  status         AiVisitRecommendationStatus      @default(RECOMMENDED)
-  decisionAt     DateTime?
-  createdAt      DateTime                         @default(now())
-  run            AiVisitRecommendationRun         @relation(fields: [runId], references: [id], onDelete: Cascade)
+  id           String                          @id @default(cuid())
+  runId        String
+  sourceType   AiVisitRecommendationSourceType
+  customerId   String
+  dealId       String?
+  score        Float
+  reason       String
+  proposedDate DateTime
+  status       AiVisitRecommendationStatus     @default(RECOMMENDED)
+  decisionAt   DateTime?
+  createdAt    DateTime                        @default(now())
+  run          AiVisitRecommendationRun        @relation(fields: [runId], references: [id], onDelete: Cascade)
 }
 
 model AiAnalysisFinding {
-  id              String   @id @default(cuid())
+  id              String        @id @default(cuid())
   runId           String
   findingType     String
   title           String
@@ -952,23 +954,23 @@ model AiAnalysisFinding {
 }
 
 model VoiceNoteJob {
-  id             String   @id @default(cuid())
+  id             String               @id @default(cuid())
   tenantId       String
   entityType     EntityType
   entityId       String
   audioObjectKey String
   status         JobStatus
   requestedById  String
-  createdAt      DateTime @default(now())
+  createdAt      DateTime             @default(now())
   completedAt    DateTime?
   transcript     VoiceNoteTranscript?
-  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  requestedBy    User     @relation("VoiceRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
+  tenant         Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  requestedBy    User                 @relation("VoiceRequestedBy", fields: [requestedById], references: [id], onDelete: Restrict)
 }
 
 model VoiceNoteTranscript {
-  id              String   @id @default(cuid())
-  jobId           String   @unique
+  id              String       @id @default(cuid())
+  jobId           String       @unique
   transcriptText  String
   summaryText     String
   confidenceScore Float
@@ -977,6 +979,32 @@ model VoiceNoteTranscript {
   rejectedAt      DateTime?
   job             VoiceNoteJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
   confirmedBy     User?        @relation("VoiceConfirmedBy", fields: [confirmedById], references: [id], onDelete: SetNull)
+}
+
+// One row per paid AI call across the platform (dedup, voice, recommendations,
+// analysis, lost-deals). Powers the per-tenant AI Usage dashboard. No prompt
+// or response bodies are stored — only metadata + token counts + computed cost.
+model AiUsageEvent {
+  id           String       @id @default(cuid())
+  tenantId     String
+  userId       String?
+  feature      AiFeature
+  provider     AiProvider
+  model        String
+  inputTokens  Int          @default(0)
+  outputTokens Int          @default(0)
+  durationMs   Int?
+  costUsd      Decimal      @db.Decimal(12, 6)
+  status       AiCallStatus @default(SUCCESS)
+  errorMessage String?
+  createdAt    DateTime     @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user   User?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, feature, createdAt])
+  @@index([tenantId, userId, createdAt])
 }
 
 enum UserRole {
@@ -1138,6 +1166,27 @@ enum AiVisitRecommendationStatus {
   REJECTED
 }
 
+enum AiFeature {
+  DEDUP_INLINE
+  DEDUP_SCAN
+  VOICE_TRANSCRIBE
+  VOICE_SUMMARIZE
+  VISIT_RECOMMENDATIONS
+  ANALYSIS
+  LOST_DEALS
+}
+
+enum AiProvider {
+  ANTHROPIC
+  OPENAI
+  GEMINI
+}
+
+enum AiCallStatus {
+  SUCCESS
+  ERROR
+}
+
 enum CustomFieldDataType {
   TEXT
   TEXTAREA
@@ -1176,16 +1225,16 @@ enum CustomDomainStatus {
 }
 
 model CronJobConfig {
-  id          String          @id @default(cuid())
-  tenantId    String
-  jobKey      String
-  cronExpr    String
-  timezone    String          @default("Asia/Bangkok")
-  isEnabled   Boolean         @default(true)
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
-  tenant      Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  runs        CronJobRun[]
+  id        String       @id @default(cuid())
+  tenantId  String
+  jobKey    String
+  cronExpr  String
+  timezone  String       @default("Asia/Bangkok")
+  isEnabled Boolean      @default(true)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  tenant    Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  runs      CronJobRun[]
 
   @@unique([tenantId, jobKey])
 }
@@ -1237,17 +1286,17 @@ model PasswordResetToken {
 }
 
 model UserInvite {
-  id         String    @id @default(cuid())
-  tenantId   String
-  email      String
-  role       UserRole  @default(REP)
-  teamId     String?
+  id          String    @id @default(cuid())
+  tenantId    String
+  email       String
+  role        UserRole  @default(REP)
+  teamId      String?
   invitedById String?
-  token      String    @unique
-  expiresAt  DateTime
-  acceptedAt DateTime?
-  createdAt  DateTime  @default(now())
-  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  token       String    @unique
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([token])
   @@index([tenantId, email])
@@ -1317,17 +1366,17 @@ enum CronTriggerType {
 // ── WebAuthn Passkeys ───────────────────────────────────────────────────────
 
 model UserPasskey {
-  id               String   @id @default(cuid())
-  userId           String
-  credentialId     String   @unique
-  publicKey        Bytes
-  counter          BigInt   @default(0)
-  transports       String[]
-  deviceName       String   @default("Passkey")
-  aaguid           String?
-  createdAt        DateTime @default(now())
-  lastUsedAt       DateTime?
-  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id           String    @id @default(cuid())
+  userId       String
+  credentialId String    @unique
+  publicKey    Bytes
+  counter      BigInt    @default(0)
+  transports   String[]
+  deviceName   String    @default("Passkey")
+  aaguid       String?
+  createdAt    DateTime  @default(now())
+  lastUsedAt   DateTime?
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
 }
@@ -1349,33 +1398,32 @@ model WebAuthnChallenge {
 // ── Data Sync Framework ─────────────────────────────────────────────────────
 
 model SyncApiKey {
-  id          String    @id @default(cuid())
-  tenantId    String
-  label       String
-  keyHash     String    @unique
-  keyPrefix   String
-  scopes      String[]
-  isActive    Boolean   @default(true)
-  lastUsedAt  DateTime?
-  expiresAt   DateTime?
-  createdAt   DateTime  @default(now())
-  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id         String    @id @default(cuid())
+  tenantId   String
+  label      String
+  keyHash    String    @unique
+  keyPrefix  String
+  scopes     String[]
+  isActive   Boolean   @default(true)
+  lastUsedAt DateTime?
+  expiresAt  DateTime?
+  createdAt  DateTime  @default(now())
+  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId])
 }
 
 model SyncExternalRef {
-  id             String   @id @default(cuid())
+  id             String     @id @default(cuid())
   tenantId       String
   entityType     EntityType
   entityId       String
   externalId     String
   externalSource String
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+  tenant         Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, entityType, externalId, externalSource])
   @@index([tenantId, entityType, entityId])
 }
-

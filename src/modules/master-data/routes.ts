@@ -6,7 +6,7 @@ import { writeEntityChangelog } from "../../lib/changelog.js";
 import { prisma } from "../../lib/prisma.js";
 import { validateCustomFields, asRecord, extractCustomFieldsFromRow } from "../../lib/custom-fields.js";
 import { logAuditEvent } from "../../lib/audit.js";
-import { buildMergePreview, mergeCustomers, scanDuplicatesForTenant } from "./dedup.js";
+import { buildMergePreview, findDuplicatesForNewCustomer, mergeCustomers, scanDuplicatesForTenant } from "./dedup.js";
 import { getFederationConfig, hydrateCustomer, hydrateCustomers, searchFederatedCustomers } from "../federation/customer-federation.js";
 
 const customFieldValuesSchema = z.record(z.string(), z.unknown());
@@ -1069,6 +1069,46 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
   });
 
   // ── Duplicate detection & merge ───────────────────────────────────────────
+
+  // Inline pre-create check: rep is filling in the New Customer form. We compare
+  // the draft against existing tenant customers (deterministic + AI fuzzy) and
+  // return matches so the UI can warn or block before the row is persisted.
+  // No DB write is performed by this endpoint. Available to any authenticated
+  // user (everyone can create customers).
+  const checkNewBodySchema = z.object({
+    name: z.string().min(1).max(200),
+    taxId: z.string().trim().min(0).max(20).optional().nullable(),
+    branchCode: z.string().trim().min(0).max(5).optional().nullable(),
+    contacts: z.array(z.object({
+      tel: z.string().trim().max(40).optional().nullable(),
+      email: z.string().trim().max(200).optional().nullable(),
+    })).max(20).optional()
+  }).strict();
+
+  app.post("/customers/duplicates/check-new", async (request) => {
+    const tenantId = requireTenantId(request);
+    const userId = requireUserId(request);
+    const parsed = checkNewBodySchema.safeParse(request.body);
+    if (!parsed.success) throw app.httpErrors.badRequest(zodMsg(parsed.error));
+    const result = await findDuplicatesForNewCustomer(tenantId, userId, {
+      name: parsed.data.name,
+      taxId: parsed.data.taxId ?? null,
+      branchCode: parsed.data.branchCode ?? null,
+      contacts: parsed.data.contacts ?? [],
+    });
+    await logAuditEvent(tenantId, userId, "CUSTOMER_DEDUP_PRE_CHECK", {
+      draftName: parsed.data.name,
+      hasTaxId: !!parsed.data.taxId,
+      matchCount: result.matches.length,
+      aiCallsMade: result.aiCallsMade,
+      aiSkippedNoKey: result.aiSkippedNoKey,
+    }, request.ip);
+    return {
+      matches: result.matches,
+      aiEnabled: !result.aiSkippedNoKey,
+      aiCallsMade: result.aiCallsMade,
+    };
+  });
 
   app.post("/customers/duplicates/scan", async (request) => {
     requireRoleAtLeast(request, UserRole.ADMIN);
