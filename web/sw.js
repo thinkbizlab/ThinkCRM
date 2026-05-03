@@ -1,5 +1,7 @@
 // ThinkCRM Service Worker — shell cache + Background Sync drain
-const CACHE_NAME = "thinkcrm-shell-v1";
+// IMPORTANT: bump CACHE_NAME on every release that ships changed shell assets.
+// Old caches are deleted by the activate handler when the name differs.
+const CACHE_NAME = "thinkcrm-shell-v2";
 const SYNC_TAG   = "thinkcrm-offline-queue";
 
 const SHELL_ASSETS = [
@@ -57,26 +59,47 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       fetch(request)
         .then(res => {
-          const copy = res.clone();
-          caches.open(CACHE_NAME).then(c => c.put(request, copy));
+          if (res.ok) {
+            const copy = res.clone();
+            caches.open(CACHE_NAME).then(c => c.put(request, copy)).catch(() => {});
+          }
           return res;
         })
-        .catch(() => caches.match("/index.html"))
+        .catch(() => caches.match("/index.html").then(cached => cached || Response.error()))
     );
     return;
   }
 
-  // Static assets — cache-first.
+  // Scripts and stylesheets — network-first. JS module imports (`import "./x.js"`)
+  // arrive without a `?v=` cache-bust, so a cache-first strategy serves stale code
+  // forever after a deploy. Always go to network; fall back to cache only when
+  // offline. Cache successful responses for offline use.
+  if (request.destination === "script" || request.destination === "style") {
+    event.respondWith(
+      fetch(request)
+        .then(res => {
+          if (res.ok) {
+            const copy = res.clone();
+            caches.open(CACHE_NAME).then(c => c.put(request, copy)).catch(() => {});
+          }
+          return res;
+        })
+        .catch(() => caches.match(request).then(cached => cached || Response.error()))
+    );
+    return;
+  }
+
+  // Other static assets (images, fonts, icons) — cache-first with offline fallback.
   event.respondWith(
     caches.match(request).then(cached => {
       if (cached) return cached;
       return fetch(request).then(res => {
         if (res.ok) {
           const copy = res.clone();
-          caches.open(CACHE_NAME).then(c => c.put(request, copy));
+          caches.open(CACHE_NAME).then(c => c.put(request, copy)).catch(() => {});
         }
         return res;
-      });
+      }).catch(() => Response.error());
     })
   );
 });
