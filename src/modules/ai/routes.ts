@@ -1,4 +1,7 @@
 import {
+  AiCallStatus,
+  AiFeature,
+  AiProvider,
   AiVisitRecommendationSourceType,
   AiVisitRecommendationStatus,
   DealStatus,
@@ -23,6 +26,15 @@ import { decryptField } from "../../lib/secrets.js";
 import { uploadBufferToR2, createR2PresignedDownload, fetchR2ObjectBuffer } from "../../lib/r2-storage.js";
 import { config } from "../../config.js";
 import { convertToMp4, isFfmpegAvailable } from "../../lib/audio-convert.js";
+import { recordAiUsage } from "../../lib/ai-usage.js";
+
+// Voice-note transcription via OpenAI doesn't return audio duration. Estimate
+// from buffer size — opus/webm at typical voice bitrates is ~4 KB/s — so the
+// dashboard shows directionally-correct cost. Refine later if a real duration
+// source becomes available (e.g. ffprobe).
+function estimateAudioDurationMs(byteLength: number): number {
+  return Math.max(0, Math.round((byteLength / 4000) * 1000));
+}
 
 const createRecommendationRunSchema = z
   .object({
@@ -249,7 +261,8 @@ async function transcribeWithOpenAI(
   audioBuffer: Buffer,
   audioMimeType: string,
   outputLang: "TH" | "EN",
-  apiKey: string
+  apiKey: string,
+  meter: { tenantId: string; userId: string | null }
 ): Promise<string> {
   // OpenAI's audio transcriptions endpoint accepts multipart/form-data up to 25 MB.
   // gpt-4o-transcribe handles Thai + code-switched Thai/English well.
@@ -263,6 +276,7 @@ async function transcribeWithOpenAI(
   form.append("language", outputLang === "TH" ? "th" : "en");
   form.append("response_format", "json");
 
+  const durationMs = estimateAudioDurationMs(audioBuffer.byteLength);
   const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}` },
@@ -270,16 +284,36 @@ async function transcribeWithOpenAI(
   });
   if (!res.ok) {
     const errText = await res.text().catch(() => "");
+    void recordAiUsage({
+      tenantId: meter.tenantId,
+      userId: meter.userId,
+      feature: AiFeature.VOICE_TRANSCRIBE,
+      provider: AiProvider.OPENAI,
+      model: "gpt-4o-transcribe",
+      durationMs,
+      status: AiCallStatus.ERROR,
+      errorMessage: `OpenAI ${res.status}: ${errText.slice(0, 200)}`,
+    });
     throw new Error(`OpenAI transcription failed (${res.status}): ${errText.slice(0, 200)}`);
   }
   const data = (await res.json()) as { text?: string };
+  void recordAiUsage({
+    tenantId: meter.tenantId,
+    userId: meter.userId,
+    feature: AiFeature.VOICE_TRANSCRIBE,
+    provider: AiProvider.OPENAI,
+    model: "gpt-4o-transcribe",
+    durationMs,
+    status: AiCallStatus.SUCCESS,
+  });
   return (data.text ?? "").trim();
 }
 
 async function summarizeTranscript(
   transcriptText: string,
   apiKey: string,
-  outputLang: "TH" | "EN" = "TH"
+  outputLang: "TH" | "EN",
+  meter: { tenantId: string; userId: string | null }
 ): Promise<{ transcriptText: string; summaryText: string; confidenceScore: number }> {
   const client = new Anthropic({ apiKey });
 
@@ -287,33 +321,57 @@ async function summarizeTranscript(
     ? "Write the summary in Thai (ภาษาไทย)."
     : "Write the summary in English.";
 
-  const response = await client.messages.create({
-    model: "claude-haiku-4-5-20251001",
-    max_tokens: 512,
-    messages: [
-      {
-        role: "user",
-        content: `You are a CRM assistant. Summarize the following sales call transcript as 3-5 concise bullet points. Focus on key outcomes, customer needs, objections, and next steps. ${langInstruction} Respond ONLY with valid JSON: {"summary": "• point 1\\n• point 2\\n• point 3"}\n\nTranscript:\n${transcriptText}`
-      }
-    ]
-  });
-
-  const firstBlock = response.content[0];
-  const rawText = firstBlock?.type === "text" ? firstBlock.text : "";
+  const SUMMARIZE_MODEL = "claude-haiku-4-5-20251001";
   try {
-    const jsonMatch = rawText.match(/\{[\s\S]*\}/);
-    const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
-    return {
-      transcriptText,
-      summaryText: parsed.summary || rawText || "No summary generated.",
-      confidenceScore: 0.9
-    };
-  } catch {
-    return {
-      transcriptText: rawText || "Transcription failed.",
-      summaryText: "No summary generated.",
-      confidenceScore: 0.5
-    };
+    const response = await client.messages.create({
+      model: SUMMARIZE_MODEL,
+      max_tokens: 512,
+      messages: [
+        {
+          role: "user",
+          content: `You are a CRM assistant. Summarize the following sales call transcript as 3-5 concise bullet points. Focus on key outcomes, customer needs, objections, and next steps. ${langInstruction} Respond ONLY with valid JSON: {"summary": "• point 1\\n• point 2\\n• point 3"}\n\nTranscript:\n${transcriptText}`
+        }
+      ]
+    });
+    void recordAiUsage({
+      tenantId: meter.tenantId,
+      userId: meter.userId,
+      feature: AiFeature.VOICE_SUMMARIZE,
+      provider: AiProvider.ANTHROPIC,
+      model: SUMMARIZE_MODEL,
+      inputTokens: response.usage?.input_tokens ?? 0,
+      outputTokens: response.usage?.output_tokens ?? 0,
+      status: AiCallStatus.SUCCESS,
+    });
+
+    const firstBlock = response.content[0];
+    const rawText = firstBlock?.type === "text" ? firstBlock.text : "";
+    try {
+      const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+      const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
+      return {
+        transcriptText,
+        summaryText: parsed.summary || rawText || "No summary generated.",
+        confidenceScore: 0.9
+      };
+    } catch {
+      return {
+        transcriptText: rawText || "Transcription failed.",
+        summaryText: "No summary generated.",
+        confidenceScore: 0.5
+      };
+    }
+  } catch (err) {
+    void recordAiUsage({
+      tenantId: meter.tenantId,
+      userId: meter.userId,
+      feature: AiFeature.VOICE_SUMMARIZE,
+      provider: AiProvider.ANTHROPIC,
+      model: SUMMARIZE_MODEL,
+      status: AiCallStatus.ERROR,
+      errorMessage: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
   }
 }
 
@@ -1143,7 +1201,7 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
     let effectiveTranscript = browserTranscript ?? "";
     if (!effectiveTranscript && audioBuffer) {
       try {
-        effectiveTranscript = await transcribeWithOpenAI(audioBuffer, audioMimeType, outputLang, openaiApiKeyEarly);
+        effectiveTranscript = await transcribeWithOpenAI(audioBuffer, audioMimeType, outputLang, openaiApiKeyEarly, { tenantId, userId: requestedById });
       } catch (error) {
         request.log.warn({ err: error }, "OpenAI transcription failed");
       }
@@ -1151,7 +1209,7 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
 
     const transcript =
       effectiveTranscript && anthropicApiKey
-        ? await summarizeTranscript(effectiveTranscript, anthropicApiKey, outputLang)
+        ? await summarizeTranscript(effectiveTranscript, anthropicApiKey, outputLang, { tenantId, userId: requestedById })
         : effectiveTranscript
           ? { transcriptText: effectiveTranscript, summaryText: "", confidenceScore: 0 }
           : { transcriptText: "", summaryText: "", confidenceScore: 0 };
@@ -1338,6 +1396,7 @@ export const aiRoutes: FastifyPluginAsync = async (app) => {
   // ── Lost-deals AI analysis ───────────────────────────────────────────────
   app.get("/ai/lost-deals-analysis", async (request) => {
     const tenantId = requireTenantId(request);
+    const requestedById = requireUserId(request);
     const query = request.query as {
       dateFrom?: string;
       dateTo?: string;
@@ -1446,48 +1505,90 @@ Rules:
 
     async function callAiProvider(platform: AiPlatform, key: string, userPrompt: string): Promise<string> {
       if (platform === IntegrationPlatform.GEMINI) {
-        const res = await fetch(
-          "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
-          {
-            method: "POST",
-            headers: { "content-type": "application/json", "x-goog-api-key": key },
-            body: JSON.stringify({ contents: [{ parts: [{ text: userPrompt }] }] })
+        const model = "gemini-1.5-flash";
+        try {
+          const res = await fetch(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
+            {
+              method: "POST",
+              headers: { "content-type": "application/json", "x-goog-api-key": key },
+              body: JSON.stringify({ contents: [{ parts: [{ text: userPrompt }] }] })
+            }
+          );
+          if (!res.ok) {
+            const err = await res.text().catch(() => "");
+            void recordAiUsage({ tenantId, userId: requestedById, feature: AiFeature.LOST_DEALS, provider: AiProvider.GEMINI, model, status: AiCallStatus.ERROR, errorMessage: `${res.status}: ${err.slice(0, 200)}` });
+            throw app.httpErrors.badGateway(`Gemini error: ${res.status} ${err.slice(0, 120)}`);
           }
-        );
-        if (!res.ok) {
-          const err = await res.text().catch(() => "");
-          throw app.httpErrors.badGateway(`Gemini error: ${res.status} ${err.slice(0, 120)}`);
+          const body = await res.json() as { candidates: Array<{ content: { parts: Array<{ text: string }> } }>; usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number } };
+          void recordAiUsage({
+            tenantId, userId: requestedById, feature: AiFeature.LOST_DEALS, provider: AiProvider.GEMINI, model,
+            inputTokens: body.usageMetadata?.promptTokenCount ?? 0,
+            outputTokens: body.usageMetadata?.candidatesTokenCount ?? 0,
+            status: AiCallStatus.SUCCESS,
+          });
+          return body.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+        } catch (err) {
+          if ((err as { statusCode?: number }).statusCode) throw err; // already recorded
+          void recordAiUsage({ tenantId, userId: requestedById, feature: AiFeature.LOST_DEALS, provider: AiProvider.GEMINI, model, status: AiCallStatus.ERROR, errorMessage: err instanceof Error ? err.message : String(err) });
+          throw err;
         }
-        const body = await res.json() as { candidates: Array<{ content: { parts: Array<{ text: string }> } }> };
-        return body.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
       }
 
       if (platform === IntegrationPlatform.OPENAI) {
-        const res = await fetch("https://api.openai.com/v1/chat/completions", {
-          method: "POST",
-          headers: { "Authorization": `Bearer ${key}`, "content-type": "application/json" },
-          body: JSON.stringify({ model: "gpt-4o-mini", max_tokens: 2048, messages: [{ role: "user", content: userPrompt }] })
-        });
-        if (!res.ok) {
-          const err = await res.text().catch(() => "");
-          throw app.httpErrors.badGateway(`OpenAI error: ${res.status} ${err.slice(0, 120)}`);
+        const model = "gpt-4o-mini";
+        try {
+          const res = await fetch("https://api.openai.com/v1/chat/completions", {
+            method: "POST",
+            headers: { "Authorization": `Bearer ${key}`, "content-type": "application/json" },
+            body: JSON.stringify({ model, max_tokens: 2048, messages: [{ role: "user", content: userPrompt }] })
+          });
+          if (!res.ok) {
+            const err = await res.text().catch(() => "");
+            void recordAiUsage({ tenantId, userId: requestedById, feature: AiFeature.LOST_DEALS, provider: AiProvider.OPENAI, model, status: AiCallStatus.ERROR, errorMessage: `${res.status}: ${err.slice(0, 200)}` });
+            throw app.httpErrors.badGateway(`OpenAI error: ${res.status} ${err.slice(0, 120)}`);
+          }
+          const body = await res.json() as { choices: Array<{ message: { content: string } }>; usage?: { prompt_tokens?: number; completion_tokens?: number } };
+          void recordAiUsage({
+            tenantId, userId: requestedById, feature: AiFeature.LOST_DEALS, provider: AiProvider.OPENAI, model,
+            inputTokens: body.usage?.prompt_tokens ?? 0,
+            outputTokens: body.usage?.completion_tokens ?? 0,
+            status: AiCallStatus.SUCCESS,
+          });
+          return body.choices?.[0]?.message?.content ?? "";
+        } catch (err) {
+          if ((err as { statusCode?: number }).statusCode) throw err;
+          void recordAiUsage({ tenantId, userId: requestedById, feature: AiFeature.LOST_DEALS, provider: AiProvider.OPENAI, model, status: AiCallStatus.ERROR, errorMessage: err instanceof Error ? err.message : String(err) });
+          throw err;
         }
-        const body = await res.json() as { choices: Array<{ message: { content: string } }> };
-        return body.choices?.[0]?.message?.content ?? "";
       }
 
       // Default: Anthropic
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-        body: JSON.stringify({ model: "claude-haiku-4-5-20251001", max_tokens: 2048, messages: [{ role: "user", content: userPrompt }] })
-      });
-      if (!res.ok) {
-        const err = await res.text().catch(() => "");
-        throw app.httpErrors.badGateway(`Anthropic error: ${res.status} ${err.slice(0, 120)}`);
+      const model = "claude-haiku-4-5-20251001";
+      try {
+        const res = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+          body: JSON.stringify({ model, max_tokens: 2048, messages: [{ role: "user", content: userPrompt }] })
+        });
+        if (!res.ok) {
+          const err = await res.text().catch(() => "");
+          void recordAiUsage({ tenantId, userId: requestedById, feature: AiFeature.LOST_DEALS, provider: AiProvider.ANTHROPIC, model, status: AiCallStatus.ERROR, errorMessage: `${res.status}: ${err.slice(0, 200)}` });
+          throw app.httpErrors.badGateway(`Anthropic error: ${res.status} ${err.slice(0, 120)}`);
+        }
+        const body = await res.json() as { content: Array<{ text: string }>; usage?: { input_tokens?: number; output_tokens?: number } };
+        void recordAiUsage({
+          tenantId, userId: requestedById, feature: AiFeature.LOST_DEALS, provider: AiProvider.ANTHROPIC, model,
+          inputTokens: body.usage?.input_tokens ?? 0,
+          outputTokens: body.usage?.output_tokens ?? 0,
+          status: AiCallStatus.SUCCESS,
+        });
+        return body.content?.[0]?.text ?? "";
+      } catch (err) {
+        if ((err as { statusCode?: number }).statusCode) throw err;
+        void recordAiUsage({ tenantId, userId: requestedById, feature: AiFeature.LOST_DEALS, provider: AiProvider.ANTHROPIC, model, status: AiCallStatus.ERROR, errorMessage: err instanceof Error ? err.message : String(err) });
+        throw err;
       }
-      const body = await res.json() as { content: Array<{ text: string }> };
-      return body.content?.[0]?.text ?? "";
     }
 
     const rawText = await callAiProvider(aiPlatform, apiKey, prompt);

@@ -45,6 +45,18 @@
     {
       "path": "/api/v1/cron/sync-mysql-pull",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/v1/cron/sync-job-reaper",
+      "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/v1/cron/invoice-auto-send",
+      "schedule": "0 2 * * *"
+    },
+    {
+      "path": "/api/v1/cron/customer-dedup-scan",
+      "schedule": "0 20 * * *"
     }
   ]
 }

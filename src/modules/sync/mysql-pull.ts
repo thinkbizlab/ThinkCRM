@@ -54,6 +54,15 @@ export type MysqlSourceConfig = {
   chunkSize: number;
   schedule: SyncSchedule;
   query: MysqlQueryConfig;
+  /**
+   * When set, the chunked drain uses keyset pagination instead of OFFSET.
+   * Each chunk fetches `WHERE <cursorColumn> > <lastValue> ORDER BY <cursorColumn> ASC LIMIT N`.
+   * Avoids OFFSET's O(n) skip cost which becomes brutal at high cursors.
+   * The user's source SQL is responsible for ORDER BY <cursorColumn> ASC and
+   * including the column in its SELECT list. Validated against
+   * /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/ to keep the SQL string-interpolation safe.
+   */
+  cursorColumn: string | null;
 };
 
 const ROW_LIMIT_DEFAULT = 50_000;
@@ -196,6 +205,20 @@ export function parseMysqlConfig(raw: unknown): MysqlSourceConfig {
   const schedule = parseSchedule(o.schedule);
   const query = parseQueryConfig(o.query);
 
+  // Optional keyset cursor — must be a safe SQL identifier since it's
+  // string-interpolated into the chunk SQL. mysql2's `?` parameter binding
+  // is for VALUES, not column names, so we validate up front instead.
+  let cursorColumn: string | null = null;
+  if (typeof o.cursorColumn === "string") {
+    const v = o.cursorColumn.trim();
+    if (v) {
+      if (!/^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/.test(v)) {
+        throw new Error("MySQL cursorColumn must be a valid identifier (letters, digits, _ , $; up to 64 chars).");
+      }
+      cursorColumn = v;
+    }
+  }
+
   return {
     entityType: entityType as EntityType,
     host,
@@ -209,7 +232,8 @@ export function parseMysqlConfig(raw: unknown): MysqlSourceConfig {
     rowLimit,
     chunkSize,
     schedule,
-    query
+    query,
+    cursorColumn
   };
 }
 
@@ -271,7 +295,7 @@ function buildPreparedSql(cfg: MysqlSourceConfig, now: Date = new Date()): strin
 // ── Connection ──────────────────────────────────────────────────────────────
 
 type Mysql2Connection = {
-  query: (sql: string) => Promise<[unknown, unknown]>;
+  query: (sql: string, params?: unknown[]) => Promise<[unknown, unknown]>;
   end: () => Promise<void>;
 };
 
@@ -322,13 +346,17 @@ function normaliseRow(row: Record<string, unknown>): Record<string, unknown> {
 async function runReadOnlyQuery(
   conn: Mysql2Connection,
   sql: string,
-  queryTimeoutMs: number
+  queryTimeoutMs: number,
+  params: unknown[] = []
 ): Promise<Record<string, unknown>[]> {
   await conn.query("START TRANSACTION READ ONLY");
   try {
     // mysql2's query() doesn't accept a per-query timeout in the simple form,
     // so we race it against a manual timer that drops the connection on expiry.
-    const queryPromise = conn.query(sql).then(([rows]) => rows);
+    // Params are bound via mysql2's `?` placeholders — handles escaping for
+    // any string content (Thai, single quotes, NULs, etc.) and prevents
+    // injection from any keyset value originating in DB content.
+    const queryPromise = conn.query(sql, params).then(([rows]) => rows);
     const rows = await withTimeout(queryPromise, queryTimeoutMs, () => {
       conn.end().catch(() => {});
       throw new Error(`MySQL query exceeded queryTimeoutMs (${queryTimeoutMs}ms).`);
@@ -481,8 +509,14 @@ const PER_JOB_BUDGET_MS = 200_000;
 type DrainState = {
   /** Snapshot of the parsed source config when the job was enqueued. */
   config_snapshot: MysqlSourceConfig;
-  /** OFFSET into the source result set for the next chunk. */
+  /** OFFSET into the source result set for the next chunk (OFFSET mode only). */
   cursor: number;
+  /**
+   * Last value of the cursor column from the previous chunk's final row
+   * (KEYSET mode only — null when cursorColumn is not configured or before
+   * the first chunk). Used in `WHERE <cursorColumn> > ?` for the next chunk.
+   */
+  last_key: string | null;
   /** Total successfully upserted across all chunks so far. */
   success_count: number;
   /** Total mapped+upsert failures so far (errors are persisted to IntegrationSyncError). */
@@ -504,6 +538,7 @@ function makeDrainState(cfg: MysqlSourceConfig, requestedBy: string): DrainState
   return {
     config_snapshot: cfg,
     cursor: 0,
+    last_key: null,
     success_count: 0,
     failure_count: 0,
     duplicate_count: 0,
@@ -517,28 +552,70 @@ function makeDrainState(cfg: MysqlSourceConfig, requestedBy: string): DrainState
   };
 }
 
+type ChunkPlan = {
+  sql: string;
+  /** Bound via mysql2's `?` placeholders — safe for any string content. */
+  params: unknown[];
+};
+
 /**
  * If a TABLE-mode source has no explicit ORDER BY, default to ORDER BY 1
  * so that LIMIT/OFFSET resumption is at least column-stable. For SQL mode
  * we trust the admin's ORDER BY (or lack thereof — they own that risk).
+ *
+ * When `cursorColumn` is set on the config, we switch to keyset pagination:
+ * each chunk uses `WHERE <col> > ? ORDER BY <col> ASC LIMIT N`. Avoids
+ * OFFSET's O(n) skip cost. The user's source SQL is responsible for
+ * `ORDER BY <col> ASC` and including the column in its SELECT list.
  */
-function buildChunkSql(cfg: MysqlSourceConfig, offset: number, now: Date = new Date()): string {
+function buildChunkSql(cfg: MysqlSourceConfig, drain: DrainState, now: Date = new Date()): ChunkPlan {
   const limit = cfg.chunkSize;
+  const useKeyset = !!cfg.cursorColumn;
+
   if (cfg.query.mode === "TABLE") {
     const q = cfg.query;
     const parts: string[] = [`SELECT * FROM ${quoteTableName(q.table)}`];
-    if (q.where) parts.push(`WHERE ${expandTemplate(q.where, now)}`);
-    parts.push(`ORDER BY ${q.orderBy ? expandTemplate(q.orderBy, now) : "1"}`);
-    parts.push(`LIMIT ${limit} OFFSET ${offset}`);
-    return parts.join(" ");
+    const whereClauses: string[] = [];
+    if (q.where) whereClauses.push(`(${expandTemplate(q.where, now)})`);
+    const params: unknown[] = [];
+    if (useKeyset && drain.last_key != null) {
+      // cursorColumn is identifier-validated in parseMysqlConfig, safe to interpolate
+      whereClauses.push(`\`${cfg.cursorColumn}\` > ?`);
+      params.push(drain.last_key);
+    }
+    if (whereClauses.length > 0) parts.push(`WHERE ${whereClauses.join(" AND ")}`);
+    if (useKeyset) {
+      parts.push(`ORDER BY \`${cfg.cursorColumn}\` ASC`);
+      parts.push(`LIMIT ${limit}`);
+    } else {
+      parts.push(`ORDER BY ${q.orderBy ? expandTemplate(q.orderBy, now) : "1"}`);
+      parts.push(`LIMIT ${limit} OFFSET ${drain.cursor}`);
+    }
+    return { sql: parts.join(" "), params };
   }
+
   // SQL mode: wrap the user's statement so we don't have to parse-and-rewrite
   // their ORDER BY / LIMIT. mysql2 doesn't run multi-statements, but a
   // subquery is one statement. Re-validate post-expansion.
   const expanded = expandTemplate(cfg.query.sql, now);
   validateSelectStatement(expanded);
   const cleaned = expanded.replace(/;+\s*$/, "").trim();
-  return `SELECT * FROM (${cleaned}) AS __mp_inner LIMIT ${limit} OFFSET ${offset}`;
+
+  if (useKeyset) {
+    // The wrapper trusts the inner SQL to ORDER BY <cursorColumn> ASC and to
+    // include the column in its SELECT list. We just slice the next page.
+    if (drain.last_key != null) {
+      return {
+        sql: `SELECT * FROM (${cleaned}) AS __mp_inner WHERE __mp_inner.\`${cfg.cursorColumn}\` > ? LIMIT ${limit}`,
+        params: [drain.last_key]
+      };
+    }
+    return { sql: `SELECT * FROM (${cleaned}) AS __mp_inner LIMIT ${limit}`, params: [] };
+  }
+  return {
+    sql: `SELECT * FROM (${cleaned}) AS __mp_inner LIMIT ${limit} OFFSET ${drain.cursor}`,
+    params: []
+  };
 }
 
 /**
@@ -592,6 +669,11 @@ function readDrainState(summaryJson: unknown): DrainState | null {
   if (!summaryJson || typeof summaryJson !== "object") return null;
   const o = summaryJson as Record<string, unknown>;
   if (!o.config_snapshot || typeof o.cursor !== "number") return null;
+  // Backwards-compat: legacy jobs persisted before keyset support don't have
+  // last_key. Default to null so OFFSET-mode jobs keep working unchanged and
+  // KEYSET-mode jobs start from the beginning (pre-existing rows get
+  // re-upserted but stay idempotent).
+  if (!("last_key" in o)) (o as { last_key: string | null }).last_key = null;
   return o as unknown as DrainState;
 }
 
@@ -650,8 +732,8 @@ async function drainOneJob(jobId: string, deadlineAt: number): Promise<string> {
     conn = await connect(cfg);
     const jobBudgetUntil = Math.min(deadlineAt, Date.now() + PER_JOB_BUDGET_MS);
     while (Date.now() < jobBudgetUntil && !drain.finished) {
-      const sql = buildChunkSql(cfg, drain.cursor);
-      const rows = await runReadOnlyQuery(conn, sql, cfg.queryTimeoutMs);
+      const plan = buildChunkSql(cfg, drain);
+      const rows = await runReadOnlyQuery(conn, plan.sql, cfg.queryTimeoutMs, plan.params);
       if (rows.length === 0) {
         drain.finished = true;
         break;
@@ -671,6 +753,16 @@ async function drainOneJob(jobId: string, deadlineAt: number): Promise<string> {
       drain.failure_count += result.errors.length;
       drain.processed_count += rows.length;
       drain.cursor += rows.length;
+
+      // Keyset mode: capture the last row's cursor-column value so the next
+      // chunk's `WHERE <col> > ?` resumes from there. Coerce to string so
+      // datetime / numeric / string columns all serialize cleanly into
+      // summaryJson and round-trip back to mysql2 as a bind value.
+      if (cfg.cursorColumn) {
+        const lastRow = rows[rows.length - 1];
+        const v = lastRow ? lastRow[cfg.cursorColumn] : undefined;
+        if (v != null) drain.last_key = typeof v === "string" ? v : String(v);
+      }
 
       // Persist progress after each chunk so the UI sees movement and a
       // mid-tick crash doesn't lose the cursor.
@@ -729,6 +821,7 @@ function makeFailedDrainShim(summaryJson: unknown, _reason: string): DrainState 
   return {
     config_snapshot: (base.config_snapshot as MysqlSourceConfig) ?? ({} as MysqlSourceConfig),
     cursor: typeof base.cursor === "number" ? base.cursor : 0,
+    last_key: typeof base.last_key === "string" ? base.last_key : null,
     success_count: typeof base.success_count === "number" ? base.success_count : 0,
     failure_count: (typeof base.failure_count === "number" ? base.failure_count : 0) + 1,
     duplicate_count: typeof base.duplicate_count === "number" ? base.duplicate_count : 0,

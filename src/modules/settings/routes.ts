@@ -1143,6 +1143,92 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     });
   });
 
+  // ── Per-tenant AI usage / cost dashboard (admin-gated) ─────────────────────
+  // Aggregates AiUsageEvent rows over a date range and returns the shape
+  // consumed by web/modules/ai-usage.js. No prompt/response bodies are
+  // exposed — only counts, token totals, and computed cost in USD.
+  app.get("/tenants/:id/ai-usage", async (request) => {
+    const params = request.params as { id: string };
+    const query = request.query as { from?: string; to?: string };
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    assertTenantPathAccess(request, params.id);
+
+    const now = new Date();
+    const defaultFrom = new Date(now); defaultFrom.setDate(defaultFrom.getDate() - 30);
+    const fromDate = query.from ? new Date(query.from) : defaultFrom;
+    const toDate = query.to ? new Date(query.to) : now;
+    if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime()) || fromDate >= toDate) {
+      throw request.server.httpErrors.badRequest("Invalid from/to range.");
+    }
+
+    const where = { tenantId: params.id, createdAt: { gte: fromDate, lte: toDate } };
+
+    const [totalsAgg, byFeatureRows, byProviderRows, byUserRows, allEvents, anyProviderEnabled] = await Promise.all([
+      prisma.aiUsageEvent.aggregate({ where, _count: { _all: true }, _sum: { costUsd: true } }),
+      prisma.aiUsageEvent.groupBy({ by: ["feature"], where, _count: { _all: true }, _sum: { costUsd: true } }),
+      prisma.aiUsageEvent.groupBy({ by: ["provider"], where, _count: { _all: true }, _sum: { costUsd: true } }),
+      prisma.aiUsageEvent.groupBy({ by: ["userId"], where, _count: { _all: true }, _sum: { costUsd: true } }),
+      // Daily timeseries — pull only the columns we need; tenant-scoped + bounded date range so size is safe.
+      prisma.aiUsageEvent.findMany({ where, select: { createdAt: true, costUsd: true } }),
+      prisma.tenantIntegrationCredential.findFirst({
+        where: {
+          tenantId: params.id,
+          status: "ENABLED",
+          platform: { in: ["ANTHROPIC", "OPENAI", "GEMINI"] },
+        },
+        select: { id: true },
+      }),
+    ]);
+
+    // Resolve user names for byUser rows
+    const userIds = byUserRows.map((r) => r.userId).filter((id): id is string => !!id);
+    const users = userIds.length > 0
+      ? await prisma.user.findMany({ where: { tenantId: params.id, id: { in: userIds } }, select: { id: true, fullName: true } })
+      : [];
+    const userById = new Map(users.map((u) => [u.id, u.fullName]));
+
+    // Daily aggregation: bucket by yyyy-mm-dd in UTC.
+    const byDay = new Map<string, { events: number; costUsd: number }>();
+    for (const ev of allEvents) {
+      const d = ev.createdAt.toISOString().slice(0, 10);
+      const slot = byDay.get(d) ?? { events: 0, costUsd: 0 };
+      slot.events += 1;
+      slot.costUsd += Number(ev.costUsd ?? 0);
+      byDay.set(d, slot);
+    }
+    const dailyTimeseries = Array.from(byDay.entries())
+      .map(([date, s]) => ({ date, events: s.events, costUsd: Number(s.costUsd.toFixed(6)) }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    const sum = (v: unknown) => v ? Number(v) : 0;
+    return {
+      from: fromDate.toISOString(),
+      to: toDate.toISOString(),
+      totals: {
+        events: totalsAgg._count._all,
+        costUsd: Number(sum(totalsAgg._sum.costUsd).toFixed(6)),
+      },
+      byFeature: byFeatureRows.map((r) => ({
+        feature: r.feature,
+        events: r._count._all,
+        costUsd: Number(sum(r._sum.costUsd).toFixed(6)),
+      })).sort((a, b) => b.costUsd - a.costUsd),
+      byProvider: byProviderRows.map((r) => ({
+        provider: r.provider,
+        events: r._count._all,
+        costUsd: Number(sum(r._sum.costUsd).toFixed(6)),
+      })).sort((a, b) => b.costUsd - a.costUsd),
+      byUser: byUserRows.map((r) => ({
+        userId: r.userId,
+        fullName: r.userId ? (userById.get(r.userId) ?? "(deleted user)") : "(system / cron)",
+        events: r._count._all,
+        costUsd: Number(sum(r._sum.costUsd).toFixed(6)),
+      })).sort((a, b) => b.costUsd - a.costUsd),
+      dailyTimeseries,
+      anyProviderEnabled: !!anyProviderEnabled,
+    };
+  });
+
   app.get("/tenants/:id/master-api-lock", async (request) => {
     const params = request.params as { id: string };
     requireRoleAtLeast(request, UserRole.MANAGER);
