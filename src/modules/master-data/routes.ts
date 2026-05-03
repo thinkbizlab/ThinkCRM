@@ -752,7 +752,12 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    const isAutoCode = !parsed.data.customerCode || AUTO_CODE_RE.test(parsed.data.customerCode);
+    // DRAFT customers keep customerCode = null until ERP sync (or the manual
+    // promote endpoint) delivers the real ERP code — auto-generating a
+    // C-NNNNNN here would burn a number for a record that may never become
+    // a real customer, and would diverge from the test contract that asserts
+    // `customerCode` is null for a freshly captured prospect.
+    const isAutoCode = !isDraft && (!parsed.data.customerCode || AUTO_CODE_RE.test(parsed.data.customerCode));
 
     // Only validate manually-typed codes for duplicates up front.
     // Auto-generated codes (C-NNNNNN) are re-derived inside the transaction
