@@ -552,7 +552,15 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
 
     const localExternalRefs = new Set(localRows.map((r) => r.externalRef).filter((v): v is string => !!v));
     const federatedHits = await searchFederatedCustomers(tenantId, query.q, query.limit).catch(() => []);
-    const newRefs = federatedHits.filter((hit) => !localExternalRefs.has(hit.externalRef));
+    // Honor the upstream's disabled flag — never surface (and never auto-create
+    // a shadow row for) a customer the ERP has disabled. The disabled column
+    // name is taken from the operator's mapping if present, else "disabled".
+    const disabledColumn = federationCfg.mappings.find((m) => m.targetField === "disabled")?.sourceField ?? "disabled";
+    const isDisabled = (raw: Record<string, unknown>): boolean => {
+      const v = raw[disabledColumn];
+      return v === true || v === 1 || v === "1" || v === "true" || v === "TRUE";
+    };
+    const newRefs = federatedHits.filter((hit) => !localExternalRefs.has(hit.externalRef) && !isDisabled(hit.raw));
     if (newRefs.length === 0) return localRows;
 
     const created: typeof localRows = [];
