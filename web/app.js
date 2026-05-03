@@ -9865,11 +9865,12 @@ function renderCustomerListSection(container, termOptions) {
           <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           <input class="cust-search" id="cust-search-input" placeholder="Search by code, name or tax ID…" value="${escHtml(state.customerListQuery)}" />
         </div>
-        ${(canSeeTeam || canSeeAll) ? `
+        ${(canSeeTeam || canSeeAll || isAdmin) ? `
           <div class="cust-scope-pills">
             <button class="cust-scope-pill ${state.customerScope === "mine" ? "active" : ""}" data-scope="mine">My Customers</button>
             ${canSeeTeam || canSeeAll ? `<button class="cust-scope-pill ${state.customerScope === "team" ? "active" : ""}" data-scope="team">My Team</button>` : ""}
             ${canSeeAll ? `<button class="cust-scope-pill ${state.customerScope === "all" ? "active" : ""}" data-scope="all">All</button>` : ""}
+            ${isAdmin ? `<button class="cust-scope-pill ${state.customerScope === "unassigned" ? "active" : ""}" data-scope="unassigned" title="Customers with no owner — typically federated rows where ERP's sale_person didn't resolve to a CRM user">Unassigned</button>` : ""}
           </div>` : ""}
         ${(state.cache.customerGroups || []).length ? `
           <select class="ncm-input" id="cust-group-filter" style="width:auto;min-width:160px">

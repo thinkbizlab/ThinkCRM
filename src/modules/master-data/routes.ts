@@ -467,11 +467,41 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
   app.get("/customers", async (request) => {
     const tenantId = requireTenantId(request);
     const requesterId = requireUserId(request);
-    const visibleUserIdList = [...(await listVisibleUserIds(request))];
     const query = request.query as { scope?: string };
-    // scope=mine → only current user's customers (default)
-    // scope=team → all visible hierarchy
-    // scope=all  → same as team (further expansion for ADMIN)
+    // scope=mine        → only current user's customers (default)
+    // scope=team        → all visible hierarchy
+    // scope=all         → same as team (further expansion for ADMIN)
+    // scope=unassigned  → customers with NULL owner (ADMIN only).
+    //                     Surfaces federated customers whose ERP sale_person
+    //                     didn't resolve to a CRM user — typically invisible
+    //                     in every owner-scoped query because NULL ∉ IN(...).
+    const includeShape = {
+      contacts: {
+        select: {
+          id: true,
+          name: true,
+          position: true,
+          tel: true,
+          email: true,
+          lineId: true,
+          whatsapp: true
+        }
+      },
+      customerGroup: { select: { id: true, code: true, name: true } },
+      owner: { select: { id: true, fullName: true } }
+    } as const;
+
+    if (query.scope === "unassigned") {
+      requireRoleAtLeast(request, UserRole.ADMIN);
+      const rows = await prisma.customer.findMany({
+        where: { tenantId, ownerId: null },
+        include: includeShape,
+        orderBy: { createdAt: "desc" }
+      });
+      return hydrateCustomers(tenantId, rows);
+    }
+
+    const visibleUserIdList = [...(await listVisibleUserIds(request))];
     const ownerFilter =
       query.scope === "team" || query.scope === "all"
         ? { in: visibleUserIdList }
@@ -481,21 +511,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     // relations are re-fetched by `/customers/:id` on detail open.
     const rows = await prisma.customer.findMany({
       where: { tenantId, ownerId: ownerFilter },
-      include: {
-        contacts: {
-          select: {
-            id: true,
-            name: true,
-            position: true,
-            tel: true,
-            email: true,
-            lineId: true,
-            whatsapp: true
-          }
-        },
-        customerGroup: { select: { id: true, code: true, name: true } },
-        owner: { select: { id: true, fullName: true } }
-      },
+      include: includeShape,
       orderBy: { createdAt: "desc" }
     });
     return hydrateCustomers(tenantId, rows);
