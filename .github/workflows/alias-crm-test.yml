@@ -5,12 +5,30 @@ on:
 
 jobs:
   alias:
+    # Vercel's GitHub integration sets `deployment.ref` to the commit SHA, not
+    # to a branch name — so the previous `ref == 'main'` check always evaluated
+    # false and every run was silently skipped. Filter on `environment` here
+    # and verify the SHA matches origin/main HEAD inside the job (otherwise
+    # any feature-branch preview would hijack the alias).
     if: >
       github.event.deployment_status.state == 'success' &&
-      github.event.deployment.ref == 'main' &&
+      github.event.deployment.environment == 'Preview' &&
       contains(github.event.deployment_status.environment_url, 'vercel.app')
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+      - name: Skip unless deploy SHA == origin/main HEAD
+        env:
+          DEPLOY_SHA: ${{ github.event.deployment.sha }}
+        run: |
+          MAIN_HEAD=$(git rev-parse origin/main)
+          if [ "$DEPLOY_SHA" != "$MAIN_HEAD" ]; then
+            echo "Deploy SHA $DEPLOY_SHA != main HEAD $MAIN_HEAD — skipping."
+            exit 0
+          fi
       - name: Point crm-test.workstationoffice.com at latest main deploy
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
