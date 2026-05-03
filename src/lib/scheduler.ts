@@ -71,6 +71,16 @@ export const JOB_DEFS: JobDef[] = [
     }
   },
   {
+    key: "syncJobReaper",
+    label: "Sync Job Reaper",
+    description: "Auto-fails MySQL sync jobs stuck in RUNNING longer than SYNC_JOB_STUCK_THRESHOLD_MINUTES (default 30). Frees the per-source lock when a worker dies mid-pull.",
+    defaultCronExpr: "*/15 * * * *", // every 15 min
+    run: async (tenantId) => {
+      const { reapStuckMysqlJobs } = await import("../modules/sync/mysql-pull.js");
+      return reapStuckMysqlJobs(tenantId);
+    }
+  },
+  {
     key: "invoiceAutoSend",
     label: "Invoice Auto-Send",
     description: "Finalizes DRAFT tenant invoices whose billing period has ended and emails them to the first active tenant admin.",

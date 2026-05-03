@@ -1626,6 +1626,39 @@ document.addEventListener("click", async (ev) => {
   }
 });
 
+// Delegated listener for "Stop" buttons on stuck PENDING/RUNNING sync jobs.
+// Wired at module init so re-renders never detach it. Calls the cancel
+// endpoint, then refreshes the Data Sync page so the row's status flips
+// to FAILED and the Stop button disappears.
+document.addEventListener("click", async (ev) => {
+  const btn = ev.target instanceof Element ? ev.target.closest(".sync-cancel-job-btn") : null;
+  if (!btn) return;
+  ev.preventDefault();
+  const jobId = btn.dataset.jobId;
+  if (!jobId) return;
+  const sourceName = btn.dataset.sourceName || "this source";
+  const ok = await openConfirmPopup({
+    title: "Stop this sync job?",
+    message: `Force-fail the running pull on <strong>${escHtml(sourceName)}</strong>? Use this when a job is stuck and the cron is no longer making progress. The next "Run Now" will start a fresh pull.`,
+    confirmLabel: "Stop job",
+    danger: true
+  });
+  if (!ok) return;
+  btn.disabled = true;
+  try {
+    await api(`/integrations/master-data/jobs/${jobId}/cancel`, {
+      method: "POST",
+      body: { reason: "Cancelled from Data Sync page" }
+    });
+    setStatus(`Sync job stopped on ${sourceName}.`);
+    if (typeof loadSyncData === "function") await loadSyncData();
+    if (typeof renderSettings === "function") renderSettings();
+  } catch (err) {
+    btn.disabled = false;
+    setStatus(err?.message || "Failed to stop sync job.", true);
+  }
+});
+
 const CURRENCIES = [
   { code: "THB", label: "THB — Thai Baht (฿)" },
   { code: "USD", label: "USD — US Dollar ($)" },
@@ -6059,13 +6092,17 @@ function renderSettings() {
             <tbody>
               ${syncJobs.map(j => {
                 const s = j.summaryJson || {};
+                const active = j.status === "PENDING" || j.status === "RUNNING";
                 return `<tr>
                   <td>${new Date(j.startedAt).toLocaleString()}</td>
                   <td>${escHtml(j.source?.sourceName ?? "—")}</td>
                   <td><span class="badge badge--muted">${escHtml(j.runType)}</span></td>
                   <td><span class="badge ${j.status === "SUCCESS" ? "badge--ok" : j.status === "FAILED" ? "badge--err" : "badge--muted"}">${j.status}</span></td>
                   <td>${s.success_count ?? "—"} / ${s.processed_count ?? "—"}</td>
-                  <td><button class="ghost small sync-view-job-btn" data-job-id="${j.id}">Details</button></td>
+                  <td class="inline-actions wrap" style="gap:var(--sp-1)">
+                    <button class="ghost small sync-view-job-btn" data-job-id="${j.id}">Details</button>
+                    ${active ? `<button class="ghost small danger sync-cancel-job-btn" data-job-id="${j.id}" data-source-name="${escHtml(j.source?.sourceName ?? "this source")}">Stop</button>` : ""}
+                  </td>
                 </tr>`;
               }).join("")}
             </tbody>
