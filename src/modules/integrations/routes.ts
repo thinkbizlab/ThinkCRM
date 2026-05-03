@@ -136,12 +136,18 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) {
       throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
+    let cleanConfig: Record<string, unknown>;
+    try {
+      cleanConfig = sanitizeSourceConfig(parsed.data.sourceType, parsed.data.configJson);
+    } catch (err) {
+      throw app.httpErrors.badRequest(err instanceof Error ? err.message : "Invalid source config.");
+    }
     const created = await prisma.integrationSource.create({
       data: {
         tenantId,
         sourceName: parsed.data.sourceName,
         sourceType: parsed.data.sourceType,
-        configJson: sanitizeSourceConfig(parsed.data.sourceType, parsed.data.configJson) as Prisma.InputJsonValue
+        configJson: cleanConfig as Prisma.InputJsonValue
       }
     });
     return reply.code(201).send(created);
@@ -158,9 +164,14 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
     if (!source) {
       throw app.httpErrors.notFound("Source not found.");
     }
-    const nextConfig = body.configJson
-      ? sanitizeSourceConfig(source.sourceType, body.configJson, source.configJson as Record<string, unknown>)
-      : undefined;
+    let nextConfig: Record<string, unknown> | undefined;
+    if (body.configJson) {
+      try {
+        nextConfig = sanitizeSourceConfig(source.sourceType, body.configJson, source.configJson as Record<string, unknown>);
+      } catch (err) {
+        throw app.httpErrors.badRequest(err instanceof Error ? err.message : "Invalid source config.");
+      }
+    }
     const trimmedName = typeof body.sourceName === "string" ? body.sourceName.trim() : undefined;
     if (trimmedName !== undefined && trimmedName.length < 2) {
       throw app.httpErrors.badRequest("sourceName must be at least 2 characters.");
@@ -683,7 +694,30 @@ function sanitizeSourceConfig(
       ssl.caPemEnc = existingSsl.caPemEnc;
     }
     out.ssl = ssl;
+    // Customer-federation overrides (read by getFederationConfig). They're
+    // interpolated as SQL identifiers in fetchOne/searchFederatedCustomers,
+    // so reject anything that isn't a valid MySQL identifier here — the
+    // federation code path only escapes backticks, it doesn't sanitize.
+    if (typeof out.keyColumn === "string") {
+      const v = out.keyColumn.trim();
+      if (!v) delete out.keyColumn;
+      else if (!FEDERATION_COLUMN_RE.test(v)) {
+        throw new Error("Federation keyColumn must be a valid MySQL identifier (letters, digits, _ , $; up to 64 chars).");
+      } else out.keyColumn = v;
+    }
+    if (typeof out.customerTable === "string") {
+      const v = out.customerTable.trim();
+      if (!v) delete out.customerTable;
+      else if (!FEDERATION_TABLE_RE.test(v)) {
+        throw new Error("Federation customerTable must be a valid MySQL table name (optional schema.table; letters, digits, _ , $; up to 64 chars per segment).");
+      } else out.customerTable = v;
+    }
     return out;
   }
   return incoming;
 }
+
+// Same identifier rules as mysql-pull's TABLE_IDENT_RE / federation column check —
+// duplicated here so the routes layer doesn't depend on mysql-pull internals.
+const FEDERATION_COLUMN_RE = /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/;
+const FEDERATION_TABLE_RE = /^[A-Za-z_$][A-Za-z0-9_$]{0,63}(?:\.[A-Za-z_$][A-Za-z0-9_$]{0,63})?$/;
