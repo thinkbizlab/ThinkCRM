@@ -30,7 +30,13 @@ type Mysql2PoolConnection = {
   release: () => void;
 };
 
-const POOL_CONNECTION_LIMIT = 5;
+// Per-(source × Vercel-function-instance) connection cap. Multiplied by the
+// number of concurrent Vercel instances + the scheduled pull's own connection,
+// this is the total load on the upstream MySQL. Lowered from 5 to 2 after
+// observing "Too many connections" rejections from a tenant's ERPNext during
+// high-concurrency federation reads — small ERP servers commonly cap at
+// ~50 connections, and 5×N instances + sync overhead can exhaust that.
+const POOL_CONNECTION_LIMIT = 2;
 const POOL_IDLE_TIMEOUT_MS = 30_000;
 // Live reads need to fail fast — never block a UI request for >3s on a sluggish
 // upstream. The scheduled pull keeps its own (longer) defaults.
