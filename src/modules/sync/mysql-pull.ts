@@ -743,6 +743,36 @@ function makeFailedDrainShim(summaryJson: unknown, _reason: string): DrainState 
 }
 
 /**
+ * Auto-fail MYSQL sync jobs that have been stuck in RUNNING for longer than
+ * the configured threshold. The chunked drain persists progress after every
+ * chunk, so a job that hasn't moved in `>thresholdMinutes` is almost
+ * certainly orphaned (function timeout, OOM, deploy mid-flight) and the
+ * lock-out blocks every subsequent enqueue for the same source.
+ *
+ * Threshold: SYNC_JOB_STUCK_THRESHOLD_MINUTES env var; default 30.
+ * The longest legit per-chunk pull observed is single-digit minutes.
+ */
+export async function reapStuckMysqlJobs(tenantId: string): Promise<string> {
+  const raw = parseInt(process.env.SYNC_JOB_STUCK_THRESHOLD_MINUTES ?? "", 10);
+  const thresholdMinutes = Number.isFinite(raw) && raw >= 1 ? raw : 30;
+  const message = `Auto-failed: stuck RUNNING for >${thresholdMinutes} min`;
+  const reaped = await prisma.$executeRaw`
+    UPDATE "IntegrationSyncJob" AS j
+    SET status = 'FAILED',
+        "finishedAt" = NOW(),
+        "summaryJson" = COALESCE(j."summaryJson", '{}'::jsonb)
+          || jsonb_build_object('errorMessage', ${message}, 'reapedAt', NOW())
+    FROM "IntegrationSource" AS s
+    WHERE j."sourceId" = s.id
+      AND j."tenantId" = ${tenantId}
+      AND s."sourceType" = 'MYSQL'
+      AND j.status = 'RUNNING'
+      AND j."startedAt" < NOW() - (${thresholdMinutes}::int * INTERVAL '1 minute')
+  `;
+  return `Reaped ${reaped} stuck MySQL job(s) older than ${thresholdMinutes} min.`;
+}
+
+/**
  * Per-tenant drain entry point. Steps:
  *   1. Auto-enqueue jobs for any ENABLED source whose schedule is due
  *      (and that doesn't already have a PENDING/RUNNING job).

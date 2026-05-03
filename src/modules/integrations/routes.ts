@@ -3,6 +3,7 @@ import {
   Direction,
   ExecutionStatus,
   IntegrationPlatform,
+  JobStatus,
   Prisma,
   RunType,
   TriggerType,
@@ -13,6 +14,7 @@ import { z } from "zod";
 import { requireRoleAtLeast, requireTenantId, requireUserId, zodMsg } from "../../lib/http.js";
 import { prisma } from "../../lib/prisma.js";
 import { encryptField } from "../../lib/secrets.js";
+import { logAuditEvent } from "../../lib/audit.js";
 import { connectorInputContractSchema, executeConnectorRun } from "./connector-framework.js";
 import { executeRestPull, testRestConnection } from "../sync/rest-pull.js";
 import { enqueueMysqlPull, testMysqlConnection } from "../sync/mysql-pull.js";
@@ -548,6 +550,59 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.notFound("Job not found.");
     }
     return job;
+  });
+
+  /**
+   * Force-fail a stuck PENDING/RUNNING sync job. The chunked MYSQL drain
+   * holds a per-source lock — if the worker dies mid-pull (deploy, OOM,
+   * function timeout), the lock survives and every subsequent enqueue
+   * returns `{ reused: true }` against the dead job. Admins use this to
+   * unstick the source without having to UPDATE the DB by hand.
+   */
+  app.post("/integrations/master-data/jobs/:jobId/cancel", async (request, reply) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+    const userId = requireUserId(request);
+    const { jobId } = request.params as { jobId: string };
+    const body = (request.body ?? {}) as { reason?: string };
+    const reason = typeof body.reason === "string" && body.reason.trim()
+      ? body.reason.trim().slice(0, 500)
+      : "Cancelled by admin";
+
+    const job = await prisma.integrationSyncJob.findFirst({
+      where: { id: jobId, tenantId },
+      select: { id: true, status: true, sourceId: true, summaryJson: true }
+    });
+    if (!job) throw app.httpErrors.notFound("Job not found.");
+    if (job.status !== JobStatus.PENDING && job.status !== JobStatus.RUNNING) {
+      throw app.httpErrors.badRequest(`Job is not active (status=${job.status}).`);
+    }
+
+    const baseSummary = (job.summaryJson && typeof job.summaryJson === "object" && !Array.isArray(job.summaryJson))
+      ? job.summaryJson as Record<string, unknown>
+      : {};
+    const updated = await prisma.integrationSyncJob.update({
+      where: { id: job.id },
+      data: {
+        status: JobStatus.FAILED,
+        finishedAt: new Date(),
+        summaryJson: {
+          ...baseSummary,
+          cancelledByUserId: userId,
+          cancelledAt: new Date().toISOString(),
+          errorMessage: reason
+        } as Prisma.InputJsonValue
+      }
+    });
+
+    await logAuditEvent(tenantId, userId, "INTEGRATION_SYNC_JOB_CANCEL", {
+      jobId: job.id,
+      sourceId: job.sourceId,
+      previousStatus: job.status,
+      reason
+    }, request.ip);
+
+    return reply.code(200).send({ ok: true, job: updated });
   });
 
   app.get("/integrations/transform-templates", async (request) => {
