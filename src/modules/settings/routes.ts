@@ -876,11 +876,19 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
-    return prisma.tenantBranding.upsert({
+    const branding = await prisma.tenantBranding.upsert({
       where: { tenantId: params.id },
       update: parsed.data,
       create: { tenantId: params.id, ...parsed.data }
     });
+    await logAuditEvent(
+      params.id,
+      requireUserId(request),
+      "BRANDING_UPDATED",
+      { fields: Object.keys(parsed.data) },
+      request.ip
+    );
+    return branding;
   });
 
   app.post("/tenants/:id/branding/logo", async (request, reply) => {
@@ -1579,6 +1587,17 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
         lastTestResult: "Credentials updated. Re-run Test Connection before enabling."
       }
     });
+    await logAuditEvent(
+      params.id,
+      requireUserId(request),
+      "INTEGRATION_CREDENTIALS_SAVED",
+      {
+        platform,
+        status: credential.status,
+        fields: Object.keys(parsed.data).filter((key) => parsed.data[key as keyof typeof parsed.data] !== undefined)
+      },
+      request.ip
+    );
     return mapTenantCredential(credential, platform);
   });
 
