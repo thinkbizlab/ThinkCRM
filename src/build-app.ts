@@ -72,13 +72,17 @@ function staticCacheControlForUrl(rawUrl: string | undefined): string | null {
   }
 
   const hasVersion = url.searchParams.has("v");
-  const isModuleAsset = pathname.startsWith("/modules/");
   const isStaticAsset = /\.(?:css|js|svg|webmanifest|json|ico|png|jpe?g|webp|gif|woff2?)$/i.test(pathname);
   if (!isStaticAsset) return null;
-  if (hasVersion || isModuleAsset || pathname === "/xlsx.min.js") {
+  // Versioned URLs (?v=...) are content-addressed — safe to cache immutably.
+  // /xlsx.min.js is third-party and shipped as-is.
+  // Everything else (including /modules/*.js loaded via dynamic import without a
+  // version query) must revalidate, otherwise browsers hold onto stale module
+  // code across deploys.
+  if (hasVersion || pathname === "/xlsx.min.js") {
     return `public, max-age=${STATIC_CACHE_SECONDS}, immutable`;
   }
-  return `public, max-age=${SHORT_CACHE_SECONDS}`;
+  return "public, max-age=0, must-revalidate";
 }
 import { healthRoutes } from "./modules/health/routes.js";
 import { tenantRoutes } from "./modules/tenants/routes.js";
@@ -112,6 +116,16 @@ function trustProxyFromConfig(): boolean {
     Boolean(config.APP_URL)
   );
 }
+
+// Build version: identifies the current deploy. Vercel populates
+// VERCEL_GIT_COMMIT_SHA on every build. Falls back to BUILD_VERSION env var
+// for non-Vercel envs, then "dev" for local. Used to:
+//   1) version the <script src="/app.js?v=..."> tag in the rendered HTML
+//   2) answer GET /api/version so the client can detect stale builds
+const BUILD_VERSION =
+  process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 12) ??
+  process.env.BUILD_VERSION ??
+  "dev";
 
 export async function buildApp() {
   const app = Fastify({
@@ -554,8 +568,14 @@ export async function buildApp() {
         app.log.warn({ err, host }, "[shell] branding render failed — serving default shell");
       }
     }
+    rendered = rendered.replace(
+      /<script type="module" src="\/app\.js\?v=[^"]+"><\/script>/,
+      `<script type="module" src="/app.js?v=${encodeURIComponent(BUILD_VERSION)}"></script>`
+    );
     return reply.type("text/html; charset=utf-8").send(rendered);
   }
+
+  app.get("/api/version", async () => ({ version: BUILD_VERSION }));
 
   app.get("/", async (request, reply) => renderAppShell(request, reply));
   app.get("/dashboard", async (request, reply) => renderAppShell(request, reply));

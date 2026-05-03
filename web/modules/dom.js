@@ -66,6 +66,24 @@ export function hideAppLoading() {
   if (el) el.hidden = true;
 }
 
+// Reference-counted blocking overlay used during long async loads
+// (Customer 360, Deal 360) so users can't click other UI mid-fetch.
+let pageLoadingDepth = 0;
+export function showPageLoading(text) {
+  pageLoadingDepth++;
+  const el = qs("#page-loading");
+  if (!el) return;
+  const label = qs("#page-loading-text");
+  if (label && text) label.textContent = text;
+  el.hidden = false;
+}
+export function hidePageLoading() {
+  pageLoadingDepth = Math.max(0, pageLoadingDepth - 1);
+  if (pageLoadingDepth > 0) return;
+  const el = qs("#page-loading");
+  if (el) el.hidden = true;
+}
+
 export function showAuth() {
   document.documentElement.classList.remove("has-token");
   appScreen.classList.remove("active");

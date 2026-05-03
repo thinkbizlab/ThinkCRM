@@ -181,6 +181,24 @@ function resolveCustomFieldEntityType(raw: string, app: Parameters<FastifyPlugin
 }
 
 
+async function peekNextCrmCode(tenantId: string): Promise<string> {
+  const rows = await prisma.customer.findMany({
+    where: { tenantId, customerCode: { startsWith: "C-" } },
+    select: { customerCode: true }
+  });
+  let maxNum = 0;
+  for (const { customerCode } of rows) {
+    const m = customerCode?.match(/^C-(\d+)$/i);
+    if (m) maxNum = Math.max(maxNum, parseInt(m[1]!, 10));
+  }
+  return `C-${String(maxNum + 1).padStart(6, "0")}`;
+}
+
+// Returns true if the code looks like an auto-generated CRM code (C-NNNNNN).
+// These are re-derived server-side at insert time to prevent race conditions
+// when two users open the new-customer form simultaneously.
+const AUTO_CODE_RE = /^C-\d+$/i;
+
 export const masterDataRoutes: FastifyPluginAsync = async (app) => {
   async function findCustomerInScopeOrThrow(input: {
     tenantId: string;
@@ -441,6 +459,11 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     });
   });
 
+  app.get("/customers/next-crm-code", async (request) => {
+    const tenantId = requireTenantId(request);
+    return { code: await peekNextCrmCode(tenantId) };
+  });
+
   app.get("/customers", async (request) => {
     const tenantId = requireTenantId(request);
     const requesterId = requireUserId(request);
@@ -567,7 +590,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     const tenantId = requireTenantId(request);
     const visibleUserIdList = [...(await listVisibleUserIds(request))];
     const params = request.params as { id: string };
-    const isCode = /^[A-Za-z]+-\d+$/.test(params.id);
+    const isCode = params.id.includes("-");
     const where = isCode
       ? { customerCode: params.id, tenantId, ownerId: { in: visibleUserIdList } }
       : { id: params.id, tenantId, ownerId: { in: visibleUserIdList } };
@@ -595,7 +618,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     const tenantId = requireTenantId(request);
     const visibleUserIdList = [...(await listVisibleUserIds(request))];
     const params = request.params as { id: string };
-    const isCode = /^[A-Za-z]+-\d+$/.test(params.id);
+    const isCode = params.id.includes("-");
     const customerWhere = isCode
       ? { customerCode: params.id, tenantId, ownerId: { in: visibleUserIdList } }
       : { id: params.id, tenantId, ownerId: { in: visibleUserIdList } };
@@ -705,6 +728,24 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
+    const isAutoCode = !parsed.data.customerCode || AUTO_CODE_RE.test(parsed.data.customerCode);
+
+    // Only validate manually-typed codes for duplicates up front.
+    // Auto-generated codes (C-NNNNNN) are re-derived inside the transaction
+    // to eliminate the race condition where two users open the form at the
+    // same time and both receive the same preview code.
+    if (parsed.data.customerCode && !isAutoCode) {
+      const codeDuplicate = await prisma.customer.findFirst({
+        where: { tenantId, customerCode: parsed.data.customerCode },
+        select: { id: true }
+      });
+      if (codeDuplicate) {
+        throw app.httpErrors.conflict(
+          `Customer code "${parsed.data.customerCode}" is already in use. Please enter a different code.`
+        );
+      }
+    }
+
     if (parsed.data.parentCustomerId) {
       await assertValidParent({ tenantId, selfId: null, parentId: parsed.data.parentCustomerId });
     }
@@ -723,37 +764,56 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       where: { tenantId, entityType: EntityType.CUSTOMER }
     });
     const customFields = validateCustomFields(app, definitions, parsed.data.customFields ?? {});
-    const created = await prisma.$transaction(async (tx) => {
-      const row = await tx.customer.create({
-        data: {
-          tenantId,
-          status: isDraft ? "DRAFT" : "ACTIVE",
-          customerCode: parsed.data.customerCode ?? null,
-          name: parsed.data.name,
-          customerType: parsed.data.customerType ?? CustomerType.COMPANY,
-          taxId: parsed.data.taxId,
-          branchCode,
-          parentCustomerId: parsed.data.parentCustomerId ?? null,
-          customerGroupId: parsed.data.customerGroupId ?? null,
-          ownerId,
-          createdByUserId: changedById,
-          draftCreatedByUserId: isDraft ? changedById : null,
-          customFields
-        }
-      });
-      await writeEntityChangelog({
-        db: tx,
-        tenantId,
-        entityType: EntityType.CUSTOMER,
-        entityId: row.id,
-        action: "CREATE",
-        changedById,
-        after: row,
-        context: isDraft ? { reason: "draft_created_in_field" } : undefined
-      });
-      return row;
-    });
-    return reply.code(201).send(created);
+
+    // Retry loop for auto-code allocation: if two inserts race and collide on
+    // the unique (tenantId, customerCode) index, re-derive and try again.
+    const MAX_CODE_RETRIES = 5;
+    let created;
+    for (let attempt = 0; attempt < MAX_CODE_RETRIES; attempt++) {
+      const customerCode = isAutoCode
+        ? await peekNextCrmCode(tenantId)
+        : (parsed.data.customerCode ?? null);
+      try {
+        created = await prisma.$transaction(async (tx) => {
+          const row = await tx.customer.create({
+            data: {
+              tenantId,
+              status: isDraft ? "DRAFT" : "ACTIVE",
+              customerCode,
+              name: parsed.data.name,
+              customerType: parsed.data.customerType ?? CustomerType.COMPANY,
+              taxId: parsed.data.taxId,
+              branchCode,
+              parentCustomerId: parsed.data.parentCustomerId ?? null,
+              customerGroupId: parsed.data.customerGroupId ?? null,
+              ownerId,
+              createdByUserId: changedById,
+              draftCreatedByUserId: isDraft ? changedById : null,
+              customFields
+            }
+          });
+          await writeEntityChangelog({
+            db: tx,
+            tenantId,
+            entityType: EntityType.CUSTOMER,
+            entityId: row.id,
+            action: "CREATE",
+            changedById,
+            after: row,
+            context: isDraft ? { reason: "draft_created_in_field" } : undefined
+          });
+          return row;
+        });
+        break; // success
+      } catch (err) {
+        const isCodeCollision = isAutoCode &&
+          err instanceof Prisma.PrismaClientKnownRequestError &&
+          err.code === "P2002";
+        if (!isCodeCollision || attempt === MAX_CODE_RETRIES - 1) throw err;
+        // else: another insert won the race — loop and re-derive the next code
+      }
+    }
+    return reply.code(201).send(created!);
   });
 
   app.patch("/customers/:id", async (request) => {
@@ -1780,10 +1840,26 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     return Array.isArray(r) ? r : [];
   };
 
+  const flexibleBooleanImport = z.preprocess((value) => {
+    if (typeof value === "boolean") return value;
+    if (typeof value === "number") {
+      if (value === 1) return true;
+      if (value === 0) return false;
+    }
+    if (typeof value === "string") {
+      const normalized = value.trim().toLowerCase();
+      if (!normalized.length) return undefined;
+      if (["true", "1", "yes", "y"].includes(normalized)) return true;
+      if (["false", "0", "no", "n"].includes(normalized)) return false;
+    }
+    return value;
+  }, z.boolean().optional());
+
   const paymentTermImportRow = z.object({
     code: z.string().trim().min(2).max(30),
     name: z.string().trim().min(2).max(120),
-    dueDays: z.coerce.number().int().min(0).max(365)
+    dueDays: z.coerce.number().int().min(0).max(365),
+    isActive: flexibleBooleanImport.optional()
   });
 
   app.post("/payment-terms/import", async (request) => {
@@ -1822,9 +1898,17 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
           update: {
             name: row.name,
             dueDays: row.dueDays,
+            ...(row.isActive !== undefined ? { isActive: row.isActive } : {}),
             ...(customFields !== undefined ? { customFields } : {})
           },
-          create: { tenantId, code: row.code, name: row.name, dueDays: row.dueDays, customFields }
+          create: {
+            tenantId,
+            code: row.code,
+            name: row.name,
+            dueDays: row.dueDays,
+            isActive: row.isActive ?? true,
+            customFields
+          }
         });
         imported += 1;
       } catch (error) {
@@ -1843,7 +1927,8 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     itemCode: z.string().trim().min(1).max(40),
     name: z.string().trim().min(2).max(200),
     unitPrice: z.coerce.number().nonnegative(),
-    externalRef: z.string().trim().max(100).optional()
+    externalRef: z.string().trim().max(100).optional(),
+    isActive: flexibleBooleanImport.optional()
   });
 
   app.post("/items/import", async (request) => {
@@ -1883,6 +1968,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
             name: row.name,
             unitPrice: row.unitPrice,
             externalRef: row.externalRef || null,
+            ...(row.isActive !== undefined ? { isActive: row.isActive } : {}),
             ...(customFields !== undefined ? { customFields } : {})
           },
           create: {
@@ -1891,6 +1977,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
             name: row.name,
             unitPrice: row.unitPrice,
             externalRef: row.externalRef || null,
+            isActive: row.isActive ?? true,
             customFields
           }
         });
@@ -1913,9 +2000,12 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     customerType: z.nativeEnum(CustomerType).optional(),
     customerGroupCode: z.string().trim().min(1).max(50).optional(),
     taxId: z.string().trim().max(20).optional(),
+    branchCode: z.string().trim().regex(/^[0-9]{1,5}$/, "branchCode must be 1-5 digits").optional(),
+    parentCustomerCode: z.string().trim().min(2).max(40).optional(),
     externalRef: z.string().trim().max(100).optional(),
     siteLat: z.coerce.number().min(-90).max(90).optional(),
-    siteLng: z.coerce.number().min(-180).max(180).optional()
+    siteLng: z.coerce.number().min(-180).max(180).optional(),
+    disabled: flexibleBooleanImport.optional()
   });
 
   app.post("/customers/import", async (request) => {
@@ -1932,6 +2022,16 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       select: { id: true, code: true }
     });
     const groupIdByCode = new Map(groups.map((g) => [g.code.toLowerCase(), g.id]));
+
+    const parentCandidates = await prisma.customer.findMany({
+      where: { tenantId, status: "ACTIVE", customerCode: { not: null } },
+      select: { id: true, customerCode: true }
+    });
+    const parentIdByCode = new Map(
+      parentCandidates
+        .filter((c): c is { id: string; customerCode: string } => typeof c.customerCode === "string")
+        .map((c) => [c.customerCode.toLowerCase(), c.id])
+    );
 
     const customerDefinitions = await prisma.customFieldDefinition.findMany({
       where: { tenantId, entityType: EntityType.CUSTOMER }
@@ -1956,14 +2056,24 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
         }
         customerGroupId = found;
       }
-      // Enforce taxId uniqueness (same rule as the create/edit form)
+      let parentCustomerId: string | null = null;
+      if (row.parentCustomerCode) {
+        const found = parentIdByCode.get(row.parentCustomerCode.toLowerCase());
+        if (!found) {
+          errors.push({ row: i + 1, customerCode: row.customerCode, error: `parentCustomerCode "${row.parentCustomerCode}" not found.` });
+          continue;
+        }
+        parentCustomerId = found;
+      }
+      const branchCode = row.taxId ? (row.branchCode ?? "00000") : null;
+      // Enforce taxId + branchCode uniqueness (same rule as the create/edit form)
       if (row.taxId) {
         const taxConflict = await prisma.customer.findFirst({
-          where: { tenantId, taxId: row.taxId, NOT: { customerCode: row.customerCode } },
+          where: { tenantId, taxId: row.taxId, branchCode, NOT: { customerCode: row.customerCode } },
           select: { id: true }
         });
         if (taxConflict) {
-          errors.push({ row: i + 1, customerCode: row.customerCode, error: `taxId "${row.taxId}" already belongs to another customer.` });
+          errors.push({ row: i + 1, customerCode: row.customerCode, error: `taxId "${row.taxId}" branch "${branchCode}" already belongs to another customer.` });
           continue;
         }
       }
@@ -1983,6 +2093,9 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
           select: { id: true }
         });
         if (existing) {
+          if (row.parentCustomerCode !== undefined && parentCustomerId) {
+            await assertValidParent({ tenantId, selfId: existing.id, parentId: parentCustomerId });
+          }
           await prisma.customer.update({
             where: { id: existing.id },
             data: {
@@ -1990,14 +2103,20 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
               customerType: row.customerType,
               ...(row.customerGroupCode !== undefined ? { customerGroupId } : {}),
               taxId: row.taxId || null,
+              branchCode,
+              ...(row.parentCustomerCode !== undefined ? { parentCustomerId } : {}),
               externalRef: row.externalRef || null,
               siteLat: row.siteLat,
               siteLng: row.siteLng,
+              ...(row.disabled !== undefined ? { disabled: row.disabled } : {}),
               ...(customFields !== undefined ? { customFields } : {})
             }
           });
         } else {
-          await prisma.customer.create({
+          if (parentCustomerId) {
+            await assertValidParent({ tenantId, selfId: null, parentId: parentCustomerId });
+          }
+          const created = await prisma.customer.create({
             data: {
               tenantId,
               ownerId,
@@ -2006,12 +2125,16 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
               customerGroupId,
               customerType: row.customerType ?? CustomerType.COMPANY,
               taxId: row.taxId || null,
+              branchCode,
+              parentCustomerId,
               externalRef: row.externalRef || null,
               siteLat: row.siteLat,
               siteLng: row.siteLng,
+              disabled: row.disabled ?? false,
               customFields
             }
           });
+          parentIdByCode.set(row.customerCode.toLowerCase(), created.id);
         }
         imported += 1;
       } catch (error) {
@@ -2030,7 +2153,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     code: z.string().trim().min(1).max(50),
     name: z.string().trim().min(1).max(120),
     description: z.string().trim().max(500).optional(),
-    isActive: z.coerce.boolean().optional()
+    isActive: flexibleBooleanImport.optional()
   });
 
   app.post("/customer-groups/import", async (request) => {

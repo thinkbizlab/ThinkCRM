@@ -1,0 +1,25 @@
+name: Alias crm-test to latest main deploy
+
+on:
+  deployment_status:
+
+jobs:
+  alias:
+    if: >
+      github.event.deployment_status.state == 'success' &&
+      github.event.deployment.ref == 'main' &&
+      contains(github.event.deployment_status.environment_url, 'vercel.app')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Point crm-test.workstationoffice.com at latest main deploy
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          DEPLOY_URL: ${{ github.event.deployment_status.environment_url }}
+        run: |
+          DEPLOY_HOST="${DEPLOY_URL#https://}"
+          DEPLOY_HOST="${DEPLOY_HOST#http://}"
+          DEPLOY_HOST="${DEPLOY_HOST%/}"
+          echo "Aliasing crm-test.workstationoffice.com -> $DEPLOY_HOST"
+          npx --yes vercel@latest alias set "$DEPLOY_HOST" crm-test.workstationoffice.com \
+            --token "$VERCEL_TOKEN" \
+            --scope work-station-56625c3e

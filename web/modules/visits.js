@@ -17,7 +17,9 @@ let deps = {
   openDeal360: async () => {},
   openProspectDetail: () => {},
   loadMyTasks: async () => {},
-  attachOnBehalfOfField: async () => null
+  attachOnBehalfOfField: async () => null,
+  openCheckInModal: () => {},
+  openCheckOutModal: () => {}
 };
 
 export function setVisitsDeps(d) {
@@ -117,7 +119,7 @@ function buildVisitListHtml(visits, q) {
               <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
             </button>
             ${isOwn && visit.status !== "CHECKED_OUT" ? `
-              <button type="button" class="visit-action ${visit.status === "CHECKED_IN" ? "btn-success" : ""}" data-visit-id="${visit.id}" data-visit-status="${visit.status}">
+              <button type="button" class="visit-action ${visit.status === "CHECKED_IN" ? "btn-success" : ""}" data-visit-id="${visit.id}" data-visit-status="${visit.status}" data-visit-customer="${escHtml(visit.customer?.name || "")}">
                 ${visit.status === "PLANNED"
                   ? `<svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> Check In`
                   : `<svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg> Check Out`
@@ -157,28 +159,20 @@ function attachVisitListListeners(container) {
   });
 
   container.querySelectorAll(".visit-action").forEach((btn) => {
-    btn.addEventListener("click", async () => {
+    btn.addEventListener("click", () => {
       const id = btn.dataset.visitId;
       const status = btn.dataset.visitStatus;
-      try {
-        if (status === "PLANNED") {
-          await api(`/visits/${id}/checkin`, {
-            method: "POST",
-            body: { lat: 13.7563, lng: 100.5018, selfieUrl: "r2://demo/selfie.jpg" }
-          });
-          setStatus("Checked in.");
-        } else if (status === "CHECKED_IN") {
-          const result = window.prompt("Visit outcome / result:", "");
-          if (result === null) return;
-          await api(`/visits/${id}/checkout`, {
-            method: "POST",
-            body: { lat: 13.7564, lng: 100.5019, result: result || "Completed." }
-          });
-          setStatus("Visit completed.");
+      const customer = btn.dataset.visitCustomer || "";
+      if (status === "PLANNED") {
+        // Match the My Tasks behaviour: only one active check-in at a time.
+        const active = document.querySelectorAll('.visit-action[data-visit-status="CHECKED_IN"]');
+        if (active.length > 0) {
+          setStatus("Please complete your current check-out before starting a new check-in.", true);
+          return;
         }
-        await loadVisits();
-      } catch (error) {
-        setStatus(error.message, true);
+        deps.openCheckInModal(id, customer, () => loadVisits());
+      } else if (status === "CHECKED_IN") {
+        deps.openCheckOutModal(id, customer, () => loadVisits());
       }
     });
   });
@@ -346,14 +340,20 @@ export function renderVisits(visits) {
   qs("#add-visit-btn")?.addEventListener("click", () => openVisitCreateModal());
 }
 
-export function openVisitCreateModal(dateTime) {
+export function openVisitCreateModal(arg) {
   const modal = qs("#visit-create-modal");
   if (!modal) return;
+  // Accept either a legacy Date/string positional arg (calendar grid clicks)
+  // or an options object { dateTime, customer, deal } (Customer 360 / Deal 360).
+  const opts = (arg && typeof arg === "object" && !(arg instanceof Date))
+    ? arg
+    : { dateTime: arg };
+  const { dateTime, customer, deal } = opts;
   const input = modal.querySelector("#visit-customer-input");
   const hiddenId = modal.querySelector("#visit-customer-id");
   const list = modal.querySelector("#visit-customer-list");
-  if (input) input.value = "";
-  if (hiddenId) hiddenId.value = "";
+  if (input) input.value = customer?.name ?? "";
+  if (hiddenId) hiddenId.value = customer?.id ?? "";
   if (list) list.hidden = true;
   const subjectCustomer = modal.querySelector('[name="visitSubject"][value="CUSTOMER"]');
   if (subjectCustomer) subjectCustomer.checked = true;
@@ -391,6 +391,34 @@ export function openVisitCreateModal(dateTime) {
   if (fields && deps.attachOnBehalfOfField) {
     deps.attachOnBehalfOfField(fields).catch(() => {});
   }
+  // Prefill customer + load that customer's open deals (and optionally
+  // pre-select one). We do this *after* clearing the customer input above so
+  // the modal always opens in a clean state for non-prefilled callers.
+  if (customer?.id && dealLabel && dealSelect) {
+    dealLabel.hidden = false;
+    dealSelect.innerHTML = `<option value="">Loading…</option>`;
+    api(`/deals?customerId=${encodeURIComponent(customer.id)}`)
+      .then((deals) => {
+        const active = deals.filter((d) => d.status !== "WON" && d.status !== "LOST");
+        // Make sure the prefilled deal stays selectable even if it's already
+        // closed (a user opening Deal 360 for a closed deal still wants to
+        // log a visit against it).
+        const list = (deal && !active.some((d) => d.id === deal.id))
+          ? [deal, ...active]
+          : active;
+        if (!list.length) {
+          dealSelect.innerHTML = `<option value="">— No open deals —</option>`;
+        } else {
+          dealSelect.innerHTML =
+            `<option value="">— No deal —</option>` +
+            list.map((d) => `<option value="${escHtml(d.id)}">${escHtml(d.dealName)}${d.stage?.stageName ? " · " + escHtml(d.stage.stageName) : ""}</option>`).join("");
+          if (deal?.id) dealSelect.value = deal.id;
+        }
+      })
+      .catch(() => {
+        dealSelect.innerHTML = `<option value="">— Could not load deals —</option>`;
+      });
+  }
 }
 
 export function closeVisitCreateModal() {
@@ -398,7 +426,7 @@ export function closeVisitCreateModal() {
   if (modal) modal.hidden = true;
 }
 
-export function openVisitEditModal(visit) {
+export async function openVisitEditModal(visit) {
   const modal = qs("#visit-edit-modal");
   if (!modal) return;
   qs("#visit-edit-id").value = visit.id;
@@ -427,6 +455,24 @@ export function openVisitEditModal(visit) {
     preview.hidden = true;
     pickBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> Pick on Map`;
   }
+
+  const dealSel = qs("#visit-edit-deal-select");
+  if (dealSel) {
+    dealSel.innerHTML = '<option value="">— No deal —</option>';
+    if (visit.customerId) {
+      try {
+        const deals = await api(`/deals?customerId=${encodeURIComponent(visit.customerId)}`);
+        for (const d of deals) {
+          const opt = document.createElement("option");
+          opt.value = d.id;
+          opt.textContent = d.title || d.id;
+          if (d.id === visit.dealId) opt.selected = true;
+          dealSel.appendChild(opt);
+        }
+      } catch { /* leave empty on error */ }
+    }
+  }
+
   modal.hidden = false;
 }
 
@@ -584,6 +630,9 @@ function renderVisitDetailContent(visit, changelogs) {
   const diffInfo = fmtDiffLabel(plannedVsActualMs);
   const isOwnVisit = visit.rep?.id === state.user?.id;
   const canEdit = isOwnVisit && visit.status === "PLANNED";
+  const canCheckIn = isOwnVisit && visit.status === "PLANNED";
+  const canCheckOut = isOwnVisit && visit.status === "CHECKED_IN";
+  const customerNameForModal = escHtml(visit.customer?.name || "");
   const heroHtml = `
     <div class="vd-hero">
       <div class="vd-hero-top">
@@ -594,10 +643,20 @@ function renderVisitDetailContent(visit, changelogs) {
               ? `<span class="prospect-badge">Prospect: ${escHtml(visit.prospect.displayName || "(unnamed)")}</span>`
               : "—"
         }</div>
-        ${canEdit ? `<button type="button" class="ghost small vd-edit-btn" data-visit-id="${visit.id}" title="Edit visit">
-          <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-          Edit
-        </button>` : ""}
+        <div class="vd-hero-actions">
+          ${canCheckIn ? `<button type="button" class="primary small vd-checkin-btn" data-visit-id="${visit.id}" data-visit-customer="${customerNameForModal}" title="Check in">
+            <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+            Check In
+          </button>` : ""}
+          ${canCheckOut ? `<button type="button" class="primary small btn-success vd-checkout-btn" data-visit-id="${visit.id}" data-visit-customer="${customerNameForModal}" title="Check out">
+            <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+            Check Out
+          </button>` : ""}
+          ${canEdit ? `<button type="button" class="ghost small vd-edit-btn" data-visit-id="${visit.id}" title="Edit visit">
+            <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            Edit
+          </button>` : ""}
+        </div>
       </div>
       <div class="vd-hero-meta">
         ${visit.visitNo ? `<span class="vd-hero-visitno">${escHtml(visit.visitNo)}</span>` : ""}
@@ -801,6 +860,25 @@ function renderVisitDetailContent(visit, changelogs) {
 
   visitDetailBody.querySelector(".vd-edit-btn")?.addEventListener("click", () => openVisitEditModal(visit));
 
+  visitDetailBody.querySelector(".vd-checkin-btn")?.addEventListener("click", (ev) => {
+    const btn = ev.currentTarget;
+    const id = btn.dataset.visitId;
+    const customer = btn.dataset.visitCustomer || "";
+    const active = document.querySelectorAll('.visit-action[data-visit-status="CHECKED_IN"]');
+    if (active.length > 0) {
+      setStatus("Please complete your current check-out before starting a new check-in.", true);
+      return;
+    }
+    deps.openCheckInModal(id, customer, () => openVisitDetail(id));
+  });
+
+  visitDetailBody.querySelector(".vd-checkout-btn")?.addEventListener("click", (ev) => {
+    const btn = ev.currentTarget;
+    const id = btn.dataset.visitId;
+    const customer = btn.dataset.visitCustomer || "";
+    deps.openCheckOutModal(id, customer, () => openVisitDetail(id));
+  });
+
   if (visit.voiceNotes?.length) {
     visitDetailBody.querySelectorAll(".vd-vn-item").forEach(async (item) => {
       const jobId = item.dataset.jobId;
@@ -963,6 +1041,7 @@ qs("#visit-detail-close")?.addEventListener("click", () => closeVisitDetailPanel
     const objective = qs("#visit-edit-objective").value.trim();
     const latRaw = qs("#visit-edit-site-lat").value;
     const lngRaw = qs("#visit-edit-site-lng").value;
+    const dealSelVal = qs("#visit-edit-deal-select")?.value ?? null;
     const body = {};
     if (plannedAt) body.plannedAt = new Date(plannedAt).toISOString();
     if (objective) body.objective = objective;
@@ -973,6 +1052,7 @@ qs("#visit-detail-close")?.addEventListener("click", () => closeVisitDetailPanel
       body.siteLat = null;
       body.siteLng = null;
     }
+    body.dealId = dealSelVal || null;
     if (!Object.keys(body).length) {
       closeVisitEditModal();
       return;

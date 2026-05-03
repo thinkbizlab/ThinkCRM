@@ -15,11 +15,39 @@ import {
   authScreen, appScreen, statusBar, pageTitle,
   views, pageTitleMap,
   switchView, showApp, showAppLoading, hideAppLoading, showAuth, showTrialBanner,
-  setStatus
+  setStatus, showPageLoading, hidePageLoading
 } from "./modules/dom.js";
 import { loadOAuthProviderButtons, wireOAuthProviderButtons, consumeOAuthCallback } from "./modules/oauth.js";
 import { icon } from "./modules/icons.js";
 import { openDraftCustomerModal, openPromoteDraftModal, draftBadgeHtml, setDraftCustomerDeps } from "./modules/customer-drafts.js";
+import { enqueue, markDone, markFailed, markSyncing, getPendingOps, getQueueCount, clearQueue } from "./modules/offline-queue.js";
+
+// Build version: extracted from this script's own URL (?v=...). Used to
+// version dynamic imports so a deploy bumping the version forces fresh
+// module fetches instead of serving stale immutable cache.
+const MODULE_VERSION = (() => {
+  try { return new URL(import.meta.url).searchParams.get("v") || ""; }
+  catch { return ""; }
+})();
+const MV = MODULE_VERSION ? `?v=${MODULE_VERSION}` : "";
+
+// On boot, ask the server what the current build is. If we're running an
+// older app.js (cached across a deploy), reload once so the fresh HTML
+// pulls a fresh app.js URL. Session guard prevents reload loops.
+(async function checkBuildVersion() {
+  if (!MODULE_VERSION) return;
+  try {
+    const res = await fetch("/api/version", { cache: "no-store" });
+    if (!res.ok) return;
+    const { version } = await res.json();
+    if (!version || version === MODULE_VERSION) return;
+    const KEY = "thinkcrm:version-reload-at";
+    const lastReloadAt = Number(sessionStorage.getItem(KEY) || "0");
+    if (Date.now() - lastReloadAt < 60_000) return;
+    sessionStorage.setItem(KEY, String(Date.now()));
+    location.reload();
+  } catch { /* network / parse failures: stay on current build */ }
+})();
 
 setDraftCustomerDeps({
   getCustomerGroups: () => state.cache.customerGroups || []
@@ -108,7 +136,7 @@ state.deal360 = state.deal360 ?? null;
 
 async function ensureDelegationsModule() {
   if (!delegationsModulePromise) {
-    delegationsModulePromise = import("./modules/delegations.js").then((module) => {
+    delegationsModulePromise = import(`./modules/delegations.js${MV}`).then((module) => {
       module.setDelegationsDeps({
         setStatus,
         escHtml,
@@ -123,7 +151,7 @@ async function ensureDelegationsModule() {
 
 async function ensureCronPickerModule() {
   if (!cronPickerModulePromise) {
-    cronPickerModulePromise = import("./modules/cron-picker.js").then((module) => {
+    cronPickerModulePromise = import(`./modules/cron-picker.js${MV}`).then((module) => {
       cronPickerModule = module;
       return module;
     });
@@ -133,7 +161,7 @@ async function ensureCronPickerModule() {
 
 async function ensureCustomFieldsModule() {
   if (!customFieldsModulePromise) {
-    customFieldsModulePromise = import("./modules/custom-fields.js").then((module) => {
+    customFieldsModulePromise = import(`./modules/custom-fields.js${MV}`).then((module) => {
       customFieldsModule = module;
       return module;
     });
@@ -143,7 +171,7 @@ async function ensureCustomFieldsModule() {
 
 async function ensureThemePresetsModule() {
   if (!themePresetsModulePromise) {
-    themePresetsModulePromise = import("./modules/theme-presets.js").then((module) => {
+    themePresetsModulePromise = import(`./modules/theme-presets.js${MV}`).then((module) => {
       themePresetsModule = module;
       return module;
     });
@@ -153,7 +181,7 @@ async function ensureThemePresetsModule() {
 
 async function ensureSettingsAdminModule() {
   if (!settingsAdminModulePromise) {
-    settingsAdminModulePromise = import("./modules/settings-admin.js").then((module) => {
+    settingsAdminModulePromise = import(`./modules/settings-admin.js${MV}`).then((module) => {
       module.setSettingsAdminDeps({
         CURRENCIES,
         getActiveCurrency,
@@ -262,14 +290,14 @@ function detectPresetSlug(tokens) {
 
 function ensureSuperAdminAnalytics() {
   if (!superAdminAnalyticsPromise) {
-    superAdminAnalyticsPromise = import("./modules/super-admin-analytics.js");
+    superAdminAnalyticsPromise = import(`./modules/super-admin-analytics.js${MV}`);
   }
   return superAdminAnalyticsPromise;
 }
 
 function ensureVoiceNoteModule() {
   if (!voiceNoteModulePromise) {
-    voiceNoteModulePromise = import("./modules/voice-note.js").then((module) => {
+    voiceNoteModulePromise = import(`./modules/voice-note.js${MV}`).then((module) => {
       module.bindVoiceNoteModal({ onConfirmed: handleVoiceNoteConfirmed });
       return module;
     });
@@ -279,14 +307,14 @@ function ensureVoiceNoteModule() {
 
 function ensurePasskeyModule() {
   if (!passkeyModulePromise) {
-    passkeyModulePromise = import("./modules/passkey.js");
+    passkeyModulePromise = import(`./modules/passkey.js${MV}`);
   }
   return passkeyModulePromise;
 }
 
 async function ensureMapPickerModule() {
   if (!mapPickerModulePromise) {
-    mapPickerModulePromise = import("./modules/map-picker.js");
+    mapPickerModulePromise = import(`./modules/map-picker.js${MV}`);
   }
   const module = await mapPickerModulePromise;
   module.setMapPickerDeps({ setStatus });
@@ -343,7 +371,7 @@ function handleLazyModuleError(error) {
 
 async function ensureDashboardModule() {
   if (!dashboardModulePromise) {
-    dashboardModulePromise = import("./modules/dashboard.js");
+    dashboardModulePromise = import(`./modules/dashboard.js${MV}`);
   }
   const module = await dashboardModulePromise;
   if (!dashboardModuleInitialized) {
@@ -360,7 +388,7 @@ async function ensureDashboardModule() {
 
 async function ensureCalendarModule() {
   if (!calendarModulePromise) {
-    calendarModulePromise = import("./modules/calendar.js");
+    calendarModulePromise = import(`./modules/calendar.js${MV}`);
   }
   const module = await calendarModulePromise;
   if (!calendarModuleInitialized) {
@@ -377,7 +405,7 @@ async function ensureCalendarModule() {
 
 async function ensureCustomer360Module() {
   if (!customer360ModulePromise) {
-    customer360ModulePromise = import("./modules/customer-360.js");
+    customer360ModulePromise = import(`./modules/customer-360.js${MV}`);
   }
   const module = await customer360ModulePromise;
   if (!customer360ModuleInitialized) {
@@ -391,7 +419,9 @@ async function ensureCustomer360Module() {
       openVisitCreateModal,
       openDealCreateModal: openDealCreateModalWithContext,
       openDeal360,
-      openVisitDetail
+      openVisitDetail,
+      openCheckInModal,
+      openCheckOutModal
     });
     customer360ModuleInitialized = true;
   }
@@ -401,7 +431,7 @@ async function ensureCustomer360Module() {
 async function ensureDeal360Module() {
   await ensureCustomer360Module();
   if (!deal360ModulePromise) {
-    deal360ModulePromise = import("./modules/deal-360.js");
+    deal360ModulePromise = import(`./modules/deal-360.js${MV}`);
   }
   const module = await deal360ModulePromise;
   if (!deal360ModuleInitialized) {
@@ -411,7 +441,11 @@ async function ensureDeal360Module() {
       c360Initials,
       navigateToView,
       renderDeals,
-      showToast: (message, type) => setStatus(message, type === "error")
+      showToast: (message, type) => setStatus(message, type === "error"),
+      openVisitDetail,
+      openCheckInModal,
+      openCheckOutModal,
+      openVisitCreateModal
     });
     deal360ModuleInitialized = true;
   }
@@ -420,7 +454,7 @@ async function ensureDeal360Module() {
 
 async function ensureVisitsModule() {
   if (!visitsModulePromise) {
-    visitsModulePromise = import("./modules/visits.js");
+    visitsModulePromise = import(`./modules/visits.js${MV}`);
   }
   const module = await visitsModulePromise;
   if (!visitsModuleInitialized) {
@@ -434,7 +468,9 @@ async function ensureVisitsModule() {
       openDeal360,
       openProspectDetail,
       loadMyTasks,
-      attachOnBehalfOfField
+      attachOnBehalfOfField,
+      openCheckInModal,
+      openCheckOutModal
     });
     visitsModuleInitialized = true;
   }
@@ -568,7 +604,7 @@ function showEventDetail(...args) {
 
 async function ensureQuickSearchModule() {
   if (!quickSearchModulePromise) {
-    quickSearchModulePromise = import("./modules/quick-search.js");
+    quickSearchModulePromise = import(`./modules/quick-search.js${MV}`);
   }
   const module = await quickSearchModulePromise;
   if (!quickSearchInitialized) {
@@ -614,7 +650,7 @@ async function toggleQuickSearchLazy() {
 
 async function ensureOnboardingWizardModule() {
   if (!onboardingWizardModulePromise) {
-    onboardingWizardModulePromise = import("./modules/onboarding-wizard.js");
+    onboardingWizardModulePromise = import(`./modules/onboarding-wizard.js${MV}`);
   }
   const module = await onboardingWizardModulePromise;
   if (!onboardingWizardInitialized) {
@@ -635,7 +671,7 @@ async function ensureOnboardingWizardModule() {
 
 async function ensureDemoDataModule() {
   if (!demoDataModulePromise) {
-    demoDataModulePromise = import("./modules/demo-data.js");
+    demoDataModulePromise = import(`./modules/demo-data.js${MV}`);
   }
   const module = await demoDataModulePromise;
   if (!demoDataInitialized) {
@@ -739,6 +775,7 @@ const CRM_TARGET_FIELDS = {
     { value: "name",               label: "Customer Name",         required: true },
     { value: "customerType",       label: "Customer Type",         required: false },
     { value: "taxId",              label: "Tax ID",                required: false },
+    { value: "branchCode",         label: "Branch Code",           required: false },
     { value: "customerGroupCode",  label: "Customer Group",        required: false },
     { value: "ownerId",            label: "Owner User ID",         required: false },
     { value: "siteLat",            label: "Site Latitude",         required: false },
@@ -2212,27 +2249,29 @@ const MASTER_DATA_IMPORT_SPECS = {
   "payment-terms": {
     label: "Payment Terms",
     endpoint: "/payment-terms/import",
-    columns: ["code", "name", "dueDays"],
+    columns: ["code", "name", "dueDays", "isActive"],
+    requiredColumns: ["code", "name", "dueDays"],
     sample: [
-      { code: "NET30",  name: "Net 30 days",  dueDays: 30 },
-      { code: "NET60",  name: "Net 60 days",  dueDays: 60 },
-      { code: "COD",    name: "Cash on delivery", dueDays: 0 }
+      { code: "NET30",  name: "Net 30 days",  dueDays: 30, isActive: true },
+      { code: "NET60",  name: "Net 60 days",  dueDays: 60, isActive: true },
+      { code: "COD",    name: "Cash on delivery", dueDays: 0, isActive: true }
     ],
     sourceRows: () => (state.cache.paymentTerms || []).map((p) => ({
-      code: p.code, name: p.name, dueDays: p.dueDays
+      code: p.code, name: p.name, dueDays: p.dueDays, isActive: p.isActive
     })),
     fileBase: "payment-terms"
   },
   "items": {
     label: "Items",
     endpoint: "/items/import",
-    columns: ["itemCode", "name", "unitPrice", "externalRef"],
+    columns: ["itemCode", "name", "unitPrice", "externalRef", "isActive"],
+    requiredColumns: ["itemCode", "name", "unitPrice"],
     sample: [
-      { itemCode: "SKU-001", name: "Example Product A", unitPrice: 500,  externalRef: "" },
-      { itemCode: "SKU-002", name: "Example Product B", unitPrice: 1250, externalRef: "LEGACY-42" }
+      { itemCode: "SKU-001", name: "Example Product A", unitPrice: 500,  externalRef: "", isActive: true },
+      { itemCode: "SKU-002", name: "Example Product B", unitPrice: 1250, externalRef: "LEGACY-42", isActive: true }
     ],
     sourceRows: () => (state.cache.items || []).map((it) => ({
-      itemCode: it.itemCode, name: it.name, unitPrice: it.unitPrice, externalRef: it.externalRef || ""
+      itemCode: it.itemCode, name: it.name, unitPrice: it.unitPrice, externalRef: it.externalRef || "", isActive: it.isActive
     })),
     fileBase: "items"
   },
@@ -2240,6 +2279,7 @@ const MASTER_DATA_IMPORT_SPECS = {
     label: "Customer Groups",
     endpoint: "/customer-groups/import",
     columns: ["code", "name", "description", "isActive"],
+    requiredColumns: ["code", "name"],
     sample: [
       { code: "UNI",    name: "University",  description: "Universities and colleges", isActive: true },
       { code: "GOV",    name: "Government",  description: "Government bodies",         isActive: true },
@@ -2255,21 +2295,25 @@ const MASTER_DATA_IMPORT_SPECS = {
   "customers": {
     label: "Customers",
     endpoint: "/customers/import",
-    columns: ["customerCode", "name", "customerGroupCode", "customerType", "taxId", "externalRef", "siteLat", "siteLng"],
+    columns: ["customerCode", "name", "customerGroupCode", "customerType", "taxId", "branchCode", "parentCustomerCode", "externalRef", "siteLat", "siteLng", "disabled"],
     sample: [
-      { customerCode: "CUST-0001", name: "Acme Co., Ltd.", customerGroupCode: "CORP", customerType: "COMPANY", taxId: "0105555123456", externalRef: "", siteLat: 13.7563, siteLng: 100.5018 },
-      { customerCode: "CUST-0002", name: "Jane Individual",  customerGroupCode: "",    customerType: "INDIVIDUAL", taxId: "", externalRef: "", siteLat: "", siteLng: "" }
+      { customerCode: "CUST-0001", name: "Acme Co., Ltd.", customerGroupCode: "CORP", customerType: "COMPANY", taxId: "0105555123456", branchCode: "00000", parentCustomerCode: "", externalRef: "", siteLat: 13.7563, siteLng: 100.5018, disabled: false },
+      { customerCode: "CUST-0002", name: "Jane Personal",  customerGroupCode: "",    customerType: "PERSONAL", taxId: "", branchCode: "", parentCustomerCode: "", externalRef: "", siteLat: "", siteLng: "", disabled: false }
     ],
     sourceRows: () => {
+      const customerCodeById = new Map((state.cache.customers || []).map((c) => [c.id, c.customerCode || ""]));
       return (state.cache.customers || []).map((c) => ({
         customerCode: c.customerCode,
         name: c.name,
         customerGroupCode: c.customerGroup?.code || "",
         customerType: c.customerType || "COMPANY",
         taxId: c.taxId || "",
+        branchCode: c.branchCode || "",
+        parentCustomerCode: c.parentCustomer?.customerCode || customerCodeById.get(c.parentCustomerId) || "",
         externalRef: c.externalRef || "",
         siteLat: c.siteLat ?? "",
-        siteLng: c.siteLng ?? ""
+        siteLng: c.siteLng ?? "",
+        disabled: c.disabled || false
       }));
     },
     fileBase: "customers"
@@ -2312,7 +2356,7 @@ function openMasterDataImportModal(entity) {
         <button class="popup-close-btn" aria-label="Close">${icon('x', 14)}</button>
       </div>
       <div style="padding:var(--sp-3) 0;display:flex;flex-direction:column;gap:var(--sp-3)">
-        <p class="muted small">Upload an Excel (.xlsx) file. Required columns: ${spec.columns.map(c => `<code>${c}</code>`).join(", ")}. Existing rows (matched by natural key) are overwritten.${(() => {
+        <p class="muted small">Upload an Excel (.xlsx) file. Required columns: ${(spec.requiredColumns || spec.columns).map(c => `<code>${c}</code>`).join(", ")}. Existing rows (matched by natural key) are overwritten.${(() => {
           const cfCols = getActiveCustomFieldColumns(entity);
           return cfCols.length ? ` Optional custom field columns: ${cfCols.map(c => `<code>${c}</code>`).join(", ")}.` : "";
         })()}</p>
@@ -2569,7 +2613,7 @@ function renderMasterData(paymentTerms = []) {
     const listEl = qs("#pt-list-body");
     const pagEl  = qs("#pt-pagination");
     if (!listEl || !pagEl) return;
-    const all = paymentTerms;
+    const all = state.cache.paymentTerms || [];
     const ps = getMasterPageSize("paymentTerm");
     const totalPages = Math.max(1, Math.ceil(all.length / (ps === Infinity ? Math.max(1, all.length) : ps)));
     state.paymentTermListPage = Math.min(Math.max(1, state.paymentTermListPage || 1), totalPages);
@@ -2705,13 +2749,13 @@ function renderMasterData(paymentTerms = []) {
   views.master.querySelectorAll(".master-page-btn").forEach((btn) => {
     btn.addEventListener("click", async () => {
       navigateToMasterPage(btn.dataset.page);
-      setStatus("Loading…");
+      showPageLoading("Loading…");
       try {
         await loadMaster(btn.dataset.page);
       } catch (err) {
         setStatus(err.message || "Failed to load master data.", true);
       } finally {
-        setStatus("");
+        hidePageLoading();
       }
     });
   });
@@ -3180,14 +3224,11 @@ function renderDealCard(deal, kanban) {
       </div>
       <div class="deal-card-footer">
         <span class="deal-assignee"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>${escHtml(deal.owner?.fullName || "Unassigned")}</span>
-        <button class="deal-detail-btn" data-id="${deal.id}" data-no="${escHtml(deal.dealNo)}" title="Open deal detail">
-          <svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-        </button>
       </div>
       <div class="deal-card-actions">
         <select class="deal-stage-select" data-id="${deal.id}">${stageOptions}</select>
         <button class="deal-stage-save" data-id="${deal.id}">Move</button>
-        <button type="button" class="voice-note-btn ghost" data-entity-type="DEAL" data-entity-id="${deal.id}" title="Voice note">${icon('mic')}</button>
+        <button type="button" class="deal-detail-btn ghost" data-id="${deal.id}" data-no="${escHtml(deal.dealNo)}" title="Open Deal 360">${icon('eye')}</button>
       </div>
       ${stageProgressPct !== null ? `<div class="deal-stage-progress"><span style="width:${stageProgressPct}%"></span></div>` : ""}
     </div>
@@ -3266,7 +3307,12 @@ function renderDeals(kanban, dealsRoot = views.deals, options = {}) {
   const filteredStages = applyDealsFilter(kanban);
   const totalDeals = filteredStages.reduce((s, st) => s + st.deals.length, 0);
   const { query, suspicious, repIds, followUpFrom, followUpTo, closedFrom, closedTo } = state.dealsFilter;
-  const isRep = state.user?.role === "REP";
+  const userRole = state.user?.role || "REP";
+  const isRep = userRole === "REP";
+  const dealCanSeeTeam = ["SUPERVISOR", "MANAGER", "ASSISTANT_MANAGER", "SALES_ADMIN"].includes(userRole);
+  const dealCanSeeAll  = ["ADMIN", "DIRECTOR"].includes(userRole);
+  const dealShowScope  = dealCanSeeTeam || dealCanSeeAll;
+  if (!state.dealsScope) state.dealsScope = "team";
   const hasFilter = query || suspicious || repIds?.length || followUpFrom || followUpTo || closedFrom || closedTo;
 
   const repMap = new Map();
@@ -3318,6 +3364,13 @@ function renderDeals(kanban, dealsRoot = views.deals, options = {}) {
           ${icon('sparkles')} New Deal
         </button>
       </div>
+
+      ${dealShowScope ? `
+      <div class="cust-scope-pills" style="margin-bottom:var(--sp-2)">
+        <button class="cust-scope-pill deals-scope-pill ${state.dealsScope === "mine" ? "active" : ""}" data-scope="mine">My Deals</button>
+        <button class="cust-scope-pill deals-scope-pill ${state.dealsScope === "team" ? "active" : ""}" data-scope="team">My Team</button>
+        ${dealCanSeeAll ? `<button class="cust-scope-pill deals-scope-pill ${state.dealsScope === "all" ? "active" : ""}" data-scope="all">All</button>` : ""}
+      </div>` : ""}
 
       <div class="deals-filter-bar">
         <div class="deals-search-wrap">
@@ -3385,6 +3438,14 @@ function renderDeals(kanban, dealsRoot = views.deals, options = {}) {
     dealsRoot.querySelector("#deals-followup-to")?.addEventListener("change",   (e) => { state.dealsFilter.followUpTo   = e.target.value; rdeals(kanban); });
     dealsRoot.querySelector("#deals-closed-from")?.addEventListener("change",   (e) => { state.dealsFilter.closedFrom   = e.target.value; rdeals(kanban); });
     dealsRoot.querySelector("#deals-closed-to")?.addEventListener("change",     (e) => { state.dealsFilter.closedTo     = e.target.value; rdeals(kanban); });
+
+    dealsRoot.querySelectorAll(".deals-scope-pill").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        state.dealsScope = btn.dataset.scope;
+        showPageLoading("Loading…");
+        try { await loadDeals(); } finally { hidePageLoading(); }
+      });
+    });
   }
 
   const board = dealsRoot.querySelector(".kanban-board");
@@ -3511,14 +3572,6 @@ function renderDeals(kanban, dealsRoot = views.deals, options = {}) {
       } catch (error) {
         setStatus(error.message, true);
       }
-    });
-  });
-
-  dealsRoot.querySelectorAll(".voice-note-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const card = btn.closest(".deal-card");
-      const label = card?.querySelector(".deal-name")?.textContent?.trim() || "";
-      void openVoiceNoteDialog(btn.dataset.entityType, btn.dataset.entityId, label);
     });
   });
 
@@ -3807,9 +3860,32 @@ function renderMyTasks(data) {
   });
 }
 
+// ── Offline optimistic update ─────────────────────────────────────────────────
+// Applies a new status to a visit in all local caches so the UI reflects the
+// queued state before the server confirms. Rolled back implicitly on next reload.
+function applyOptimisticVisitStatus(visitId, newStatus) {
+  if (Array.isArray(state.cache.visits)) {
+    const v = state.cache.visits.find(v => v.id === visitId);
+    if (v) v.status = newStatus;
+  }
+  const allBucketArrays = [
+    state.cache.myTasks?.pinned?.checkedInWaitingCheckout,
+    state.cache.myTasks?.buckets?.overdue,
+    state.cache.myTasks?.buckets?.today,
+    state.cache.myTasks?.buckets?.tomorrow,
+    state.cache.myTasks?.buckets?.next_week,
+    state.cache.myTasks?.buckets?.next_month
+  ];
+  for (const bucket of allBucketArrays) {
+    if (!Array.isArray(bucket)) continue;
+    const ev = bucket.find(e => e.type === "visit" && e.entityId === visitId);
+    if (ev) ev.status = newStatus;
+  }
+}
+
 // ── Check-In Modal ─────────────────────────────────────────────────────────────
 
-function openCheckInModal(visitId, customerName) {
+function openCheckInModal(visitId, customerName, onSuccess) {
   qs("#mt-checkin-modal")?.remove();
 
   document.body.insertAdjacentHTML("beforeend", `
@@ -3944,15 +4020,35 @@ function openCheckInModal(visitId, customerName) {
   confirmBtn.addEventListener("click", async () => {
     confirmBtn.disabled = true;
     confirmBtn.textContent = "Checking in…";
+
+    const capturedAt = new Date().toISOString();
+    const payload = { lat: coords.lat, lng: coords.lng, selfieUrl: selfieDataUrl || "no-selfie", capturedAt };
+
+    if (!navigator.onLine) {
+      try {
+        await enqueue({ type: "CHECKIN", visitId, endpoint: `/visits/${visitId}/checkin`, method: "POST", payload });
+        applyOptimisticVisitStatus(visitId, "CHECKED_IN");
+        if (state.cache.myTasks) renderMyTasks(state.cache.myTasks);
+        setStatus("Queued — will sync when you reconnect.");
+        updateSyncBadge();
+        closeModal();
+      } catch (qErr) {
+        setStatus("Failed to queue check-in: " + qErr.message, true);
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = "Confirm Check-In";
+      }
+      return;
+    }
+
     try {
-      const checkinRes = await api(`/visits/${visitId}/checkin`, {
-        method: "POST",
-        body: { lat: coords.lat, lng: coords.lng, selfieUrl: selfieDataUrl || "no-selfie" }
-      });
+      const checkinRes = await api(`/visits/${visitId}/checkin`, { method: "POST", body: payload });
       setStatus("Checked in successfully.");
       showNotifWarnings(checkinRes?.notifWarnings);
       closeModal();
       await loadMyTasks();
+      if (typeof onSuccess === "function") {
+        try { await onSuccess(); } catch (err) { setStatus(err?.message || "Refresh failed.", true); }
+      }
     } catch (e) {
       setStatus(e.message, true);
       confirmBtn.disabled = false;
@@ -3963,7 +4059,7 @@ function openCheckInModal(visitId, customerName) {
 
 // ── Check-Out Modal ─────────────────────────────────────────────────────────────
 
-function openCheckOutModal(visitId, customerName) {
+function openCheckOutModal(visitId, customerName, onSuccess) {
   qs("#mt-checkout-modal")?.remove();
 
   const nowIso = (() => {
@@ -4099,12 +4195,28 @@ function openCheckOutModal(visitId, customerName) {
     confirmBtn.disabled = true;
     confirmBtn.textContent = "Saving…";
 
+    const capturedAt = new Date().toISOString();
+    const payload = { lat: checkoutCoords?.lat ?? 0, lng: checkoutCoords?.lng ?? 0, result, capturedAt };
+
+    if (!navigator.onLine) {
+      try {
+        await enqueue({ type: "CHECKOUT", visitId, endpoint: `/visits/${visitId}/checkout`, method: "POST", payload });
+        applyOptimisticVisitStatus(visitId, "CHECKED_OUT");
+        if (state.cache.myTasks) renderMyTasks(state.cache.myTasks);
+        setStatus("Check-out queued — will sync when you reconnect.");
+        updateSyncBadge();
+        closeModal();
+      } catch (qErr) {
+        setStatus("Failed to queue check-out: " + qErr.message, true);
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = "Confirm Check-Out";
+      }
+      return;
+    }
+
     let checkoutRes;
     try {
-      checkoutRes = await api(`/visits/${visitId}/checkout`, {
-        method: "POST",
-        body: { lat: checkoutCoords?.lat ?? 0, lng: checkoutCoords?.lng ?? 0, result }
-      });
+      checkoutRes = await api(`/visits/${visitId}/checkout`, { method: "POST", body: payload });
     } catch (e) {
       setStatus(e.message, true);
       confirmBtn.disabled = false;
@@ -4155,6 +4267,9 @@ function openCheckOutModal(visitId, customerName) {
     }
 
     try { await loadMyTasks(); } catch (e) { setStatus(e.message, true); }
+    if (typeof onSuccess === "function") {
+      try { await onSuccess(); } catch (err) { setStatus(err?.message || "Refresh failed.", true); }
+    }
   });
 }
 
@@ -4961,12 +5076,51 @@ function renderSettings() {
                 <span class="rp-role-change-cell">
                   ${roleOptions(u)}
                   ${isAdmin ? `<button type="button" class="passkey-admin-btn ghost small" data-uid="${u.id}" data-name="${escHtml(u.fullName)}" title="Manage passkeys">${icon('key')}</button>` : ""}
+                  ${isAdmin && !isSelf ? `<button type="button" class="btn-danger-outline small rp-delete-user-btn" data-uid="${u.id}" data-name="${escHtml(u.fullName)}" title="Deactivate user">${icon('trash')}</button>` : ""}
                 </span>
               </div>`;
             }).join("")}
           </div>
         </div></div>
       </div>
+
+      ${isAdmin && (state.cache.pendingInvites || []).length ? `
+      <div class="rp-table-card" style="margin-top:var(--sp-4)">
+        <div class="rp-table-header">
+          ${icon('mail')}
+          <span class="rp-table-title">Pending Invites</span>
+          <span class="rp-user-count" style="margin-left:auto">${state.cache.pendingInvites.length} pending</span>
+        </div>
+        <div class="rp-table-scroll"><div class="rp-table">
+          <div class="rp-thead">
+            <span>Email</span>
+            <span>Role</span>
+            <span>Invited</span>
+            <span>Expires</span>
+          </div>
+          <div class="rp-tbody">
+            ${(state.cache.pendingInvites || []).map(inv => {
+              const roleLabel2 = { ADMIN: "Admin", DIRECTOR: "Sales Director", MANAGER: "Sales Manager", ASSISTANT_MANAGER: "Assistant Manager", SUPERVISOR: "Supervisor", SALES_ADMIN: "Sales Admin", REP: "Sales Rep" };
+              const roleCls2   = { ADMIN: "rp-badge--admin", DIRECTOR: "rp-badge--director", MANAGER: "rp-badge--manager", ASSISTANT_MANAGER: "rp-badge--manager", SUPERVISOR: "rp-badge--supervisor", SALES_ADMIN: "rp-badge--supervisor", REP: "rp-badge--rep" };
+              const created = new Date(inv.createdAt).toLocaleDateString();
+              const expires = new Date(inv.expiresAt).toLocaleDateString();
+              return `<div class="rp-row">
+                <div class="rp-user-cell">
+                  <div class="rp-avatar" style="background:var(--muted-color,#aaa);opacity:0.6">?</div>
+                  <div class="rp-user-info">
+                    <span class="rp-user-name">${escHtml(inv.email)}</span>
+                    <span class="rp-user-email muted">Awaiting acceptance</span>
+                  </div>
+                </div>
+                <span><span class="rp-badge ${roleCls2[inv.role] || ""}">${roleLabel2[inv.role] || inv.role}</span></span>
+                <span class="muted small">${created}</span>
+                <span class="muted small">${expires}</span>
+              </div>`;
+            }).join("")}
+          </div>
+        </div></div>
+      </div>
+      ` : ""}
 
       <div class="rp-role-guide">
         <h4 class="rp-role-guide-title">How roles work</h4>
@@ -4992,7 +5146,7 @@ function renderSettings() {
           ${state.cache.salesReps.length ? `
           <form id="kpi-form" class="settings-form">
             <div class="settings-field-row">
-              <label class="form-label">Sales Rep
+              <label class="form-label">Person
                 <select class="form-input" name="userId" required>${salesRepOptions}</select>
               </label>
               <label class="form-label">Month
@@ -5012,7 +5166,7 @@ function renderSettings() {
             </div>
             <button type="submit">Save KPI Target</button>
           </form>
-          ` : `<div class="empty-state compact"><div><strong>No active sales reps</strong><p>Create sales rep users first.</p></div></div>`}
+          ` : `<div class="empty-state compact"><div><strong>No active users</strong><p>Create users first.</p></div></div>`}
         ` : `<div class="muted small" style="padding:var(--sp-2) 0">View only — Director or Manager access required to set targets.</div>`}
       </section>
 
@@ -7154,33 +7308,101 @@ function renderSettings() {
         }
         box.scrollIntoView({ behavior: "smooth", block: "nearest" });
       };
-      try {
-        const result = await api(`/integrations/master-data/sources/${sourceId}/pull`, { method: "POST" });
-        const ok = result.status !== "failed" && (result.failure_count || 0) === 0;
-        const partial = (result.failure_count || 0) > 0 && (result.success_count || 0) > 0;
+      // Synchronous result renderer (REST: full summary + errors).
+      const renderSummary = (summary, errors) => {
+        const ok = summary.status !== "failed" && (summary.failure_count || 0) === 0;
+        const partial = (summary.failure_count || 0) > 0 && (summary.success_count || 0) > 0;
         const color = ok ? "var(--accent-bright,#16a34a)" : (partial ? "#d97706" : "var(--danger,#dc2626)");
         const bg = ok ? "rgba(22,163,74,0.08)" : (partial ? "rgba(217,119,6,0.08)" : "rgba(220,38,38,0.08)");
         const title = ok ? `Pull completed — ${sourceName}` : (partial ? `Pull completed with errors — ${sourceName}` : `Pull failed — ${sourceName}`);
         const statsHtml = [
-          `<span><strong>${result.processed_count ?? 0}</strong> processed</span>`,
-          `<span style="color:var(--accent-bright,#16a34a)"><strong>${result.success_count ?? 0}</strong> succeeded</span>`,
-          `<span style="color:var(--danger,#dc2626)"><strong>${result.failure_count ?? 0}</strong> failed</span>`,
-          result.duration_ms != null ? `<span class="muted">${(result.duration_ms / 1000).toFixed(1)}s</span>` : "",
-          result.jobId ? `<span class="muted">Job ${String(result.jobId).slice(0, 8)}</span>` : ""
+          `<span><strong>${summary.processed_count ?? 0}</strong> processed</span>`,
+          `<span style="color:var(--accent-bright,#16a34a)"><strong>${summary.success_count ?? 0}</strong> succeeded</span>`,
+          `<span style="color:var(--danger,#dc2626)"><strong>${summary.failure_count ?? 0}</strong> failed</span>`,
+          summary.duration_ms != null ? `<span class="muted">${(summary.duration_ms / 1000).toFixed(1)}s</span>` : "",
+          summary.jobId ? `<span class="muted">Job ${String(summary.jobId).slice(0, 8)}</span>` : ""
         ].filter(Boolean).join("");
-        await loadSyncData();
-        renderSettings();
-        renderResult(ok, title, color, bg, statsHtml, result.errors);
+        renderResult(ok, title, color, bg, statsHtml, errors);
         const toastMsg = ok
-          ? `Pull completed: ${result.success_count ?? 0}/${result.processed_count ?? 0} records synced from ${sourceName}.`
+          ? `Pull completed: ${summary.success_count ?? 0}/${summary.processed_count ?? 0} records synced from ${sourceName}.`
           : partial
-          ? `Pull partial: ${result.success_count ?? 0} succeeded, ${result.failure_count ?? 0} failed on ${sourceName}.`
+          ? `Pull partial: ${summary.success_count ?? 0} succeeded, ${summary.failure_count ?? 0} failed on ${sourceName}.`
           : `Pull failed on ${sourceName}.`;
         setStatus(toastMsg, !ok && !partial);
+      };
+
+      // Async progress renderer (MYSQL chunked drain — keeps the box open
+      // and updates the stats line each poll until the job finishes).
+      const renderProgress = (job) => {
+        const s = job.summaryJson || {};
+        const processed = s.processed_count || 0;
+        const succeeded = s.success_count || 0;
+        const failed = s.failure_count || 0;
+        const cursor = s.cursor || 0;
+        const running = job.status === "PENDING" || job.status === "RUNNING";
+        const color = running ? "#0284c7" : (failed > 0 && succeeded === 0 ? "var(--danger,#dc2626)" : (failed > 0 ? "#d97706" : "var(--accent-bright,#16a34a)"));
+        const bg = running ? "rgba(2,132,199,0.08)" : (failed > 0 && succeeded === 0 ? "rgba(220,38,38,0.08)" : (failed > 0 ? "rgba(217,119,6,0.08)" : "rgba(22,163,74,0.08)"));
+        const title = job.status === "PENDING"
+          ? `Queued — ${sourceName}`
+          : job.status === "RUNNING"
+          ? `Pulling… (${succeeded}/${processed} so far) — ${sourceName}`
+          : job.status === "SUCCESS"
+          ? `Pull completed — ${sourceName}`
+          : `Pull failed — ${sourceName}`;
+        const statsHtml = [
+          `<span><strong>${processed}</strong> rows fetched</span>`,
+          `<span style="color:var(--accent-bright,#16a34a)"><strong>${succeeded}</strong> succeeded</span>`,
+          `<span style="color:var(--danger,#dc2626)"><strong>${failed}</strong> failed</span>`,
+          running ? `<span class="muted">cursor=${cursor}</span>` : "",
+          `<span class="muted">Job ${String(job.id).slice(0, 8)}</span>`
+        ].filter(Boolean).join("");
+        renderResult(!running && job.status === "SUCCESS", title, color, bg, statsHtml,
+          (job.errors || []).slice(0, 50).map(e => `${e.rowRef}: ${e.errorCode} — ${e.errorMessage}`));
+      };
+
+      const pollJob = async (jobId) => {
+        let attempts = 0;
+        const maxAttempts = 600; // ~30 min at 3s intervals
+        while (attempts++ < maxAttempts) {
+          await new Promise(r => setTimeout(r, 3000));
+          let job;
+          try {
+            job = await api(`/integrations/master-data/jobs/${jobId}`);
+          } catch (err) {
+            // transient — keep polling
+            continue;
+          }
+          renderProgress(job);
+          if (job.status === "SUCCESS" || job.status === "FAILED") {
+            await loadSyncData();
+            renderSettings();
+            const finalToast = job.status === "SUCCESS"
+              ? `Pull completed: ${(job.summaryJson?.success_count ?? 0)}/${(job.summaryJson?.processed_count ?? 0)} records synced from ${sourceName}.`
+              : `Pull failed on ${sourceName}.`;
+            setStatus(finalToast, job.status !== "SUCCESS");
+            return;
+          }
+        }
+        setStatus(`Pull on ${sourceName} is taking longer than expected — open Settings → Sync Jobs to track it.`, true);
+      };
+
+      try {
+        const result = await api(`/integrations/master-data/sources/${sourceId}/pull`, { method: "POST" });
+        // MYSQL: server returns a queued job (status: "queued"|"already_running"). Poll it.
+        if (result && result.jobId && (result.status === "queued" || result.status === "already_running") && !result.processed_count) {
+          renderProgress({ id: result.jobId, status: "PENDING", summaryJson: {}, errors: [] });
+          setStatus(result.message || `Pull queued for ${sourceName}.`);
+          await pollJob(result.jobId);
+        } else {
+          renderSummary({ ...result, jobId: result.jobId }, result.errors);
+          await loadSyncData();
+          renderSettings();
+        }
       } catch (err) {
         const msg = err.message || "Pull failed.";
         renderResult(false, `Pull failed — ${sourceName}`, "var(--danger,#dc2626)", "rgba(220,38,38,0.08)", `<span>${escHtml(msg)}</span>`, null);
         setStatus(`Pull failed on ${sourceName}: ${msg}`, true);
+      } finally {
         btn.disabled = false;
         btn.textContent = originalLabel;
       }
@@ -7666,8 +7888,27 @@ function renderSettings() {
 
   qs("#rp-refresh-btn")?.addEventListener("click", async () => {
     setStatus("Refreshing…");
-    await loadSettings();
+    state.cache.pendingInvites = null;
+    await loadSettings("roles", { force: true });
     setStatus("");
+  });
+
+  qs("#rp-tbody")?.addEventListener("click", async (e) => {
+    const btn = e.target.closest(".rp-delete-user-btn");
+    if (!btn) return;
+    const uid = btn.dataset.uid;
+    const name = btn.dataset.name || "this user";
+    if (!confirm(`Deactivate ${name}? They will no longer be able to log in.`)) return;
+    btn.disabled = true;
+    try {
+      await api(`/users/${uid}`, { method: "DELETE" });
+      state.cache.allUsers = (state.cache.allUsers || []).filter(u => u.id !== uid);
+      renderSettings();
+      setStatus(`${name} has been deactivated.`);
+    } catch (err) {
+      setStatus(err.message || "Failed to deactivate user.", true);
+      btn.disabled = false;
+    }
   });
 
   // ── Invite User (S4) ───────────────────────────────────────────
@@ -8598,7 +8839,7 @@ function installMasterPageSizeDelegation() {
       : key === "customerGroup" ? "#cg-list-body" : null;
     const listEl = listSel ? document.querySelector(listSel) : null;
     if (listEl) listEl.classList.add("master-list-loading");
-    setStatus("Loading…");
+    showPageLoading("Loading…");
     // Defer re-render so the loading class paints before work.
     requestAnimationFrame(() => {
       try {
@@ -8620,7 +8861,7 @@ function installMasterPageSizeDelegation() {
       } finally {
         const el = listSel ? document.querySelector(listSel) : null;
         if (el) el.classList.remove("master-list-loading");
-        setStatus("");
+        hidePageLoading();
       }
     });
   });
@@ -8817,6 +9058,7 @@ function idleSignOut() {
   state.cache.cronJobs = undefined;
   _notifPrefsCache = null;
   clearTokens();
+  clearQueue().catch(() => {});
   stopHeartbeat();
   showAuth();
   if (authMessage) authMessage.textContent = "Signed out due to inactivity. Please sign in again.";
@@ -9098,9 +9340,8 @@ function attachCustBodyDelegation(bodyEl) {
       openPromoteDraftModal({
         customer,
         onPromoted: async () => {
-          setStatus("Loading…");
-          await loadMaster();
-          setStatus("");
+          showPageLoading("Loading…");
+          try { await loadMaster(); } finally { hidePageLoading(); }
         }
       });
       return;
@@ -9164,13 +9405,13 @@ function attachCustBodyDelegation(bodyEl) {
       const v = t.value === "all" ? "all" : Number(t.value);
       setMasterPageSize("customer", v);
       state.customerListPage = 1;
-      setStatus("Loading…");
+      showPageLoading("Loading…");
       bodyEl.classList.add("master-list-loading");
       requestAnimationFrame(() => {
         try { refreshCustBody(bodyEl, bodyEl._custCtx?.termOptions || ""); }
         finally {
           bodyEl.classList.remove("master-list-loading");
-          setStatus("");
+          hidePageLoading();
         }
       });
     }
@@ -9565,9 +9806,8 @@ function renderCustomerListSection(container, termOptions) {
     btn.addEventListener("click", async () => {
       state.customerScope = btn.dataset.scope;
       state.customerListPage = 1;
-      setStatus("Loading…");
-      await loadMaster();
-      setStatus("");
+      showPageLoading("Loading…");
+      try { await loadMaster(); } finally { hidePageLoading(); }
     });
   });
 
@@ -9579,9 +9819,8 @@ function renderCustomerListSection(container, termOptions) {
   container.querySelector("#cust-open-draft-modal")?.addEventListener("click", () => {
     openDraftCustomerModal({
       onCreated: async () => {
-        setStatus("Loading…");
-        await loadMaster();
-        setStatus("");
+        showPageLoading("Loading…");
+        try { await loadMaster(); } finally { hidePageLoading(); }
       }
     });
   });
@@ -9846,10 +10085,9 @@ async function searchThaiGeo(q) {
   }
 }
 
-function openNewCustomerModal(termOptions) {
+function openNewCustomerModal(_termOptions) {
   // Remove any existing modal
   qs("#new-cust-modal")?.remove();
-
   const role = state.user?.role ?? "REP";
   const canAssignOwner = ["ADMIN", "MANAGER"].includes(role);
   const ownerOptions = canAssignOwner && state.cache.allUsers?.length
@@ -9894,9 +10132,8 @@ function openNewCustomerModal(termOptions) {
               </div>
             </div>
             <div class="ncm-field">
-              <label class="ncm-label" for="ncm-code">Customer Code <span class="ncm-req">*</span></label>
-              <input class="ncm-input" id="ncm-code" name="customerCode" placeholder="Auto-generated" readonly aria-readonly="true" tabindex="-1" required />
-              <small class="muted">Auto-generated by the system.</small>
+              <label class="ncm-label">Customer Code</label>
+              <small class="muted">Assigned automatically when saved.</small>
             </div>
           </div>
 
@@ -9998,6 +10235,21 @@ function openNewCustomerModal(termOptions) {
   `;
 
   document.body.appendChild(overlay);
+
+  // Populate payment term select — fetch if not yet cached so the modal
+  // works even when opened before the master data page has loaded.
+  (async () => {
+    if (!Array.isArray(state.cache.paymentTerms)) {
+      try { state.cache.paymentTerms = await api("/payment-terms"); } catch { /* leave empty */ }
+    }
+    const termSelect = overlay.querySelector("#ncm-term");
+    if (termSelect && overlay.isConnected) {
+      const html = (state.cache.paymentTerms || [])
+        .map((t) => `<option value="${t.id}">${escHtml(t.code)} - ${escHtml(t.name)}</option>`)
+        .join("");
+      if (html) termSelect.insertAdjacentHTML("beforeend", html);
+    }
+  })();
 
   // Animate in
   requestAnimationFrame(() => overlay.classList.add("ncm-open"));
@@ -10170,18 +10422,6 @@ function openNewCustomerModal(termOptions) {
   // Start with one address and one contact by default
   addAddressBlock();
   addContactBlock();
-
-  // Auto-suggest next customer code (CUST-NNNNNN)
-  const codeInput = overlay.querySelector("#ncm-code");
-  if (codeInput) {
-    const codes = (state.cache.customers || []).map((c) => c.customerCode);
-    let maxNum = 0;
-    for (const code of codes) {
-      const m = code.match(/^CUST-(\d+)$/i);
-      if (m) maxNum = Math.max(maxNum, parseInt(m[1], 10));
-    }
-    codeInput.value = `CUST-${String(maxNum + 1).padStart(6, "0")}`;
-  }
 
   // ── DBD Lookup ──
   // Visible only to ADMIN users, and only when the backend has a DBD
@@ -10356,7 +10596,6 @@ function openNewCustomerModal(termOptions) {
     const customerGroupIdRaw = String(formData.get("customerGroupId") ?? "").trim();
     const parentCustomerIdRaw = String(formData.get("parentCustomerId") ?? "").trim();
     const payload = {
-      customerCode: String(formData.get("customerCode") ?? "").trim(),
       name:         String(formData.get("name") ?? "").trim(),
       customerType: String(formData.get("customerType") ?? "COMPANY"),
       taxId:        taxIdRaw || undefined,
@@ -10366,6 +10605,7 @@ function openNewCustomerModal(termOptions) {
       customerGroupId: customerGroupIdRaw || undefined,
       parentCustomerId: parentCustomerIdRaw || undefined,
     };
+
 
     if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "Creating…"; }
     try {
@@ -10390,7 +10630,7 @@ function openNewCustomerModal(termOptions) {
 
 // ── Edit Customer Modal ───────────────────────────────────────────────────────
 
-function openEditCustomerModal(cust, termOptions) {
+function openEditCustomerModal(cust, _termOptions) {
   qs("#edit-cust-modal")?.remove();
   const overlay = document.createElement("div");
   overlay.id = "edit-cust-modal";
@@ -10730,7 +10970,8 @@ async function loadMaster(page = state.masterPage || "customers", options = {}) 
 }
 
 async function loadDeals() {
-  const data = await api("/deals/kanban");
+  const scope = state.dealsScope || "team";
+  const data = await api(`/deals/kanban?scope=${encodeURIComponent(scope)}`);
   state.cache.kanban = data;
   state.cache.dealStages = Array.isArray(data?.stages) ? data.stages : [];
   if (state.deal360) {
@@ -10896,6 +11137,7 @@ async function loadSettings(page = state.settingsPage || "my-profile", options =
     !Array.isArray(state.cache.integrationCredentials)
   );
   const needsDelegationData = page === "roles" && isAdmin && (force || !state.cache.delegationsLoaded);
+  const needsPendingInvites = page === "roles" && isAdmin && (force || !Array.isArray(state.cache.pendingInvites));
   const needsSyncData = isAdmin && page === "data-sync" && (
     force ||
     !Array.isArray(state.cache.syncApiKeys) ||
@@ -10969,6 +11211,13 @@ async function loadSettings(page = state.settingsPage || "my-profile", options =
       api(`/tenants/${tenantId}/integrations/credentials`).then((integrationCredentials) => {
         state.cache.integrationCredentials = integrationCredentials;
       })
+    );
+  }
+  if (needsPendingInvites) {
+    requests.push(
+      api("/users/pending-invites").then((invites) => {
+        state.cache.pendingInvites = invites;
+      }).catch(() => { state.cache.pendingInvites = []; })
     );
   }
 
@@ -11494,7 +11743,19 @@ function initCustomerAutocomplete(inputEl, listEl, hiddenEl, onSelect) {
       return;
     }
     if (reqId !== activeRequest || inputEl.value.trim() !== q) return;
-    if (!matches.length) { closeList(); return; }
+    if (!matches.length) {
+      const modal = inputEl.closest("#visit-create-modal");
+      const isUnplanned = modal
+        ? modal.querySelector('input[name="visitType"]:checked')?.value === "UNPLANNED"
+        : false;
+      if (!isUnplanned) { closeList(); return; }
+      listEl.innerHTML = `<button type="button" class="ac-item ac-item--new-prospect" id="ac-new-prospect-btn">
+        <span class="ac-item-prospect-icon">+</span>
+        <span class="ac-item-name">Check in as new prospect &ldquo;<em>${escHtml(q)}</em>&rdquo;</span>
+      </button>`;
+      openList();
+      return;
+    }
     listEl.innerHTML = matches.map((c) =>
       `<button type="button" class="ac-item" data-id="${c.id}" data-name="${escHtml(c.name)}" data-status="${escHtml(c.status || "ACTIVE")}">
          <span class="ac-item-name">${escHtml(c.name)}</span>
@@ -11512,9 +11773,32 @@ function initCustomerAutocomplete(inputEl, listEl, hiddenEl, onSelect) {
   // Prevent input blur when clicking inside the list
   listEl.addEventListener("mousedown", (e) => { e.preventDefault(); });
 
-  listEl.addEventListener("click", (e) => {
+  listEl.addEventListener("click", async (e) => {
     const item = e.target.closest(".ac-item");
     if (!item) return;
+
+    if (item.id === "ac-new-prospect-btn") {
+      const name = inputEl.value.trim();
+      item.disabled = true;
+      item.querySelector(".ac-item-name").textContent = "Creating…";
+      try {
+        const draft = await api("/customers", {
+          method: "POST",
+          body: JSON.stringify({ status: "DRAFT", name })
+        });
+        inputEl.value = draft.name;
+        hiddenEl.value = draft.id;
+        closeList();
+        onSelect?.(draft.id, draft.name);
+      } catch (err) {
+        setStatus(err?.message || "Failed to create prospect", true);
+        item.disabled = false;
+        item.querySelector(".ac-item-name").innerHTML =
+          `Check in as new prospect &ldquo;<em>${escHtml(name)}</em>&rdquo;`;
+      }
+      return;
+    }
+
     inputEl.value = item.dataset.name;
     hiddenEl.value = item.dataset.id;
     closeList();
@@ -11777,6 +12061,7 @@ qs("#logout-btn").addEventListener("click", () => {
   state.cache.cronJobs = undefined;
   _notifPrefsCache = null;
   clearTokens();
+  clearQueue().catch(() => {});
   stopHeartbeat();
   showAuth();
   authMessage.textContent = "";
@@ -11854,13 +12139,13 @@ masterMenu?.querySelectorAll(".nav-dropdown-item").forEach((item) => {
     navigateToMasterPage(page);
     switchView("master");
     updateMasterDropdownActive();
+    showPageLoading("Loading…");
     try {
-      setStatus("Loading…");
       await loadMaster(page);
     } catch (error) {
       setStatus(error.message, true);
     } finally {
-      setStatus("");
+      hidePageLoading();
     }
   });
 });
@@ -11937,6 +12222,7 @@ document.querySelectorAll(".nav-btn").forEach((btn) => {
     }
     closeMasterDropdown();
     switchView(target);
+    showPageLoading("Loading…");
     try {
       if (target === "repHub") {
         await loadRepHubContext();
@@ -11956,6 +12242,8 @@ document.querySelectorAll(".nav-btn").forEach((btn) => {
       if (target === "settings") await loadSettings(state.settingsPage);
     } catch (error) {
       setStatus(error.message, true);
+    } finally {
+      hidePageLoading();
     }
   });
 });
@@ -12118,10 +12406,13 @@ settingsPanel?.addEventListener("click", async (ev) => {
     navigateToSettingsPage(settingsPage);
   }
   switchView(target);
+  showPageLoading("Loading…");
   try {
     if (target === "settings") await loadSettings(settingsPage || state.settingsPage);
   } catch (error) {
     setStatus(error.message, true);
+  } finally {
+    hidePageLoading();
   }
 });
 
@@ -12165,6 +12456,7 @@ window.addEventListener("popstate", async () => {
     state.c360 = null;
     state.deal360 = null;
     switchView(simpleView);
+    showPageLoading("Loading…");
     try {
       if (simpleView === "repHub") {
         await loadRepHubContext();
@@ -12181,6 +12473,7 @@ window.addEventListener("popstate", async () => {
       }
       if (simpleView === "integrations") await loadIntegrations();
     } catch (e) { setStatus(e.message, true); }
+    finally { hidePageLoading(); }
   }
 });
 
@@ -12241,10 +12534,88 @@ async function bootstrap() {
     hideAppLoading();
     scheduleAdminChromeRefresh();
     startIdleWatch();
+    initOfflineSupport().catch(() => {});
   } catch {
     clearTokens();
+    clearQueue().catch(() => {});
     hideAppLoading();
   }
+}
+
+// ── OFFLINE / ONLINE INFRASTRUCTURE ──────────────────────────────────────────
+
+async function updateSyncBadge() {
+  const count  = await getQueueCount();
+  const btn    = qs("#sync-status-btn");
+  const dot    = qs("#sync-count-dot");
+  const qBadge = qs("#sync-queue-badge");
+  if (btn)    { btn.hidden = count === 0; }
+  if (dot)    { dot.textContent = count > 0 ? String(count) : ""; }
+  if (qBadge) { qBadge.hidden = count === 0; qBadge.textContent = count > 0 ? `${count} pending` : ""; }
+}
+
+let _draining = false;
+async function drainOfflineQueue() {
+  if (_draining || !navigator.onLine) return;
+  _draining = true;
+  try {
+    const ops = await getPendingOps();
+    for (const op of ops) {
+      if (!navigator.onLine) break;
+      await markSyncing(op.id);
+      try {
+        await api(op.endpoint, { method: op.method, body: op.payload });
+        await markDone(op.id);
+        const label = op.type === "CHECKIN" ? "check-in" : "check-out";
+        setStatus(`Synced offline ${label}.`);
+      } catch (err) {
+        await markFailed(op.id, err?.message || "Sync failed");
+        setStatus(`Sync failed (${op.type === "CHECKIN" ? "check-in" : "check-out"}): ${err?.message || "Unknown error"}`, true);
+      }
+    }
+    if (ops.length > 0) loadMyTasks().catch(() => {});
+  } finally {
+    _draining = false;
+    await updateSyncBadge();
+  }
+}
+
+async function initOfflineSupport() {
+  const banner = qs("#offline-banner");
+  if (!navigator.onLine) {
+    if (banner) banner.hidden = false;
+  } else {
+    await drainOfflineQueue();
+  }
+  await updateSyncBadge();
+}
+
+window.addEventListener("online", async () => {
+  const banner = qs("#offline-banner");
+  if (banner) banner.hidden = true;
+  if (navigator.serviceWorker?.controller) {
+    navigator.serviceWorker.controller.postMessage({ type: "REGISTER_SYNC" });
+  }
+  await drainOfflineQueue();
+});
+
+window.addEventListener("offline", async () => {
+  const banner = qs("#offline-banner");
+  if (banner) {
+    banner.hidden = false;
+    const count = await getQueueCount();
+    const txt   = qs("#offline-banner-text");
+    if (txt) txt.textContent = count > 0
+      ? `Offline — ${count} operation${count === 1 ? "" : "s"} waiting to sync.`
+      : "You're offline — check-ins will sync when you reconnect.";
+  }
+  await updateSyncBadge();
+});
+
+if (navigator.serviceWorker) {
+  navigator.serviceWorker.addEventListener("message", async (event) => {
+    if (event.data?.type === "SW_DRAIN_QUEUE") await drainOfflineQueue();
+  });
 }
 
 // ── QUICK SEARCH ──────────────────────────────────────────────────────────────

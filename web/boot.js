@@ -45,4 +45,7 @@
   } catch (_) {
     // Bad/corrupt cache — ignore; the normal async branding fetch still runs.
   }
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(function () {});
+  }
 })();

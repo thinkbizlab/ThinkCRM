@@ -15,7 +15,7 @@ import { prisma } from "../../lib/prisma.js";
 import { encryptField } from "../../lib/secrets.js";
 import { connectorInputContractSchema, executeConnectorRun } from "./connector-framework.js";
 import { executeRestPull, testRestConnection } from "../sync/rest-pull.js";
-import { executeMysqlPull, testMysqlConnection } from "../sync/mysql-pull.js";
+import { enqueueMysqlPull, testMysqlConnection } from "../sync/mysql-pull.js";
 import { clearFederationCaches } from "../federation/customer-federation.js";
 import { evictPool } from "../federation/mysql-pool.js";
 
@@ -221,9 +221,20 @@ export const integrationRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.badRequest(`Manual pull is only supported for REST and MYSQL sources (got ${source.sourceType}).`);
     }
     try {
-      const result = source.sourceType === "MYSQL"
-        ? await executeMysqlPull(tenantId, id, `user:${userId}`)
-        : await executeRestPull(tenantId, id, `user:${userId}`);
+      if (source.sourceType === "MYSQL") {
+        // MySQL pulls can be hundreds of thousands of rows — far more than
+        // fits in a single Vercel function invocation. Enqueue a job and
+        // let the cron drain it in chunks; the client polls /jobs/:id.
+        const { jobId, reused } = await enqueueMysqlPull(tenantId, id, `user:${userId}`);
+        return reply.code(202).send({
+          jobId,
+          status: reused ? "already_running" : "queued",
+          message: reused
+            ? "A pull is already in progress for this source. Tracking the existing job."
+            : "Pull queued. The cron will drain it in chunks; poll the job for progress."
+        });
+      }
+      const result = await executeRestPull(tenantId, id, `user:${userId}`);
       return reply.code(200).send({
         jobId: result.jobId,
         ...result.summary,

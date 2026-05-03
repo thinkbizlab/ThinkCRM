@@ -1136,6 +1136,27 @@ body {
   transition: opacity .3s ease;
 }
 .app-loading[hidden] { display: none; }
+
+/* ── PAGE LOADING OVERLAY (blocks clicks during c360/d360 loads) ── */
+.page-loading {
+  position: fixed; inset: 0; z-index: 10000;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+.page-loading[hidden] { display: none; }
+.page-loading-inner {
+  display: flex; flex-direction: column; align-items: center; gap: var(--sp-3);
+  background: rgba(15, 23, 42, 0.85);
+  padding: var(--sp-5) var(--sp-6);
+  border-radius: var(--r-lg);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+}
+.page-loading-spinner { animation: app-spin 1s linear infinite; }
+.page-loading-text {
+  font-size: 0.88rem; color: #fff; font-weight: 500;
+}
 .app-loading-inner {
   display: flex; flex-direction: column; align-items: center; gap: var(--sp-4);
 }
@@ -1264,7 +1285,7 @@ body {
 
 button { font-family: 'Kanit', sans-serif; cursor: pointer; }
 
-button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-logout-btn):not(.topnav-user):not(.login-submit):not(.sp-close-btn):not(.sp-text-btn):not(.sp-view-all-btn):not(.spi):not(.master-page-btn):not(.user-dropdown-item):not(.cal-filter-apply):not(.cal-filter-reset):not(.cal-autocomplete-clear):not(.cal-autocomplete-item):not(.ms-dropdown-btn):not(.ms-select-all):not(.ms-clear):not(.vp-chip):not(.vn-lang-btn):not(.section-info-btn):not(.modal-close-btn):not(.deal-detail-btn):not(.deal-menu-btn):not(.lr-confirm-btn):not(.intg-info-btn):not(.oauth-btn):not(.profile-avatar-btn):not(.team-ch-toggle-btn):not(.cron-run-now-btn):not(.cron-save-btn):not(.cron-load-more-btn):not(.cron-history-toggle):not(.cron-help-btn):not(.notif-channel-help-btn):not(.teams-app-pkg-btn):not(.notif-teams-dm-test-btn):not(.teams-push-all-btn):not(.onboarding-wizard-dismiss):not(.ob-step-action):not(.ob-hero-close):not(.ob-later-btn):not(.demo-generate-btn):not(.demo-delete-btn):not(.btn-danger):not(.btn-danger-outline):not(.passkey-register-btn):not(.passkey-delete-btn):not(.passkey-admin-btn):not(.settings-nav-item):not(.settings-sidenav-collapser):not(.segmented-item):not(.sa-tab):not(.login-password-toggle):not(.prospects-tab):not(.prospect-badge-btn):not(.prospect-open-btn):not(.ac-item) {
+button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-logout-btn):not(.topnav-user):not(.login-submit):not(.sp-close-btn):not(.sp-text-btn):not(.sp-view-all-btn):not(.spi):not(.master-page-btn):not(.user-dropdown-item):not(.cal-filter-apply):not(.cal-filter-reset):not(.cal-autocomplete-clear):not(.cal-autocomplete-item):not(.ms-dropdown-btn):not(.ms-select-all):not(.ms-clear):not(.vp-chip):not(.vn-lang-btn):not(.section-info-btn):not(.modal-close-btn):not(.deal-detail-btn):not(.deal-menu-btn):not(.lr-confirm-btn):not(.intg-info-btn):not(.oauth-btn):not(.profile-avatar-btn):not(.team-ch-toggle-btn):not(.cron-run-now-btn):not(.cron-save-btn):not(.cron-load-more-btn):not(.cron-history-toggle):not(.cron-help-btn):not(.notif-channel-help-btn):not(.teams-app-pkg-btn):not(.notif-teams-dm-test-btn):not(.teams-push-all-btn):not(.onboarding-wizard-dismiss):not(.ob-step-action):not(.ob-hero-close):not(.ob-later-btn):not(.demo-generate-btn):not(.demo-delete-btn):not(.btn-danger):not(.btn-danger-outline):not(.passkey-register-btn):not(.passkey-delete-btn):not(.passkey-admin-btn):not(.settings-nav-item):not(.settings-sidenav-collapser):not(.segmented-item):not(.sa-tab):not(.login-password-toggle):not(.prospects-tab):not(.prospect-badge-btn):not(.prospect-open-btn):not(.ac-item):not(.btn-pick-map):not(.btn-icon-xs) {
   background: var(--accent);
   color: var(--accent-text);
   border: none;
@@ -1278,12 +1299,12 @@ button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-l
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
 }
 
-button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-logout-btn):not(.topnav-user):not(.login-submit):not(.sp-close-btn):not(.sp-text-btn):not(.sp-view-all-btn):not(.spi):not(.master-page-btn):not(.user-dropdown-item):not(.cal-filter-apply):not(.cal-filter-reset):not(.cal-autocomplete-clear):not(.cal-autocomplete-item):not(.ms-dropdown-btn):not(.ms-select-all):not(.ms-clear):not(.vp-chip):not(.vn-lang-btn):not(.section-info-btn):not(.modal-close-btn):not(.deal-detail-btn):not(.deal-menu-btn):not(.cron-run-now-btn):not(.cron-save-btn):not(.cron-load-more-btn):not(.cron-history-toggle):not(.cron-help-btn):not(.notif-channel-help-btn):not(.teams-app-pkg-btn):not(.notif-teams-dm-test-btn):not(.teams-push-all-btn):not(.onboarding-wizard-dismiss):not(.demo-generate-btn):not(.demo-delete-btn):not(.btn-danger):not(.btn-danger-outline):not(.passkey-register-btn):not(.passkey-delete-btn):not(.passkey-admin-btn):not(.settings-nav-item):not(.settings-sidenav-collapser):not(.segmented-item):not(.sa-tab):not(.login-password-toggle):not(.prospects-tab):not(.prospect-badge-btn):not(.prospect-open-btn):not(.ac-item):hover {
+button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-logout-btn):not(.topnav-user):not(.login-submit):not(.sp-close-btn):not(.sp-text-btn):not(.sp-view-all-btn):not(.spi):not(.master-page-btn):not(.user-dropdown-item):not(.cal-filter-apply):not(.cal-filter-reset):not(.cal-autocomplete-clear):not(.cal-autocomplete-item):not(.ms-dropdown-btn):not(.ms-select-all):not(.ms-clear):not(.vp-chip):not(.vn-lang-btn):not(.section-info-btn):not(.modal-close-btn):not(.deal-detail-btn):not(.deal-menu-btn):not(.cron-run-now-btn):not(.cron-save-btn):not(.cron-load-more-btn):not(.cron-history-toggle):not(.cron-help-btn):not(.notif-channel-help-btn):not(.teams-app-pkg-btn):not(.notif-teams-dm-test-btn):not(.teams-push-all-btn):not(.onboarding-wizard-dismiss):not(.demo-generate-btn):not(.demo-delete-btn):not(.btn-danger):not(.btn-danger-outline):not(.passkey-register-btn):not(.passkey-delete-btn):not(.passkey-admin-btn):not(.settings-nav-item):not(.settings-sidenav-collapser):not(.segmented-item):not(.sa-tab):not(.login-password-toggle):not(.prospects-tab):not(.prospect-badge-btn):not(.prospect-open-btn):not(.ac-item):not(.btn-pick-map):not(.btn-icon-xs):hover {
   background: var(--accent-bright);
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
 }
 
-button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-logout-btn):not(.topnav-user):not(.login-submit):not(.sp-close-btn):not(.sp-text-btn):not(.sp-view-all-btn):not(.spi):not(.master-page-btn):not(.user-dropdown-item):not(.cal-filter-apply):not(.cal-filter-reset):not(.cal-autocomplete-clear):not(.cal-autocomplete-item):not(.ms-dropdown-btn):not(.ms-select-all):not(.ms-clear):not(.vp-chip):not(.vn-lang-btn):not(.section-info-btn):not(.modal-close-btn):not(.notif-channel-help-btn):not(.teams-app-pkg-btn):not(.notif-teams-dm-test-btn):not(.teams-push-all-btn):not(.onboarding-wizard-dismiss):not(.demo-generate-btn):not(.demo-delete-btn):not(.btn-danger):not(.btn-danger-outline):not(.passkey-register-btn):not(.passkey-delete-btn):not(.passkey-admin-btn):not(.settings-nav-item):not(.settings-sidenav-collapser):not(.segmented-item):not(.sa-tab):not(.login-password-toggle):not(.prospects-tab):not(.prospect-badge-btn):not(.prospect-open-btn):not(.ac-item):disabled {
+button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-logout-btn):not(.topnav-user):not(.login-submit):not(.sp-close-btn):not(.sp-text-btn):not(.sp-view-all-btn):not(.spi):not(.master-page-btn):not(.user-dropdown-item):not(.cal-filter-apply):not(.cal-filter-reset):not(.cal-autocomplete-clear):not(.cal-autocomplete-item):not(.ms-dropdown-btn):not(.ms-select-all):not(.ms-clear):not(.vp-chip):not(.vn-lang-btn):not(.section-info-btn):not(.modal-close-btn):not(.notif-channel-help-btn):not(.teams-app-pkg-btn):not(.notif-teams-dm-test-btn):not(.teams-push-all-btn):not(.onboarding-wizard-dismiss):not(.demo-generate-btn):not(.demo-delete-btn):not(.btn-danger):not(.btn-danger-outline):not(.passkey-register-btn):not(.passkey-delete-btn):not(.passkey-admin-btn):not(.settings-nav-item):not(.settings-sidenav-collapser):not(.segmented-item):not(.sa-tab):not(.login-password-toggle):not(.prospects-tab):not(.prospect-badge-btn):not(.prospect-open-btn):not(.ac-item):not(.btn-pick-map):not(.btn-icon-xs):disabled {
   opacity: 0.5;
   cursor: default;
 }
@@ -1677,6 +1698,10 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 .ac-item:hover { background: var(--surface-soft) !important; color: var(--text) !important; opacity: 1 !important; }
 .ac-item-name { font-weight: 500; color: var(--text); }
 .ac-item-code { font-size: 0.75rem; color: var(--muted-color); font-weight: 500; flex-shrink: 0; }
+.ac-item--new-prospect { color: var(--accent); border-top: 1px solid var(--border); }
+.ac-item--new-prospect:hover { background: color-mix(in srgb, var(--accent) 10%, transparent) !important; color: var(--accent) !important; }
+.ac-item--new-prospect:disabled { opacity: 0.55; cursor: wait; pointer-events: none; }
+.ac-item-prospect-icon { font-style: normal; font-weight: 700; flex-shrink: 0; }
 
 .mini-form {
   display: flex;
@@ -4710,6 +4735,24 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 .c360-visit-row:hover { background: var(--surface-soft); }
 .c360-visit-row--clickable { cursor: pointer; }
 .c360-visit-row--clickable:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+
+.c360-visit-actions {
+  margin-left: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--sp-1);
+}
+.c360-visit-actions .small {
+  white-space: nowrap;
+}
+.c360-visit-checkin-btn,
+.c360-visit-checkout-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.78rem;
+}
 
 .c360-visit-date {
   font-size: 0.8rem;
@@ -8534,12 +8577,23 @@ button.cust-badge-contact:hover { opacity: 0.7; }
   gap: var(--sp-2);
 }
 
-.vd-edit-btn {
+.vd-edit-btn,
+.vd-checkin-btn,
+.vd-checkout-btn {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   gap: 4px;
   font-size: 0.78rem;
+}
+
+.vd-hero-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .vd-hero-customer {
@@ -11140,3 +11194,48 @@ button.cust-badge-contact:hover { opacity: 0.7; }
 
 :root[data-theme="dark"] .sa-metric-bar { background: oklch(25% 0.01 260); }
 :root[data-theme="dark"] .sa-online-dot { background: #4ade80; }
+
+/* ── Offline Banner ──────────────────────────────────────────────────────── */
+.offline-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 6px var(--sp-4);
+  background: oklch(92% 0.07 50);
+  color: oklch(38% 0.14 50);
+  font-size: 0.8rem;
+  font-weight: 500;
+  border-bottom: 1px solid oklch(84% 0.1 50);
+}
+.offline-banner[hidden] { display: none; }
+.sync-queue-badge {
+  margin-left: auto;
+  background: oklch(55% 0.18 50);
+  color: #fff;
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+.sync-queue-badge[hidden] { display: none; }
+
+/* ── Topnav sync button ──────────────────────────────────────────────────── */
+.sync-status-btn { position: relative; }
+.sync-count-dot {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 14px;
+  height: 14px;
+  background: oklch(55% 0.22 25);
+  color: #fff;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 3px;
+  pointer-events: none;
+  line-height: 1;
+}

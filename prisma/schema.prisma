@@ -418,6 +418,8 @@ model Customer {
 
   @@unique([tenantId, taxId, branchCode])
   @@unique([tenantId, externalRef])
+  @@index([tenantId, ownerId])
+  @@index([tenantId, customerCode])
   @@index([tenantId, customerGroupId])
   @@index([tenantId, name])
   @@index([tenantId, status])
@@ -847,6 +849,9 @@ model IntegrationSyncJob {
   tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   source        IntegrationSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
   errors        IntegrationSyncError[]
+
+  @@index([tenantId, status])
+  @@index([sourceId, status])
 }
 
 model IntegrationSyncError {
@@ -858,6 +863,8 @@ model IntegrationSyncError {
   errorMessage String
   createdAt    DateTime @default(now())
   job          IntegrationSyncJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
 }
 
 model IntegrationExecutionLog {

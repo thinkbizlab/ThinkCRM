@@ -23,10 +23,14 @@
  *      table name + optional WHERE / ORDER BY.
  */
 
-import { EntityType, RunType, SourceType } from "@prisma/client";
+import { EntityType, JobStatus, RunType, SourceType } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
 import { decryptField } from "../../lib/secrets.js";
-import { executeConnectorRun, type ConnectorRunResult } from "../integrations/connector-framework.js";
+import {
+  executeConnectorRun,
+  processConnectorChunk,
+  type ConnectorRunResult
+} from "../integrations/connector-framework.js";
 import { expandTemplate, parseSchedule, type SyncSchedule } from "./rest-pull.js";
 
 type SslMode = "DISABLED" | "REQUIRED" | "VERIFY_CA";
@@ -46,12 +50,17 @@ export type MysqlSourceConfig = {
   connectTimeoutMs: number;
   queryTimeoutMs: number;
   rowLimit: number;
+  /** Per-chunk LIMIT used by the resumable drain. Defaults to 1000. */
+  chunkSize: number;
   schedule: SyncSchedule;
   query: MysqlQueryConfig;
 };
 
 const ROW_LIMIT_DEFAULT = 50_000;
 const ROW_LIMIT_MAX = 500_000;
+const CHUNK_SIZE_DEFAULT = 1000;
+const CHUNK_SIZE_MIN = 100;
+const CHUNK_SIZE_MAX = 10_000;
 const CONNECT_TIMEOUT_DEFAULT = 10_000;
 const QUERY_TIMEOUT_DEFAULT = 60_000;
 const QUERY_TIMEOUT_MAX = 5 * 60_000;
@@ -182,6 +191,7 @@ export function parseMysqlConfig(raw: unknown): MysqlSourceConfig {
   const connectTimeoutMs = clampInt(o.connectTimeoutMs, CONNECT_TIMEOUT_DEFAULT, 1000, 60_000);
   const queryTimeoutMs   = clampInt(o.queryTimeoutMs,   QUERY_TIMEOUT_DEFAULT,   1000, QUERY_TIMEOUT_MAX);
   const rowLimit         = clampInt(o.rowLimit,         ROW_LIMIT_DEFAULT,       1,    ROW_LIMIT_MAX);
+  const chunkSize        = clampInt(o.chunkSize,        CHUNK_SIZE_DEFAULT,      CHUNK_SIZE_MIN, CHUNK_SIZE_MAX);
 
   const schedule = parseSchedule(o.schedule);
   const query = parseQueryConfig(o.query);
@@ -197,6 +207,7 @@ export function parseMysqlConfig(raw: unknown): MysqlSourceConfig {
     connectTimeoutMs,
     queryTimeoutMs,
     rowLimit,
+    chunkSize,
     schedule,
     query
   };
@@ -433,35 +444,356 @@ export async function executeMysqlPull(
 /**
  * Pull every ENABLED MySQL source for the tenant whose `intervalMinutes`
  * has elapsed since `lastSyncAt`. Called once per minute by the scheduler.
+ *
+ * Backwards-compat wrapper around the new chunked drain. Kept as the
+ * scheduler entry point so vercel.json + node-cron registration don't
+ * have to change.
  */
 export async function pullAllMysqlSourcesForTenant(tenantId: string): Promise<string> {
+  return drainMysqlPullJobsForTenant(tenantId);
+}
+
+// ── Resumable drain ─────────────────────────────────────────────────────────
+//
+// The cron tick budget on Vercel is ~5 min, but a real ERP pull can be
+// 50k–500k rows — far more than fits in one invocation. So we do the work
+// in two phases:
+//
+//   1. enqueueMysqlPull(tenantId, sourceId, …)
+//      Creates an IntegrationSyncJob with status=PENDING and a snapshot of
+//      the chunked-pull state in summaryJson (cursor, success/failure
+//      counters, the SQL we'll run, etc.). Returns immediately.
+//
+//   2. drainMysqlPullJobsForTenant(tenantId)
+//      Each cron tick: for every PENDING/RUNNING job belonging to this
+//      tenant's MYSQL sources, open a connection, fetch one chunk
+//      (LIMIT chunkSize OFFSET cursor), upsert into Postgres, advance
+//      cursor, persist progress. Stop when the per-tick deadline expires;
+//      the next minute's tick picks up where we left off.
+//
+// For a fresh schedule due-time we enqueue first, then drain in the same
+// tick — small sources finish in one minute; huge ones bleed across
+// several. The frontend polls /jobs/:id to show progress.
+
+const DRAIN_BUDGET_MS = 240_000; // leave ~60s headroom under Vercel's 300s
+const PER_JOB_BUDGET_MS = 200_000;
+
+type DrainState = {
+  /** Snapshot of the parsed source config when the job was enqueued. */
+  config_snapshot: MysqlSourceConfig;
+  /** OFFSET into the source result set for the next chunk. */
+  cursor: number;
+  /** Total successfully upserted across all chunks so far. */
+  success_count: number;
+  /** Total mapped+upsert failures so far (errors are persisted to IntegrationSyncError). */
+  failure_count: number;
+  /** Records skipped as in-chunk dupes. */
+  duplicate_count: number;
+  /** Total rows read off MySQL so far. */
+  processed_count: number;
+  /** Set once the connector returns fewer rows than chunkSize. */
+  finished: boolean;
+  payload_ref: string;
+  mapping_version: string;
+  idempotency_key: string;
+  requested_by: string;
+  entity_type: EntityType;
+};
+
+function makeDrainState(cfg: MysqlSourceConfig, requestedBy: string): DrainState {
+  return {
+    config_snapshot: cfg,
+    cursor: 0,
+    success_count: 0,
+    failure_count: 0,
+    duplicate_count: 0,
+    processed_count: 0,
+    finished: false,
+    payload_ref: `mysql-pull:${cfg.host}:${cfg.port}/${cfg.database}`,
+    mapping_version: "v1",
+    idempotency_key: crypto.randomUUID(),
+    requested_by: requestedBy,
+    entity_type: cfg.entityType
+  };
+}
+
+/**
+ * If a TABLE-mode source has no explicit ORDER BY, default to ORDER BY 1
+ * so that LIMIT/OFFSET resumption is at least column-stable. For SQL mode
+ * we trust the admin's ORDER BY (or lack thereof — they own that risk).
+ */
+function buildChunkSql(cfg: MysqlSourceConfig, offset: number, now: Date = new Date()): string {
+  const limit = cfg.chunkSize;
+  if (cfg.query.mode === "TABLE") {
+    const q = cfg.query;
+    const parts: string[] = [`SELECT * FROM ${quoteTableName(q.table)}`];
+    if (q.where) parts.push(`WHERE ${expandTemplate(q.where, now)}`);
+    parts.push(`ORDER BY ${q.orderBy ? expandTemplate(q.orderBy, now) : "1"}`);
+    parts.push(`LIMIT ${limit} OFFSET ${offset}`);
+    return parts.join(" ");
+  }
+  // SQL mode: wrap the user's statement so we don't have to parse-and-rewrite
+  // their ORDER BY / LIMIT. mysql2 doesn't run multi-statements, but a
+  // subquery is one statement. Re-validate post-expansion.
+  const expanded = expandTemplate(cfg.query.sql, now);
+  validateSelectStatement(expanded);
+  const cleaned = expanded.replace(/;+\s*$/, "").trim();
+  return `SELECT * FROM (${cleaned}) AS __mp_inner LIMIT ${limit} OFFSET ${offset}`;
+}
+
+/**
+ * Enqueue a new chunked MySQL pull job. Returns the job id immediately;
+ * actual upstream fetching happens on the next cron tick. If a PENDING or
+ * RUNNING job already exists for this source, return its id instead of
+ * stacking duplicates.
+ */
+export async function enqueueMysqlPull(
+  tenantId: string,
+  sourceId: string,
+  triggeredBy: string,
+  runType: RunType = RunType.MANUAL
+): Promise<{ jobId: string; reused: boolean }> {
+  const source = await prisma.integrationSource.findFirst({
+    where: { id: sourceId, tenantId, sourceType: SourceType.MYSQL },
+    select: { id: true, configJson: true, status: true }
+  });
+  if (!source) throw new Error("MySQL source not found.");
+  if (source.status !== "ENABLED") throw new Error("MySQL source is disabled.");
+
+  const cfg = parseMysqlConfig(source.configJson);
+
+  const existing = await prisma.integrationSyncJob.findFirst({
+    where: {
+      tenantId,
+      sourceId,
+      status: { in: [JobStatus.PENDING, JobStatus.RUNNING] }
+    },
+    orderBy: { startedAt: "desc" },
+    select: { id: true }
+  });
+  if (existing) return { jobId: existing.id, reused: true };
+
+  const drain = makeDrainState(cfg, triggeredBy);
+  const job = await prisma.integrationSyncJob.create({
+    data: {
+      tenantId,
+      sourceId,
+      runType,
+      status: JobStatus.PENDING,
+      startedAt: new Date(),
+      summaryJson: drain as unknown as object
+    }
+  });
+  return { jobId: job.id, reused: false };
+}
+
+/** Read the drain-state slice out of a job's summaryJson. */
+function readDrainState(summaryJson: unknown): DrainState | null {
+  if (!summaryJson || typeof summaryJson !== "object") return null;
+  const o = summaryJson as Record<string, unknown>;
+  if (!o.config_snapshot || typeof o.cursor !== "number") return null;
+  return o as unknown as DrainState;
+}
+
+async function persistDrainState(jobId: string, drain: DrainState, status: JobStatus): Promise<void> {
+  await prisma.integrationSyncJob.update({
+    where: { id: jobId },
+    data: {
+      status,
+      summaryJson: drain as unknown as object,
+      ...(status === JobStatus.SUCCESS || status === JobStatus.FAILED
+        ? { finishedAt: new Date() }
+        : {})
+    }
+  });
+}
+
+/**
+ * Drain one job's remaining chunks, up to `deadlineAt`. Opens a single
+ * MySQL connection and reuses it across chunks. On deadline, leaves the
+ * job in RUNNING state so the next cron tick resumes from `cursor`.
+ *
+ * Errors during a chunk fetch fail the job (no retry) — the source config
+ * is wrong (bad SQL, dropped table, auth) and we'd rather surface that
+ * than hammer it every minute.
+ */
+async function drainOneJob(jobId: string, deadlineAt: number): Promise<string> {
+  const job = await prisma.integrationSyncJob.findUnique({
+    where: { id: jobId },
+    include: { source: { include: { mappings: true } } }
+  });
+  if (!job) return `${jobId}: not found`;
+  if (job.status !== JobStatus.PENDING && job.status !== JobStatus.RUNNING) {
+    return `${jobId}: skipped (status=${job.status})`;
+  }
+  const drain = readDrainState(job.summaryJson);
+  if (!drain) {
+    await persistDrainState(jobId, makeFailedDrainShim(job.summaryJson, "Drain state missing from summaryJson."), JobStatus.FAILED);
+    return `${jobId}: failed (no drain state)`;
+  }
+
+  const mappings = job.source.mappings.filter(m => m.entityType === drain.entity_type);
+  if (mappings.length === 0) {
+    await persistDrainState(jobId, drain, JobStatus.FAILED);
+    return `${jobId}: failed (no mappings for ${drain.entity_type})`;
+  }
+
+  // Mark RUNNING on first drain pass so the UI can distinguish waiting from active.
+  if (job.status === JobStatus.PENDING) {
+    await persistDrainState(jobId, drain, JobStatus.RUNNING);
+  }
+
+  const cfg = drain.config_snapshot;
+  const seenKeys = new Set<string>(); // chunk-local dedupe; DB unique catches the rest
+  let conn: Mysql2Connection | null = null;
+  try {
+    conn = await connect(cfg);
+    const jobBudgetUntil = Math.min(deadlineAt, Date.now() + PER_JOB_BUDGET_MS);
+    while (Date.now() < jobBudgetUntil && !drain.finished) {
+      const sql = buildChunkSql(cfg, drain.cursor);
+      const rows = await runReadOnlyQuery(conn, sql, cfg.queryTimeoutMs);
+      if (rows.length === 0) {
+        drain.finished = true;
+        break;
+      }
+
+      const result = await processConnectorChunk({
+        tenantId: job.tenantId,
+        jobId: job.id,
+        entityType: drain.entity_type,
+        mappings,
+        records: rows,
+        rowOffset: drain.cursor,
+        seenKeys
+      });
+      drain.success_count += result.successCount;
+      drain.duplicate_count += result.duplicateCount;
+      drain.failure_count += result.errors.length;
+      drain.processed_count += rows.length;
+      drain.cursor += rows.length;
+
+      // Persist progress after each chunk so the UI sees movement and a
+      // mid-tick crash doesn't lose the cursor.
+      await persistDrainState(jobId, drain, JobStatus.RUNNING);
+
+      // Short-circuit if the source returned a partial chunk (we've reached the end).
+      if (rows.length < cfg.chunkSize) {
+        drain.finished = true;
+      }
+
+      // Also stop if the source's hard rowLimit cap is reached.
+      if (drain.cursor >= cfg.rowLimit) {
+        drain.finished = true;
+      }
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await prisma.integrationSyncError.create({
+      data: {
+        jobId: job.id,
+        entityType: drain.entity_type,
+        rowRef: `chunk@${drain.cursor}`,
+        errorCode: "CHUNK_FETCH_FAILED",
+        errorMessage: msg.slice(0, 500)
+      }
+    });
+    drain.failure_count += 1;
+    await persistDrainState(jobId, drain, JobStatus.FAILED);
+    await prisma.integrationSource.update({
+      where: { id: job.sourceId },
+      data: { lastSyncAt: new Date() }
+    });
+    return `${jobId}: chunk error — ${msg}`;
+  } finally {
+    if (conn) await conn.end().catch(() => {});
+  }
+
+  if (drain.finished) {
+    const finalStatus = drain.failure_count > 0 && drain.success_count === 0
+      ? JobStatus.FAILED
+      : JobStatus.SUCCESS;
+    await persistDrainState(jobId, drain, finalStatus);
+    await prisma.integrationSource.update({
+      where: { id: job.sourceId },
+      data: { lastSyncAt: new Date() }
+    });
+    return `${jobId}: done (${drain.success_count}/${drain.processed_count} ok, ${drain.failure_count} failed)`;
+  }
+  return `${jobId}: paused at cursor=${drain.cursor} (${drain.success_count}/${drain.processed_count} so far)`;
+}
+
+function makeFailedDrainShim(summaryJson: unknown, _reason: string): DrainState {
+  // Best-effort: keep whatever metadata we have so the UI shows something.
+  // Used only when a job's summaryJson is missing the drain-state fields.
+  const base = (summaryJson && typeof summaryJson === "object" ? summaryJson : {}) as Record<string, unknown>;
+  return {
+    config_snapshot: (base.config_snapshot as MysqlSourceConfig) ?? ({} as MysqlSourceConfig),
+    cursor: typeof base.cursor === "number" ? base.cursor : 0,
+    success_count: typeof base.success_count === "number" ? base.success_count : 0,
+    failure_count: (typeof base.failure_count === "number" ? base.failure_count : 0) + 1,
+    duplicate_count: typeof base.duplicate_count === "number" ? base.duplicate_count : 0,
+    processed_count: typeof base.processed_count === "number" ? base.processed_count : 0,
+    finished: true,
+    payload_ref: typeof base.payload_ref === "string" ? base.payload_ref : "mysql-pull:unknown",
+    mapping_version: typeof base.mapping_version === "string" ? base.mapping_version : "v1",
+    idempotency_key: typeof base.idempotency_key === "string" ? base.idempotency_key : crypto.randomUUID(),
+    requested_by: typeof base.requested_by === "string" ? base.requested_by : "system",
+    entity_type: (typeof base.entity_type === "string" ? base.entity_type : EntityType.CUSTOMER) as EntityType
+  };
+}
+
+/**
+ * Per-tenant drain entry point. Steps:
+ *   1. Auto-enqueue jobs for any ENABLED source whose schedule is due
+ *      (and that doesn't already have a PENDING/RUNNING job).
+ *   2. Drain PENDING/RUNNING jobs (oldest first) until the per-tick budget
+ *      is exhausted.
+ */
+export async function drainMysqlPullJobsForTenant(tenantId: string): Promise<string> {
+  const deadlineAt = Date.now() + DRAIN_BUDGET_MS;
+
   const sources = await prisma.integrationSource.findMany({
     where: { tenantId, sourceType: SourceType.MYSQL, status: "ENABLED" },
     select: { id: true, sourceName: true, configJson: true, lastSyncAt: true }
   });
-  if (sources.length === 0) return "No enabled MySQL sources.";
 
+  // Auto-enqueue scheduled sources that are due.
   const now = new Date();
-  const due = sources.filter(src => {
+  for (const src of sources) {
     let cfg: MysqlSourceConfig;
-    try { cfg = parseMysqlConfig(src.configJson); } catch { return false; }
-    if (cfg.schedule.kind !== "MINUTES") return false;
+    try { cfg = parseMysqlConfig(src.configJson); } catch { continue; }
+    if (cfg.schedule.kind !== "MINUTES") continue;
     const intervalMs = cfg.schedule.intervalMinutes * 60_000;
-    if (src.lastSyncAt && now.getTime() - src.lastSyncAt.getTime() < intervalMs - 5_000) return false;
-    return true;
-  });
+    if (src.lastSyncAt && now.getTime() - src.lastSyncAt.getTime() < intervalMs - 5_000) continue;
+    try {
+      await enqueueMysqlPull(tenantId, src.id, "cron:syncMysqlPull", RunType.SCHEDULED);
+    } catch {
+      // ignore — disabled-after-load, etc.
+    }
+  }
 
-  if (due.length === 0) return `No sources due (${sources.length} enabled).`;
+  const queued = await prisma.integrationSyncJob.findMany({
+    where: {
+      tenantId,
+      source: { sourceType: SourceType.MYSQL },
+      status: { in: [JobStatus.PENDING, JobStatus.RUNNING] }
+    },
+    orderBy: { startedAt: "asc" },
+    select: { id: true }
+  });
+  if (queued.length === 0) return `No MySQL jobs queued (${sources.length} enabled).`;
 
   const lines: string[] = [];
-  for (const src of due) {
+  for (const { id } of queued) {
+    if (Date.now() >= deadlineAt) {
+      lines.push(`${id}: deferred (deadline reached)`);
+      continue;
+    }
     try {
-      const result = await executeMysqlPull(tenantId, src.id, "cron:syncMysqlPull");
-      const s = result.summary;
-      lines.push(`${src.sourceName}: ${s.status} (${s.success_count}/${s.processed_count} ok, ${s.failure_count} failed)`);
+      lines.push(await drainOneJob(id, deadlineAt));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      lines.push(`${src.sourceName}: error — ${msg}`);
+      lines.push(`${id}: drain error — ${msg}`);
     }
   }
   return lines.join("; ");
