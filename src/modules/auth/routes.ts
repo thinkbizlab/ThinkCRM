@@ -983,11 +983,23 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
   // Returns which OAuth providers are configured for this tenant. Each tenant
   // must bring their own OAuth app (so redirect URIs line up with their custom
-  // domain) — there is no platform-wide env fallback. Without a slug we can't
-  // resolve credentials, so both return false. Used by the login page.
+  // domain) — there is no platform-wide env fallback. Used by the login page.
+  // Tenant resolution: explicit ?tenantSlug= wins, else fall back to the
+  // request hostname (so tenants on a verified custom domain or claimed
+  // subdomain see their OAuth buttons before typing anything).
   app.get("/auth/oauth/providers", async (request) => {
     const { tenantSlug } = request.query as { tenantSlug?: string };
-    const slug = tenantSlug?.trim();
+    let slug = tenantSlug?.trim();
+    if (!slug) {
+      const hostHeader = (request.headers["x-forwarded-host"] as string)
+        ?? (request.headers.host as string)
+        ?? "";
+      const host = hostHeader.split(",")[0]?.trim();
+      if (host) {
+        const resolved = await resolveHostTenantSlug(host);
+        if (resolved) slug = resolved.tenantSlug;
+      }
+    }
     if (!slug) return { ms365: false, google: false };
     const [ms365, google] = await Promise.all([
       resolveMs365OAuthCreds(slug),
