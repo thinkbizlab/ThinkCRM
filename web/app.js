@@ -5808,6 +5808,8 @@ function renderSettings() {
                   const curInterval = sched.kind === "MINUTES" ? sched.intervalMinutes : 0;
                   const intervals = [0, 1, 2, 5, 10, 15, 30];
                   const intervalLabel = (n) => n === 0 ? "Manual only" : `${n} minute${n === 1 ? "" : "s"}`;
+                  const fedSourceId = (state.cache.customerFederation || {}).customerFederationSourceId || "";
+                  const fedActive = fedSourceId === src.id;
                   return `
                     <div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:var(--radius);padding:var(--sp-2) var(--sp-3);margin-bottom:var(--sp-3);font-size:0.82rem;color:#78350f">
                       <strong>Read-only:</strong> Use a DB user with <code>SELECT</code>-only privilege. ThinkCRM also wraps every query in a <code>READ ONLY</code> transaction.
@@ -5878,6 +5880,24 @@ function renderSettings() {
                         <input type="number" name="mysqlQueryTimeoutSec" value="${cfg.queryTimeoutMs ? Math.round(cfg.queryTimeoutMs / 1000) : 60}" min="1" max="300" class="form-control">
                       </label>
                     </div>
+                    <fieldset style="border:1px solid var(--clr-border);border-radius:var(--radius);padding:var(--sp-2) var(--sp-3);margin-top:var(--sp-3)">
+                      <legend style="padding:0 var(--sp-1);font-size:0.85rem;font-weight:600">Customer federation</legend>
+                      <p class="muted" style="font-size:0.78rem;margin:0 0 var(--sp-2)">When this source backs Federated Customer Master, hydration reads from this table and matches our <code>Customer.externalRef</code> against the column below.</p>
+                      <div class="form-row" style="display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-2)">
+                        <label class="form-label">Source table name
+                          <input type="text" name="mysqlCustomerTable" value="${escHtml(cfg.customerTable || "")}" placeholder="customer" class="form-control">
+                        </label>
+                        <label class="form-label">Key column name
+                          <input type="text" name="mysqlKeyColumn" value="${escHtml(cfg.keyColumn || "")}" placeholder="external_ref" class="form-control">
+                        </label>
+                      </div>
+                      <label class="checkbox-inline" style="display:flex;align-items:center;gap:var(--sp-2);font-size:0.85rem;margin-top:var(--sp-2)">
+                        <input type="checkbox" name="mysqlUseAsFederationSource" data-was-checked="${fedActive ? "1" : "0"}" ${fedActive ? "checked" : ""}>
+                        Use as customer federation source
+                        ${fedActive ? `<span class="badge badge--ok" style="margin-left:var(--sp-1)">Active</span>` : ""}
+                      </label>
+                      <p class="muted" style="font-size:0.74rem;margin:var(--sp-1) 0 0">Mirrors the toggle on Settings → Data Sync. Only one MySQL source can back federation at a time.</p>
+                    </fieldset>
                   `;
                 })() : ""}
                 <div class="form-actions">
@@ -6040,6 +6060,23 @@ function renderSettings() {
                   <input type="number" name="mysqlQueryTimeoutSec" value="60" min="1" max="300" class="form-control">
                 </label>
               </div>
+              <fieldset style="border:1px solid var(--clr-border);border-radius:var(--radius);padding:var(--sp-2) var(--sp-3);margin-top:var(--sp-3)">
+                <legend style="padding:0 var(--sp-1);font-size:0.85rem;font-weight:600">Customer federation</legend>
+                <p class="muted" style="font-size:0.78rem;margin:0 0 var(--sp-2)">When this source backs Federated Customer Master, hydration reads from this table and matches our <code>Customer.externalRef</code> against the column below.</p>
+                <div class="form-row" style="display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-2)">
+                  <label class="form-label">Source table name
+                    <input type="text" name="mysqlCustomerTable" placeholder="customer" class="form-control">
+                  </label>
+                  <label class="form-label">Key column name
+                    <input type="text" name="mysqlKeyColumn" placeholder="external_ref" class="form-control">
+                  </label>
+                </div>
+                <label class="checkbox-inline" style="display:flex;align-items:center;gap:var(--sp-2);font-size:0.85rem;margin-top:var(--sp-2)">
+                  <input type="checkbox" name="mysqlUseAsFederationSource">
+                  Use as customer federation source
+                </label>
+                <p class="muted" style="font-size:0.74rem;margin:var(--sp-1) 0 0">Mirrors the toggle on Settings → Data Sync. Only one MySQL source can back federation at a time.</p>
+              </fieldset>
             </div>
             <div class="form-actions">
               <button type="submit" class="btn-primary small">Create Source</button>
@@ -7211,7 +7248,25 @@ function renderSettings() {
     };
     if (password) config.password = password; // backend encrypts → passwordEnc
     if (sslMode === "VERIFY_CA" && caPem) config.ssl.caPem = caPem; // backend encrypts → caPemEnc
+    const customerTable = String(fd.get("mysqlCustomerTable") || "").trim();
+    const keyColumn = String(fd.get("mysqlKeyColumn") || "").trim();
+    if (customerTable) config.customerTable = customerTable; // backend validates as identifier
+    if (keyColumn) config.keyColumn = keyColumn;             // backend validates as identifier
     return { ok: true, config };
+  }
+
+  // Update Tenant.customerFederationSourceId — the same toggle Settings → Data
+  // Sync exposes. Mirrored on each MySQL source's edit form so admins don't
+  // have to scroll back up after configuring a new source.
+  async function syncFederationPointer(sourceId, enable) {
+    const tenantId = state.user?.tenantId;
+    if (!tenantId) throw new Error("No tenant context.");
+    const result = await api(`/tenants/${tenantId}/customer-federation`, {
+      method: "PUT",
+      body: { customerFederationSourceId: enable ? sourceId : null }
+    });
+    state.cache.customerFederation = result;
+    return result;
   }
 
   function readQueryParamRows(container) {
@@ -7304,14 +7359,25 @@ function renderSettings() {
       Object.assign(configJson, mysql.config);
     }
     try {
-      await api("/integrations/master-data/sources", {
+      const created = await api("/integrations/master-data/sources", {
         method: "POST",
         body: { sourceName: fd.get("sourceName"), sourceType, configJson }
       });
       qs("#sync-source-form-wrap").style.display = "none";
+      // If MYSQL + federation checkbox checked, point the tenant at this new
+      // source — the same toggle Settings → Data Sync exposes higher up.
+      let fedMsg = "";
+      if (sourceType === "MYSQL" && fd.get("mysqlUseAsFederationSource") && created?.id) {
+        try {
+          await syncFederationPointer(created.id, true);
+          fedMsg = " Federation enabled.";
+        } catch (err) {
+          fedMsg = ` (Source created, but federation toggle failed: ${err.message || "unknown error"})`;
+        }
+      }
       await loadSyncData();
       renderSettings();
-      setStatus("Source created.");
+      setStatus("Source created." + fedMsg);
     } catch (err) { setStatus(err.message || "Failed to create source."); }
   });
   views.settings.querySelectorAll(".sync-pull-now-btn").forEach(btn => {
@@ -7518,7 +7584,23 @@ function renderSettings() {
           method: "PATCH",
           body
         });
-        setStatus("Source updated.");
+        let fedMsg = "";
+        if (sourceType === "MYSQL") {
+          const cb = form.querySelector('input[name="mysqlUseAsFederationSource"]');
+          if (cb) {
+            const wasChecked = cb.dataset.wasChecked === "1";
+            const isChecked = cb.checked;
+            if (wasChecked !== isChecked) {
+              try {
+                await syncFederationPointer(form.dataset.sourceId, isChecked);
+                fedMsg = isChecked ? " Federation enabled." : " Federation disabled.";
+              } catch (err) {
+                fedMsg = ` (Source updated, but federation toggle failed: ${err.message || "unknown error"})`;
+              }
+            }
+          }
+        }
+        setStatus("Source updated." + fedMsg);
         await loadSyncData();
         renderSettings();
       } catch (err) { setStatus(err.message || "Failed to update source."); }

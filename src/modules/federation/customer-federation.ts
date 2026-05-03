@@ -4,10 +4,15 @@
  * shadow rows so existing FKs (Deal/Quotation/Visit → Customer) keep working.
  *
  * Architecture (see plans/this-session-will-talk-starry-toast.md):
- *   - Tenant.customerFederationSourceId points at an IntegrationSource row
- *     of sourceType=MYSQL with configJson.federationMode = "LIVE".
- *   - The configJson also carries a `keyColumn` that names the MySQL column
- *     matching our Customer.externalRef.
+ *   - The on/off toggle is `Tenant.customerFederationSourceId` — non-null
+ *     means this tenant is federated and reads come from the pointed-at
+ *     IntegrationSource (must be sourceType=MYSQL). Settings → Data Sync sets
+ *     the pointer; the same checkbox is mirrored on the MySQL source edit form.
+ *   - The IntegrationSource.configJson carries two federation-specific keys:
+ *       - `keyColumn`     — MySQL column matching our Customer.externalRef
+ *                           (default "external_ref" if omitted).
+ *       - `customerTable` — MySQL table to live-read from
+ *                           (default: query.table when in TABLE mode, else "customer").
  *   - The scheduled MYSQL pull keeps shadow rows in sync (tenant-configurable
  *     cadence, typically 1min) so newly created MySQL customers acquire a
  *     local Customer.id within ~1 min and become FK-targetable.
@@ -140,10 +145,18 @@ export async function getFederationConfig(tenantId: string): Promise<FederationC
   }
   const cfg = parseMysqlConfig(source.configJson);
   // configJson also carries federation-specific keys we tack on outside the
-  // base MysqlSourceConfig schema so we read them directly here.
+  // base MysqlSourceConfig schema so we read them directly here. Operators
+  // configure these on the MySQL source edit form ("Customer federation"
+  // sub-section); the values are validated by sanitizeSourceConfig before
+  // they hit the DB so we can interpolate them into SQL identifiers safely.
   const raw = source.configJson as Record<string, unknown>;
   const keyColumn = typeof raw.keyColumn === "string" && raw.keyColumn ? raw.keyColumn : "external_ref";
-  const table = cfg.query.mode === "TABLE" ? cfg.query.table : (typeof raw.table === "string" ? raw.table : "customer");
+  const explicitTable = typeof raw.customerTable === "string" && raw.customerTable ? raw.customerTable : null;
+  const legacyTable = typeof raw.table === "string" && raw.table ? raw.table : null;
+  const table = explicitTable
+    ?? (cfg.query.mode === "TABLE" ? cfg.query.table : null)
+    ?? legacyTable
+    ?? "customer";
   const value: FederationConfig = {
     sourceId: source.id,
     cfg,
