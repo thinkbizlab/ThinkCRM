@@ -171,7 +171,6 @@ describe("quotation routes", () => {
         ownerId: rep.id,
         customerCode: `CUST-${suffix}`,
         name: "Quotation Customer",
-        defaultTermId: paymentTerm.id,
         addresses: {
           create: [
             {
@@ -438,7 +437,7 @@ describe("quotation routes", () => {
 
     await prisma.customer.update({
       where: { id: fixture.customerId },
-      data: { status: "DRAFT", customerCode: null, defaultTermId: null }
+      data: { status: "DRAFT", customerCode: null }
     });
 
     const res = await app.inject({

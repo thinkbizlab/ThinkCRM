@@ -569,10 +569,25 @@ export const apiFirstRoutes: FastifyPluginAsync = async (app) => {
     if (!target) {
       throw app.httpErrors.notFound("User not found.");
     }
-    return prisma.user.update({
+    const updated = await prisma.user.update({
       where: { id: target.id },
       data: { role: parsed.data.role }
     });
+    if (target.role !== parsed.data.role) {
+      await logAuditEvent(
+        tenantId,
+        requireUserId(request),
+        "USER_ROLE_CHANGED",
+        {
+          targetUserId: target.id,
+          targetEmail: target.email,
+          oldRole: target.role,
+          newRole: parsed.data.role
+        },
+        request.ip
+      );
+    }
+    return updated;
   });
 
   app.get("/users/:id/scope", async (request) => {

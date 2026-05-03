@@ -15,6 +15,7 @@ let deps = {
   openVoiceNoteDialog: async () => {},
   openMapPicker: async () => {},
   openDeal360: async () => {},
+  openProspectDetail: () => {},
   loadMyTasks: async () => {},
   attachOnBehalfOfField: async () => null,
   openCheckInModal: () => {},
@@ -88,7 +89,13 @@ function buildVisitListHtml(visits, q) {
         <div class="vp-card-status-bar"></div>
         <div class="vp-card-body">
           <div class="vp-card-top">
-            <div class="vp-card-customer">${escHtml(visit.customer?.name || "—")}</div>
+            <div class="vp-card-customer">${
+              visit.customer
+                ? escHtml(visit.customer.name)
+                : visit.prospect
+                  ? `<button type="button" class="prospect-badge prospect-badge-btn" data-prospect-id="${escHtml(visit.prospect.id)}" title="Open prospect — link to a customer or archive">Prospect: ${escHtml(visit.prospect.displayName || "(unnamed)")}</button>`
+                  : "—"
+            }</div>
             <div class="vp-card-chips">
               ${visit.visitNo ? `<span class="chip chip--visitno">${escHtml(visit.visitNo)}</span>` : ""}
               <span class="chip ${statusCls[visit.status]}">${statusLabel[visit.status] || visit.status}</span>
@@ -140,6 +147,14 @@ function attachVisitListListeners(container) {
       const card = btn.closest(".vp-card");
       const label = card?.querySelector(".vp-card-customer")?.textContent?.trim() || "";
       void openVoiceNoteDialog(btn.dataset.entityType, btn.dataset.entityId, label);
+    });
+  });
+
+  container.querySelectorAll(".prospect-badge-btn").forEach((btn) => {
+    btn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const id = btn.dataset.prospectId;
+      if (id) void deps.openProspectDetail?.(id);
     });
   });
 
@@ -340,6 +355,11 @@ export function openVisitCreateModal(arg) {
   if (input) input.value = customer?.name ?? "";
   if (hiddenId) hiddenId.value = customer?.id ?? "";
   if (list) list.hidden = true;
+  const subjectCustomer = modal.querySelector('[name="visitSubject"][value="CUSTOMER"]');
+  if (subjectCustomer) subjectCustomer.checked = true;
+  const prospectNameField = modal.querySelector("#visit-prospect-name");
+  if (prospectNameField) prospectNameField.value = "";
+  applyVisitSubjectMode(modal, "CUSTOMER");
   const dealLabel = modal.querySelector("#visit-deal-label");
   const dealSelect = modal.querySelector("#visit-deal-select");
   if (dealLabel) dealLabel.hidden = true;
@@ -480,6 +500,42 @@ export function syncVisitPlannedAtRequired(modal) {
   }
 }
 
+// "Unidentified site" mode forces UNPLANNED + hides the customer picker so a rep
+// who just parked outside an unknown construction site can capture the visit
+// without first guessing the customer name.
+export function applyVisitSubjectMode(modal, mode) {
+  const customerLabel = modal.querySelector("#visit-customer-label");
+  const customerHidden = modal.querySelector("#visit-customer-id");
+  const customerInput = modal.querySelector("#visit-customer-input");
+  const prospectFields = modal.querySelector("#visit-prospect-fields");
+  const dealLabel = modal.querySelector("#visit-deal-label");
+  const visitTypeLabel = modal.querySelector("#visit-type-label");
+  const visitTypePlanned = modal.querySelector('[name="visitType"][value="PLANNED"]');
+  const visitTypeUnplanned = modal.querySelector('[name="visitType"][value="UNPLANNED"]');
+
+  if (mode === "UNIDENTIFIED") {
+    if (customerLabel) customerLabel.hidden = true;
+    if (customerHidden) {
+      customerHidden.value = "";
+      customerHidden.required = false;
+    }
+    if (customerInput) customerInput.required = false;
+    if (prospectFields) prospectFields.hidden = false;
+    if (dealLabel) dealLabel.hidden = true; // can't attach a deal w/o a customer
+    // Force UNPLANNED — an unidentified site can't have been pre-planned.
+    if (visitTypeUnplanned) visitTypeUnplanned.checked = true;
+    if (visitTypePlanned) visitTypePlanned.disabled = true;
+    if (visitTypeLabel) visitTypeLabel.hidden = true;
+  } else {
+    if (customerLabel) customerLabel.hidden = false;
+    if (customerHidden) customerHidden.required = true;
+    if (prospectFields) prospectFields.hidden = true;
+    if (visitTypePlanned) visitTypePlanned.disabled = false;
+    if (visitTypeLabel) visitTypeLabel.hidden = false;
+  }
+  syncVisitPlannedAtRequired(modal);
+}
+
 function openVisitDetailPanel() {
   const notifPanel = qs("#notif-panel");
   const settingsPanel = qs("#settings-panel");
@@ -580,7 +636,13 @@ function renderVisitDetailContent(visit, changelogs) {
   const heroHtml = `
     <div class="vd-hero">
       <div class="vd-hero-top">
-        <div class="vd-hero-customer">${escHtml(visit.customer?.name || "—")}</div>
+        <div class="vd-hero-customer">${
+          visit.customer
+            ? escHtml(visit.customer.name)
+            : visit.prospect
+              ? `<span class="prospect-badge">Prospect: ${escHtml(visit.prospect.displayName || "(unnamed)")}</span>`
+              : "—"
+        }</div>
         <div class="vd-hero-actions">
           ${canCheckIn ? `<button type="button" class="primary small vd-checkin-btn" data-visit-id="${visit.id}" data-visit-customer="${customerNameForModal}" title="Check in">
             <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>

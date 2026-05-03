@@ -77,8 +77,6 @@ function renderC360TabContent(c360) {
         <div class="c360-info-section">
           <p class="c360-info-section-title">Customer Info</p>
           <div class="c360-info-row"><span class="c360-info-key">Code</span><span class="c360-info-val">${escHtml(customer.customerCode)}</span></div>
-          <div class="c360-info-row"><span class="c360-info-key">Payment Term</span><span class="c360-info-val">${customer.paymentTerm ? escHtml(customer.paymentTerm.code + " — " + customer.paymentTerm.name) : "—"}</span></div>
-          <div class="c360-info-row"><span class="c360-info-key">Due Days</span><span class="c360-info-val">${customer.paymentTerm?.dueDays ?? "—"} days</span></div>
           <div class="c360-info-row"><span class="c360-info-key">Group</span><span class="c360-info-val">${customer.customerGroup ? escHtml(customer.customerGroup.code + " — " + customer.customerGroup.name) : "—"}</span></div>
           <div class="c360-info-row"><span class="c360-info-key">Created</span><span class="c360-info-val">${new Date(customer.createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}</span></div>
           ${customer.siteLat != null && customer.siteLng != null
@@ -226,9 +224,18 @@ export function renderCustomer360() {
     { key: "overview", label: "Overview", count: null }
   ];
 
+  const federationStatus = customer.federationStatus;
+  const federationBanner = federationStatus === "stale"
+    ? `<div class="federation-banner federation-banner--stale" role="status">
+         <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+         <span>Showing <strong>cached</strong> customer data — the upstream MySQL is not responding right now. Some attributes may be out of date.</span>
+       </div>`
+    : "";
+
   views.master.innerHTML = `
     <div class="master-outer">
       <div class="c360-wrap">
+        ${federationBanner}
         <div class="c360-breadcrumb">
           <button class="c360-back-btn" id="c360-back">
             <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
@@ -250,11 +257,6 @@ export function renderCustomer360() {
               <h2 class="c360-name">${escHtml(customer.name)}${customer.branchCode && customer.branchCode !== "00000" ? ` <span class="cust-branch-pill" style="font-size:0.7em;vertical-align:middle">Br ${escHtml(customer.branchCode)}</span>` : ""}</h2>
               <div class="c360-meta">
                 <span class="c360-code">${escHtml(customer.customerCode)}</span>
-                <span class="c360-meta-sep">·</span>
-                <span class="c360-meta-item">
-                  <svg width="12" height="12" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
-                  ${customer.paymentTerm ? escHtml(customer.paymentTerm.code) : "No term"}
-                </span>
                 ${visits.length > 0 ? `
                   <span class="c360-meta-sep">·</span>
                   <span class="c360-meta-item">Last visit ${new Date(visits[0].plannedAt || visits[0].createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span>` : ""}

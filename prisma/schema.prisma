@@ -19,6 +19,13 @@ model Tenant {
   manageItemsByApi      Boolean                  @default(false)
   managePaymentTermsByApi Boolean                 @default(false)
   manageCustomerGroupsByApi Boolean               @default(false)
+  staleProspectAlertDays Int                     @default(14)
+  // When non-null, this tenant's Customer master is read live from the MySQL
+  // IntegrationSource at this id. We keep thin shadow rows in our DB so FKs
+  // (Deal/Quotation/Visit → Customer) keep working; attribute reads hit the
+  // tenant's MySQL on demand. See src/modules/federation/customer-federation.ts.
+  customerFederationSourceId String?
+  customerFederationSource   IntegrationSource? @relation("CustomerFederationSource", fields: [customerFederationSourceId], references: [id], onDelete: SetNull)
   stripeCustomerId      String?
   createdAt             DateTime                 @default(now())
   updatedAt             DateTime                 @updatedAt
@@ -31,6 +38,7 @@ model Tenant {
   paymentTerms          PaymentTerm[]
   customerGroups        CustomerGroup[]
   customers             Customer[]
+  prospects             Prospect[]
   items                 Item[]
   deals                 Deal[]
   quotations            Quotation[]
@@ -100,6 +108,9 @@ model User {
   draftedCustomers    Customer[]            @relation("CustomerDraftCreatedBy")
   createdDeals        Deal[]                @relation("DealCreatedBy")
   createdVisits       Visit[]               @relation("VisitCreatedBy")
+  createdProspects    Prospect[]            @relation("ProspectCreatedBy")
+  updatedProspects    Prospect[]            @relation("ProspectUpdatedBy")
+  uploadedProspectPhotos ProspectPhoto[]    @relation("ProspectPhotoUploadedBy")
   delegatedAs         UserDelegation[]      @relation("UserDelegationDelegate")
   principalFor        UserDelegation[]      @relation("UserDelegationPrincipal")
   voiceNoteRequested  VoiceNoteJob[]        @relation("VoiceRequestedBy")
@@ -164,6 +175,7 @@ model Subscription {
   billingPeriodStart DateTime           @default(now())
   billingPeriodEnd   DateTime           @default(now())
   externalCustomerId String?
+  stripeSubscriptionId String?          @unique
   trialEndsAt        DateTime?
   planFeatures       Json?
   createdAt          DateTime           @default(now())
@@ -340,7 +352,6 @@ model PaymentTerm {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  customers   Customer[]
   quotations  Quotation[]
 
   @@unique([tenantId, code])
@@ -379,7 +390,6 @@ model Customer {
   // Optional corporate-group link to another customer in the same tenant
   // (e.g. holding company → subsidiary). Independent of taxId/branchCode.
   parentCustomerId     String?
-  defaultTermId        String?
   customerGroupId      String?
   status               CustomerStatus     @default(ACTIVE)
   draftCreatedByUserId String?
@@ -393,7 +403,6 @@ model Customer {
   createdAt            DateTime           @default(now())
   updatedAt            DateTime           @updatedAt
   tenant               Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  paymentTerm          PaymentTerm?       @relation(fields: [defaultTermId], references: [id], onDelete: Restrict)
   customerGroup        CustomerGroup?     @relation(fields: [customerGroupId], references: [id], onDelete: SetNull)
   owner                User?              @relation("CustomerOwner", fields: [ownerId], references: [id], onDelete: SetNull)
   createdBy            User?              @relation("CustomerCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
@@ -405,6 +414,7 @@ model Customer {
   deals                Deal[]
   visits               Visit[]
   quotations           Quotation[]
+  linkedProspects      Prospect[]         @relation("ProspectLinkedCustomer")
 
   @@unique([tenantId, taxId, branchCode])
   @@unique([tenantId, externalRef])
@@ -673,11 +683,67 @@ model QuotationFormConfig {
   tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 }
 
+// Prospect represents an unidentified site (e.g. a construction site a rep
+// drove past) before it is linked to a real Customer. Visits can be created
+// against a Prospect; once the Prospect is identified, its visits get
+// re-pointed to the resolved Customer. Stays local even for federated tenants.
+model Prospect {
+  id               String          @id @default(cuid())
+  tenantId         String
+  status           ProspectStatus  @default(UNIDENTIFIED)
+  displayName      String?
+  siteLat          Float?
+  siteLng          Float?
+  siteAddress      String?
+  contactName      String?
+  contactPhone     String?
+  notes            String?
+  linkedCustomerId String?
+  createdById      String
+  updatedById      String?
+  archivedAt       DateTime?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  tenant           Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  linkedCustomer   Customer?       @relation("ProspectLinkedCustomer", fields: [linkedCustomerId], references: [id], onDelete: SetNull)
+  createdBy        User            @relation("ProspectCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedBy        User?           @relation("ProspectUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  photos           ProspectPhoto[]
+  visits           Visit[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, createdAt])
+  @@index([tenantId, linkedCustomerId])
+}
+
+enum ProspectStatus {
+  UNIDENTIFIED
+  IDENTIFIED
+  LINKED
+  ARCHIVED
+}
+
+model ProspectPhoto {
+  id           String   @id @default(cuid())
+  prospectId   String
+  tenantId     String
+  objectRef    String
+  caption      String?
+  uploadedById String
+  uploadedAt   DateTime @default(now())
+  prospect     Prospect @relation(fields: [prospectId], references: [id], onDelete: Cascade)
+  uploadedBy   User     @relation("ProspectPhotoUploadedBy", fields: [uploadedById], references: [id], onDelete: Restrict)
+
+  @@index([prospectId])
+  @@index([tenantId, uploadedAt])
+}
+
 model Visit {
   id            String      @id @default(cuid())
   tenantId      String
   repId         String
-  customerId    String
+  customerId    String?
+  prospectId    String?
   dealId        String?
   visitNo       String      @default("")
   siteLat       Float?
@@ -702,13 +768,15 @@ model Visit {
   tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   rep           User        @relation("VisitRep", fields: [repId], references: [id], onDelete: Restrict)
   createdBy     User?       @relation("VisitCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
-  customer      Customer    @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  customer      Customer?   @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  prospect      Prospect?   @relation(fields: [prospectId], references: [id], onDelete: Restrict)
   deal          Deal?       @relation(fields: [dealId], references: [id], onDelete: SetNull)
 
   @@unique([tenantId, visitNo])
   @@index([tenantId, repId, checkInAt])
   @@index([tenantId, status, plannedAt])
   @@index([tenantId, customerId])
+  @@index([tenantId, prospectId])
 }
 
 model SalesKpiTarget {
@@ -739,6 +807,7 @@ model IntegrationSource {
   tenant         Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   mappings       IntegrationFieldMapping[]
   jobs           IntegrationSyncJob[]
+  federatedFor   Tenant[]    @relation("CustomerFederationSource")
 }
 
 model IntegrationFieldMapping {
@@ -1012,6 +1081,7 @@ enum EntityType {
   DEAL
   VISIT
   QUOTATION
+  PROSPECT
 }
 
 enum IntegrationPlatform {

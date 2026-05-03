@@ -6,7 +6,7 @@ export async function seedCustomers(prisma: PrismaClient) {
     {
       id: ids.custAcme, tenantId: ids.tenant, ownerId: ids.rep,
       customerCode: "CUST-000001", name: "บริษัท เอ็น-เทค ดิจิทัล โซลูชั่นส์ จำกัด", taxId: "0105561123450",
-      customerType: CustomerType.COMPANY, defaultTermId: ids.termNET30,
+      customerType: CustomerType.COMPANY,
       customFields: { customerTier: "Gold" },
       addresses: { create: { addressLine1: "45/12 ถนนพระราม 9", city: "กรุงเทพมหานคร", postalCode: "10310", country: "TH", subDistrict: "ห้วยขวาง", district: "ห้วยขวาง", province: "กรุงเทพมหานคร", isDefaultBilling: true, isDefaultShipping: true, latitude: 13.7563, longitude: 100.5679 } },
       contacts: { createMany: { data: [
@@ -17,7 +17,7 @@ export async function seedCustomers(prisma: PrismaClient) {
     {
       id: ids.custSiamTech, tenantId: ids.tenant, ownerId: ids.rep,
       customerCode: "CUST-000002", name: "บริษัท สยามพร็อพเพอร์ตี้ กรุ๊ป จำกัด", taxId: "0105562234561",
-      customerType: CustomerType.COMPANY, defaultTermId: ids.termNET15,
+      customerType: CustomerType.COMPANY,
       customFields: { customerTier: "Platinum" },
       addresses: { create: { addressLine1: "87 ถนนสีลม ชั้น 14", city: "กรุงเทพมหานคร", postalCode: "10500", country: "TH", subDistrict: "สีลม", district: "บางรัก", province: "กรุงเทพมหานคร", isDefaultBilling: true, isDefaultShipping: true, latitude: 13.7274, longitude: 100.5175 } },
       contacts: { createMany: { data: [
@@ -28,7 +28,7 @@ export async function seedCustomers(prisma: PrismaClient) {
     {
       id: ids.custBKKFood, tenantId: ids.tenant, ownerId: ids.rep2,
       customerCode: "CUST-000003", name: "บริษัท กรุงเทพประกันภัย (พ.ร.บ.) จำกัด มหาชน", taxId: "0107543345672",
-      customerType: CustomerType.COMPANY, defaultTermId: ids.termNET60,
+      customerType: CustomerType.COMPANY,
       customFields: { customerTier: "Gold" },
       addresses: { create: { addressLine1: "25 ถนนสาทรใต้ ชั้น 8", city: "กรุงเทพมหานคร", postalCode: "10120", country: "TH", subDistrict: "ทุ่งมหาเมฆ", district: "สาทร", province: "กรุงเทพมหานคร", isDefaultBilling: true, isDefaultShipping: true, latitude: 13.7200, longitude: 100.5250 } },
       contacts: { createMany: { data: [
@@ -39,7 +39,7 @@ export async function seedCustomers(prisma: PrismaClient) {
     {
       id: ids.custThaiSteel, tenantId: ids.tenant, ownerId: ids.rep2,
       customerCode: "CUST-000004", name: "บริษัท ไทยออโตโมทีฟ แมนูแฟคเจอริ่ง จำกัด", taxId: "0215554456783",
-      customerType: CustomerType.COMPANY, defaultTermId: ids.termNET30,
+      customerType: CustomerType.COMPANY,
       customFields: { customerTier: "Silver" },
       addresses: { create: { addressLine1: "88 นิคมอุตสาหกรรมอีสเทิร์นซีบอร์ด", city: "ระยอง", postalCode: "21130", country: "TH", subDistrict: "มาบตาพุด", district: "เมืองระยอง", province: "ระยอง", isDefaultBilling: true, isDefaultShipping: true, latitude: 12.7018, longitude: 101.1401 } },
       contacts: { createMany: { data: [
@@ -50,7 +50,7 @@ export async function seedCustomers(prisma: PrismaClient) {
     {
       id: ids.custPremier, tenantId: ids.tenant, ownerId: ids.rep3,
       customerCode: "CUST-000005", name: "โรงแรม แกรนด์ ทาวเวอร์ กรุงเทพ", taxId: "0105565567894",
-      customerType: CustomerType.COMPANY, defaultTermId: ids.termNET30,
+      customerType: CustomerType.COMPANY,
       customFields: { customerTier: "Gold" },
       addresses: { create: { addressLine1: "1011 ถนนวิภาวดีรังสิต", city: "กรุงเทพมหานคร", postalCode: "10900", country: "TH", subDistrict: "จตุจักร", district: "จตุจักร", province: "กรุงเทพมหานคร", isDefaultBilling: true, isDefaultShipping: false } },
       contacts: { createMany: { data: [
@@ -61,7 +61,7 @@ export async function seedCustomers(prisma: PrismaClient) {
     {
       id: ids.custEastAsia, tenantId: ids.tenant, ownerId: ids.rep3,
       customerCode: "CUST-000006", name: "บริษัท ฟิวเจอร์เวิร์ค สเปซ จำกัด", taxId: "0105566678905",
-      customerType: CustomerType.COMPANY, defaultTermId: ids.termNET15,
+      customerType: CustomerType.COMPANY,
       customFields: { customerTier: "Silver" },
       addresses: { create: { addressLine1: "28 ถนนเจริญนคร ชั้น 6", city: "กรุงเทพมหานคร", postalCode: "10600", country: "TH", subDistrict: "คลองสาน", district: "คลองสาน", province: "กรุงเทพมหานคร", isDefaultBilling: true, isDefaultShipping: true, latitude: 13.7200, longitude: 100.5100 } },
       contacts: { createMany: { data: [
@@ -71,7 +71,7 @@ export async function seedCustomers(prisma: PrismaClient) {
     {
       id: ids.custGolden, tenantId: ids.tenant, ownerId: ids.rep,
       customerCode: "CUST-000007", name: "บริษัท เดลต้า ก่อสร้างและพัฒนา จำกัด", taxId: "0105557789016",
-      customerType: CustomerType.COMPANY, defaultTermId: ids.termCOD,
+      customerType: CustomerType.COMPANY,
       customFields: { customerTier: "Bronze" },
       addresses: { create: { addressLine1: "52 ถนนเพชรบุรีตัดใหม่", city: "กรุงเทพมหานคร", postalCode: "10400", country: "TH", subDistrict: "มักกะสัน", district: "ราชเทวี", province: "กรุงเทพมหานคร", isDefaultBilling: true, isDefaultShipping: true, latitude: 13.7520, longitude: 100.5580 } },
       contacts: { createMany: { data: [
@@ -82,7 +82,7 @@ export async function seedCustomers(prisma: PrismaClient) {
     {
       id: ids.custRajaPlas, tenantId: ids.tenant, ownerId: ids.rep2,
       customerCode: "CUST-000008", name: "บริษัท เมดิคอล พลัส (ประเทศไทย) จำกัด", taxId: "0105568890127",
-      customerType: CustomerType.COMPANY, defaultTermId: ids.termNET30,
+      customerType: CustomerType.COMPANY,
       customFields: { customerTier: "Silver" },
       addresses: { create: { addressLine1: "14/7 ถนนบรมราชชนนี", city: "กรุงเทพมหานคร", postalCode: "10160", country: "TH", subDistrict: "บางพลัด", district: "บางพลัด", province: "กรุงเทพมหานคร", isDefaultBilling: true, isDefaultShipping: true, latitude: 13.7800, longitude: 100.4700 } },
       contacts: { createMany: { data: [
@@ -93,7 +93,7 @@ export async function seedCustomers(prisma: PrismaClient) {
     {
       id: ids.custCentral, tenantId: ids.tenant, ownerId: ids.rep3,
       customerCode: "CUST-000009", name: "บริษัท ซีพี เทรดดิ้ง อินเตอร์เนชั่นแนล จำกัด", taxId: "0107539901238",
-      customerType: CustomerType.COMPANY, defaultTermId: ids.termNET60,
+      customerType: CustomerType.COMPANY,
       customFields: { customerTier: "Platinum" },
       addresses: { create: { addressLine1: "999 ถนนพระราม 1 ชั้น 30", city: "กรุงเทพมหานคร", postalCode: "10330", country: "TH", subDistrict: "ปทุมวัน", district: "ปทุมวัน", province: "กรุงเทพมหานคร", isDefaultBilling: true, isDefaultShipping: false, latitude: 13.7466, longitude: 100.5393 } },
       contacts: { createMany: { data: [
@@ -104,7 +104,7 @@ export async function seedCustomers(prisma: PrismaClient) {
     {
       id: ids.custNorth, tenantId: ids.tenant, ownerId: ids.rep,
       customerCode: "CUST-000010", name: "บริษัท นอร์ทสตาร์ โลจิสติกส์ จำกัด", taxId: "0505510012349",
-      customerType: CustomerType.COMPANY, defaultTermId: ids.termNET15,
+      customerType: CustomerType.COMPANY,
       customFields: { customerTier: "Bronze" },
       addresses: { create: { addressLine1: "78 ถนนนิมมานเหมินทร์", city: "เชียงใหม่", postalCode: "50200", country: "TH", subDistrict: "สุเทพ", district: "เมืองเชียงใหม่", province: "เชียงใหม่", isDefaultBilling: true, isDefaultShipping: true, latitude: 18.8004, longitude: 98.9600 } },
       contacts: { createMany: { data: [
@@ -114,7 +114,7 @@ export async function seedCustomers(prisma: PrismaClient) {
     {
       id: ids.custSunrise, tenantId: ids.tenant, ownerId: ids.rep2,
       customerCode: "CUST-000011", name: "บริษัท กรีนเอิร์ธ เอนเนอร์ยี่ จำกัด", taxId: "0105571123450",
-      customerType: CustomerType.COMPANY, defaultTermId: ids.termNET30,
+      customerType: CustomerType.COMPANY,
       customFields: { customerTier: "Gold" },
       addresses: { create: { addressLine1: "500 ถนนสุขุมวิท ชั้น 22", city: "กรุงเทพมหานคร", postalCode: "10110", country: "TH", subDistrict: "คลองเตย", district: "คลองเตย", province: "กรุงเทพมหานคร", isDefaultBilling: true, isDefaultShipping: true, latitude: 13.7200, longitude: 100.5700 } },
       contacts: { createMany: { data: [
@@ -125,7 +125,7 @@ export async function seedCustomers(prisma: PrismaClient) {
     {
       id: ids.custMega, tenantId: ids.tenant, ownerId: ids.rep3,
       customerCode: "CUST-000012", name: "บริษัท โอเชี่ยน มีเดีย กรุ๊ป จำกัด", taxId: "0105572234561",
-      customerType: CustomerType.COMPANY, defaultTermId: ids.termCOD,
+      customerType: CustomerType.COMPANY,
       customFields: { customerTier: "Bronze" },
       addresses: { create: { addressLine1: "12 ถนนลาดพร้าว", city: "กรุงเทพมหานคร", postalCode: "10230", country: "TH", subDistrict: "ลาดพร้าว", district: "ลาดพร้าว", province: "กรุงเทพมหานคร", isDefaultBilling: true, isDefaultShipping: true } },
       contacts: { createMany: { data: [
@@ -135,7 +135,7 @@ export async function seedCustomers(prisma: PrismaClient) {
     {
       id: ids.custViva, tenantId: ids.tenant, ownerId: ids.rep,
       customerCode: "CUST-000013", name: "บริษัท ริเวอร์ไซด์ เรสซิเดนซ์ ดีเวลลอปเมนต์ จำกัด", taxId: "0105563345672",
-      customerType: CustomerType.COMPANY, defaultTermId: ids.termNET30,
+      customerType: CustomerType.COMPANY,
       customFields: { customerTier: "Silver" },
       addresses: { create: { addressLine1: "301 ถนนรัชดาภิเษก", city: "กรุงเทพมหานคร", postalCode: "10320", country: "TH", subDistrict: "ดินแดง", district: "ดินแดง", province: "กรุงเทพมหานคร", isDefaultBilling: true, isDefaultShipping: true, latitude: 13.7700, longitude: 100.5600 } },
       contacts: { createMany: { data: [
@@ -146,7 +146,7 @@ export async function seedCustomers(prisma: PrismaClient) {
     {
       id: ids.custAmarin, tenantId: ids.tenant, ownerId: ids.rep2,
       customerCode: "CUST-000014", name: "บริษัท เอเชีย ฟาร์มาซูติคอล จำกัด", taxId: "0105574456783",
-      customerType: CustomerType.COMPANY, defaultTermId: ids.termNET15,
+      customerType: CustomerType.COMPANY,
       customFields: { customerTier: "Silver" },
       addresses: { create: { addressLine1: "65/16 ถนนพระราม 6", city: "กรุงเทพมหานคร", postalCode: "10400", country: "TH", subDistrict: "พญาไท", district: "พญาไท", province: "กรุงเทพมหานคร", isDefaultBilling: true, isDefaultShipping: true } },
       contacts: { createMany: { data: [
@@ -156,7 +156,7 @@ export async function seedCustomers(prisma: PrismaClient) {
     {
       id: ids.custOmega, tenantId: ids.tenant, ownerId: ids.rep3,
       customerCode: "CUST-000015", name: "บริษัท อินฟินิตี้ เทค โซลูชั่นส์ จำกัด", taxId: "0105575567894",
-      customerType: CustomerType.COMPANY, defaultTermId: ids.termNET60,
+      customerType: CustomerType.COMPANY,
       customFields: { customerTier: "Platinum" },
       addresses: { create: { addressLine1: "888 อาคารเอ็มไพร์ ถนนสาทรเหนือ ชั้น 25", city: "กรุงเทพมหานคร", postalCode: "10120", country: "TH", subDistrict: "ยานนาวา", district: "สาทร", province: "กรุงเทพมหานคร", isDefaultBilling: true, isDefaultShipping: true, latitude: 13.7200, longitude: 100.5300 } },
       contacts: { createMany: { data: [

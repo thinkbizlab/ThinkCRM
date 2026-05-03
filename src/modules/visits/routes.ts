@@ -24,6 +24,7 @@ const EARTH_RADIUS_METERS = 6371000;
 type VisitWithCustomerRep = Prisma.VisitGetPayload<{
   include: {
     customer: { select: { id: true; name: true } };
+    prospect: { select: { id: true; displayName: true; status: true } };
     rep: { select: { id: true; fullName: true } };
   };
 }>;
@@ -55,14 +56,21 @@ const plannedVisitCreateSchema = z.object({
 }).strict();
 
 const unplannedVisitCreateSchema = z.object({
-  customerId: z.string().min(1),
+  // Exactly one of customerId / prospectId must be set OR both omitted (server
+  // auto-creates a Prospect from siteLat/siteLng for the "unidentified site"
+  // flow used when a rep drops in on a building they can't yet name).
+  customerId: z.string().min(1).optional(),
+  prospectId: z.string().min(1).optional(),
   dealId: z.string().min(1).optional(),
   plannedAt: z.string().datetime().optional(),
   objective: z.string().trim().min(1).optional(),
   siteLat: z.number().min(-90).max(90).optional(),
   siteLng: z.number().min(-180).max(180).optional(),
   onBehalfOfUserId: z.string().min(1).optional()
-}).strict();
+}).strict().refine(
+  (d) => !(d.customerId && d.prospectId),
+  { message: "customerId and prospectId are mutually exclusive." }
+);
 
 const checkInSchema = z.object({
   lat: z.number().min(-90).max(90),
@@ -249,7 +257,8 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
   async function createVisitRecord(input: {
     tenantId: string;
     repId: string;
-    customerId: string;
+    customerId?: string;
+    prospectId?: string;
     dealId?: string;
     objective?: string;
     plannedAt: Date;
@@ -259,31 +268,52 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
     siteLat?: number;
     siteLng?: number;
   }) {
+    if ((input.customerId ? 1 : 0) + (input.prospectId ? 1 : 0) !== 1) {
+      throw app.httpErrors.badRequest("Visit must reference exactly one of customerId or prospectId.");
+    }
     return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      const customer = await tx.customer.findFirst({
-        where: { id: input.customerId, tenantId: input.tenantId },
-        select: { id: true, disabled: true, name: true, customerCode: true }
-      });
-      if (!customer) {
-        throw app.httpErrors.notFound("Customer not found in tenant.");
-      }
-      if (customer.disabled) {
-        throw app.httpErrors.badRequest(
-          `Customer "${customer.name}" (${customer.customerCode}) is disabled and cannot be used for new visits.`
-        );
-      }
-
-      if (input.dealId) {
-        const deal = await tx.deal.findFirst({
-          where: {
-            id: input.dealId,
-            tenantId: input.tenantId,
-            customerId: input.customerId
-          },
-          select: { id: true }
+      if (input.customerId) {
+        const customer = await tx.customer.findFirst({
+          where: { id: input.customerId, tenantId: input.tenantId },
+          select: { id: true, disabled: true, name: true, customerCode: true }
         });
-        if (!deal) {
-          throw app.httpErrors.badRequest("Deal must belong to the same tenant and customer.");
+        if (!customer) {
+          throw app.httpErrors.notFound("Customer not found in tenant.");
+        }
+        if (customer.disabled) {
+          throw app.httpErrors.badRequest(
+            `Customer "${customer.name}" (${customer.customerCode}) is disabled and cannot be used for new visits.`
+          );
+        }
+
+        if (input.dealId) {
+          const deal = await tx.deal.findFirst({
+            where: {
+              id: input.dealId,
+              tenantId: input.tenantId,
+              customerId: input.customerId
+            },
+            select: { id: true }
+          });
+          if (!deal) {
+            throw app.httpErrors.badRequest("Deal must belong to the same tenant and customer.");
+          }
+        }
+      } else {
+        // Prospect path: validate the prospect exists in this tenant. Deals
+        // require a customer FK so they cannot be attached to prospect visits.
+        const prospect = await tx.prospect.findFirst({
+          where: { id: input.prospectId!, tenantId: input.tenantId },
+          select: { id: true, status: true }
+        });
+        if (!prospect) {
+          throw app.httpErrors.notFound("Prospect not found in tenant.");
+        }
+        if (prospect.status === "ARCHIVED") {
+          throw app.httpErrors.badRequest("Prospect is archived; cannot attach new visits.");
+        }
+        if (input.dealId) {
+          throw app.httpErrors.badRequest("Deals cannot be attached to a prospect visit. Identify the customer first.");
         }
       }
 
@@ -293,7 +323,8 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
         data: {
           tenantId: input.tenantId,
           repId: input.repId,
-          customerId: input.customerId,
+          customerId: input.customerId ?? null,
+          prospectId: input.prospectId ?? null,
           dealId: input.dealId,
           visitNo,
           plannedAt: input.plannedAt,
@@ -355,10 +386,31 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
     if (repId !== callerId && !(await canActOnBehalfOf(request, repId))) {
       throw app.httpErrors.forbidden("You are not delegated to act on behalf of that user.");
     }
+    // "Unidentified site" path: rep doesn't know the customer at visit time.
+    // Auto-create a minimal Prospect tied to the captured coordinates so the
+    // visit has a target FK. Rep enriches the prospect after check-out.
+    let prospectId = parsed.data.prospectId;
+    if (!parsed.data.customerId && !prospectId) {
+      const coords = parsed.data.siteLat != null && parsed.data.siteLng != null
+        ? `${parsed.data.siteLat.toFixed(4)}, ${parsed.data.siteLng.toFixed(4)}`
+        : "unknown location";
+      const prospect = await prisma.prospect.create({
+        data: {
+          tenantId,
+          status: "UNIDENTIFIED",
+          displayName: `Unidentified site @ ${coords}`,
+          siteLat: parsed.data.siteLat,
+          siteLng: parsed.data.siteLng,
+          createdById: callerId
+        }
+      });
+      prospectId = prospect.id;
+    }
     const created = await createVisitRecord({
       tenantId,
       repId,
       customerId: parsed.data.customerId,
+      prospectId,
       dealId: parsed.data.dealId,
       plannedAt: parsed.data.plannedAt ? new Date(parsed.data.plannedAt) : new Date(),
       objective: parsed.data.objective,
@@ -368,7 +420,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
       siteLat: parsed.data.siteLat,
       siteLng: parsed.data.siteLng
     });
-    return reply.code(201).send(created);
+    return reply.code(201).send({ ...created, prospectId });
   });
 
   app.get("/visits", async (request) => {
@@ -410,7 +462,12 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
         ...(query.customerId ? { customerId: query.customerId } : {}),
         ...(query.dealId     ? { dealId: query.dealId }         : {})
       },
-      include: { customer: true, deal: true, rep: true },
+      include: {
+        customer: true,
+        prospect: { select: { id: true, displayName: true, status: true, siteLat: true, siteLng: true } },
+        deal: true,
+        rep: true
+      },
       orderBy: { plannedAt: "asc" }
     });
   });
@@ -435,6 +492,11 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
               },
               orderBy: [{ isDefaultShipping: "desc" }, { isDefaultBilling: "desc" }]
             }
+          }
+        },
+        prospect: {
+          include: {
+            photos: { select: { id: true, objectRef: true, caption: true, uploadedAt: true } }
           }
         },
         rep: { select: { id: true, fullName: true, email: true, avatarUrl: true } },
@@ -1079,6 +1141,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
           },
           include: {
             customer: { select: { id: true, name: true } },
+            prospect: { select: { id: true, displayName: true, status: true } },
             rep: { select: { id: true, fullName: true } }
           },
           orderBy: { plannedAt: "asc" }
@@ -1119,6 +1182,9 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
                 ? "red"
                 : "blue";
 
+        const subjectName = visit.customer?.name
+          ?? (visit.prospect ? `Prospect: ${visit.prospect.displayName ?? "(unnamed)"}` : "—");
+        const subjectId = visit.customer?.id ?? visit.prospect?.id ?? null;
         return {
           id: `visit:${visit.id}`,
           entityId: visit.id,
@@ -1126,10 +1192,10 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
           color,
           eventTypeColor: "blue",
           at: displayAt.toISOString(),
-          title: `Visit: ${visit.customer.name}`,
+          title: `Visit: ${subjectName}`,
           status: visit.status,
           owner: { id: visit.rep.id, name: visit.rep.fullName },
-          customer: { id: visit.customer.id, name: visit.customer.name }
+          customer: { id: subjectId, name: subjectName }
         };
       })
       .filter((event) => {
@@ -1242,12 +1308,9 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
               customerId: query.customerId
             },
             include: {
-              customer: {
-                select: { id: true, name: true }
-              },
-              rep: {
-                select: { id: true, fullName: true }
-              }
+              customer: { select: { id: true, name: true } },
+              prospect: { select: { id: true, displayName: true, status: true } },
+              rep: { select: { id: true, fullName: true } }
             },
             orderBy: { plannedAt: "asc" }
           }),
@@ -1272,6 +1335,9 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
 
     const todoVisitEvents: Array<TodoEvent & { isPinned: boolean }> = visits.map((visit) => {
       const isPinned = visit.status === VisitStatus.CHECKED_IN;
+      const subjectName = visit.customer?.name
+        ?? (visit.prospect ? `Prospect: ${visit.prospect.displayName ?? "(unnamed)"}` : "—");
+      const subjectId = visit.customer?.id ?? visit.prospect?.id ?? "";
       return {
         id: `visit:${visit.id}`,
         type: "visit",
@@ -1279,11 +1345,11 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
         customerId: visit.customerId,
         dealId: visit.dealId ?? null,
         at: visit.plannedAt.toISOString(),
-        title: `Visit: ${visit.customer.name}`,
+        title: `Visit: ${subjectName}`,
         bucket: resolveTodoBucket(visit.plannedAt, now),
         status: visit.status,
         priority: isPinned || visit.plannedAt < now ? "high" : "normal",
-        customer: { id: visit.customer.id, name: visit.customer.name },
+        customer: { id: subjectId, name: subjectName },
         owner: { id: visit.rep.id, name: visit.rep.fullName },
         visitNo: visit.visitNo || null,
         objective: visit.objective || null,

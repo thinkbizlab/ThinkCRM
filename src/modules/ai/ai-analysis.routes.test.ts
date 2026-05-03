@@ -45,7 +45,6 @@ async function createFixture() {
       ownerId: repId,
       customerCode: `CUST-${token.slice(0, 8)}`,
       name: "Customer Test",
-      defaultTermId: paymentTermId
     }
   });
   await prisma.dealStage.create({

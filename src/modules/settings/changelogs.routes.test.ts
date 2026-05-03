@@ -155,7 +155,6 @@ describe("hierarchy scope and changelog routes", () => {
       payload: {
         customerCode: `CUSTA-${suffix.slice(0, 8)}`,
         name: "Customer A",
-        defaultTermId: term.id
       }
     });
     expect(createCustomerA.statusCode).toBe(201);
@@ -182,7 +181,6 @@ describe("hierarchy scope and changelog routes", () => {
       payload: {
         customerCode: `CUSTB-${suffix.slice(0, 8)}`,
         name: "Customer B",
-        defaultTermId: term.id
       }
     });
     expect(createCustomerB.statusCode).toBe(201);

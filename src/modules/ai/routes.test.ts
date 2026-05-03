@@ -1,3 +1,8 @@
+// Side-effect import: triggers dotenv.config() before the prisma client below
+// is instantiated. This file builds its own Fastify app instead of using
+// `buildApp()`, so the env load is not transitive — without this import, runs
+// in an isolated vitest worker fail with "DATABASE_URL not found".
+import "../../config.js";
 import { DealStatus, UserRole, VisitStatus, VisitType } from "@prisma/client";
 import jwt from "@fastify/jwt";
 import multipart from "@fastify/multipart";
@@ -86,7 +91,6 @@ async function createAiFixture() {
       ownerId: rep.id,
       customerCode: `CUST-DEAL-${suffix.slice(0, 8)}`,
       name: "Deal Follow-Up Customer",
-      defaultTermId: paymentTerm.id
     }
   });
 
@@ -96,7 +100,6 @@ async function createAiFixture() {
       ownerId: rep.id,
       customerCode: `CUST-GAP6-${suffix.slice(0, 8)}`,
       name: "Gap 6 Months Customer",
-      defaultTermId: paymentTerm.id
     }
   });
 
@@ -106,7 +109,6 @@ async function createAiFixture() {
       ownerId: rep.id,
       customerCode: `CUST-GAP12-${suffix.slice(0, 8)}`,
       name: "Gap 12 Months Customer",
-      defaultTermId: paymentTerm.id
     }
   });
 
@@ -116,7 +118,6 @@ async function createAiFixture() {
       ownerId: rep.id,
       customerCode: `CUST-NEVER-${suffix.slice(0, 8)}`,
       name: "Never Sold Customer",
-      defaultTermId: paymentTerm.id
     }
   });
 
