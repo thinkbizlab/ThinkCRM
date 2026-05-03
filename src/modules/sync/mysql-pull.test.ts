@@ -16,6 +16,7 @@ const baseCfg = (over: Partial<MysqlSourceConfig> = {}): MysqlSourceConfig => ({
   chunkSize: 1000,
   schedule: { kind: "MANUAL" },
   query: { mode: "TABLE", table: "customers" },
+  cursorColumn: null,
   ...over,
 });
 
