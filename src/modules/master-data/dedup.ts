@@ -1,8 +1,9 @@
 import { Anthropic } from "@anthropic-ai/sdk";
-import { CustomerDuplicateSignal, Prisma } from "@prisma/client";
+import { AiCallStatus, AiFeature, AiProvider, CustomerDuplicateSignal, Prisma } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
 import { config } from "../../config.js";
 import { decryptField } from "../../lib/secrets.js";
+import { recordAiUsage } from "../../lib/ai-usage.js";
 
 // ── Normalization helpers ───────────────────────────────────────────────────
 // Strip everything except digits and compare the last 9 digits. This collapses
@@ -193,26 +194,39 @@ async function resolveAnthropicApiKey(tenantId: string): Promise<string | null> 
 
 type AdjudicationResult = { isDuplicate: boolean; confidence: number; reason: string };
 
+const ADJUDICATION_MODEL = "claude-haiku-4-5-20251001";
+
 async function adjudicateWithAI(
   apiKey: string,
   a: CustomerRow,
-  b: CustomerRow
+  b: CustomerRow,
+  meter: { tenantId: string; userId: string | null; feature: AiFeature }
 ): Promise<AdjudicationResult | null> {
   const client = new Anthropic({ apiKey });
   const payload = {
     a: { code: a.customerCode, name: a.name, taxId: a.taxId, phones: a.contacts.map((c) => c.tel).filter(Boolean), emails: a.contacts.map((c) => c.email).filter(Boolean) },
     b: { code: b.customerCode, name: b.name, taxId: b.taxId, phones: b.contacts.map((c) => c.tel).filter(Boolean), emails: b.contacts.map((c) => c.email).filter(Boolean) }
   };
-  const prompt = `You are a customer master-data deduplication assistant for a single tenant's CRM. Decide whether A and B refer to the same real-world business or person. Consider: spelling variants, legal suffixes (Co., Ltd. vs Limited), shared tax IDs, shared phones or emails, likely typos. Respond ONLY with valid JSON:
+  const prompt = `You are a customer master-data deduplication assistant for a single tenant's CRM. Decide whether A and B refer to the same real-world business or person. If they share a name, phones, or emails but have different TaxIDs, treat that as strong evidence that one TaxID was mistyped — return isDuplicate=true with high confidence and explain which field looks mistyped in the reason. Consider spelling variants, legal suffixes (Co., Ltd. vs Limited), abbreviations, likely typos. Respond ONLY with valid JSON:
 {"isDuplicate": true|false, "confidence": 0.0..1.0, "reason": "short sentence"}
 
 A: ${JSON.stringify(payload.a)}
 B: ${JSON.stringify(payload.b)}`;
   try {
     const res = await client.messages.create({
-      model: "claude-haiku-4-5-20251001",
+      model: ADJUDICATION_MODEL,
       max_tokens: 256,
       messages: [{ role: "user", content: prompt }]
+    });
+    void recordAiUsage({
+      tenantId: meter.tenantId,
+      userId: meter.userId,
+      feature: meter.feature,
+      provider: AiProvider.ANTHROPIC,
+      model: ADJUDICATION_MODEL,
+      inputTokens: res.usage?.input_tokens ?? 0,
+      outputTokens: res.usage?.output_tokens ?? 0,
+      status: AiCallStatus.SUCCESS,
     });
     const block = res.content[0];
     const text = block?.type === "text" ? block.text : "";
@@ -223,7 +237,16 @@ B: ${JSON.stringify(payload.b)}`;
     const confidence = typeof parsed.confidence === "number" ? Math.max(0, Math.min(1, parsed.confidence)) : 0.5;
     const reason = typeof parsed.reason === "string" ? String(parsed.reason).slice(0, 500) : "AI judged duplicate.";
     return { isDuplicate, confidence, reason };
-  } catch {
+  } catch (err) {
+    void recordAiUsage({
+      tenantId: meter.tenantId,
+      userId: meter.userId,
+      feature: meter.feature,
+      provider: AiProvider.ANTHROPIC,
+      model: ADJUDICATION_MODEL,
+      status: AiCallStatus.ERROR,
+      errorMessage: err instanceof Error ? err.message : String(err),
+    });
     return null;
   }
 }
@@ -290,7 +313,11 @@ export async function scanDuplicatesForTenant(tenantId: string): Promise<DedupSc
   if (apiKey) {
     const fuzzy = buildFuzzyNameCandidates(rows, excludedFromFuzzy).slice(0, AI_BATCH_CAP);
     for (const c of fuzzy) {
-      const verdict = await adjudicateWithAI(apiKey, c.a, c.b);
+      const verdict = await adjudicateWithAI(apiKey, c.a, c.b, {
+        tenantId,
+        userId: null, // batch scan is cron-driven
+        feature: AiFeature.DEDUP_SCAN,
+      });
       aiEvaluated++;
       if (verdict && verdict.isDuplicate && verdict.confidence >= 0.7) {
         aiFlagged++;
@@ -327,6 +354,195 @@ export async function scanDuplicatesForTenant(tenantId: string): Promise<DedupSc
     aiFlagged,
     openCandidates: openCount
   };
+}
+
+// ── Inline check for new-customer create ───────────────────────────────────
+// Compares a draft (no DB row yet) against existing customers and returns the
+// top matches with deterministic + AI signals so the UI can warn or block
+// before the customer is persisted.
+
+export type DraftCustomerForCheck = {
+  name: string;
+  taxId?: string | null;
+  branchCode?: string | null;
+  contacts?: Array<{ tel?: string | null; email?: string | null }>;
+};
+
+export type DuplicateMatchKind =
+  | "taxid_collision"      // exact (taxId+branch) hit on existing record
+  | "phone_match"           // shared normalized phone
+  | "email_match"           // shared normalized email
+  | "name_exact"            // shared normalized name
+  | "taxid_typo_suspected"  // AI flagged: name/phone/email match but TaxIDs differ
+  | "name_fuzz";            // AI flagged: similar names, no other deterministic key
+
+export type DuplicateMatch = {
+  customer: {
+    id: string;
+    customerCode: string | null;
+    name: string;
+    taxId: string | null;
+    ownerId: string | null;
+    owner: { id: string; fullName: string } | null;
+  };
+  kind: DuplicateMatchKind;
+  confidence: number;
+  reasonText: string;
+};
+
+export type FindDuplicatesResult = {
+  matches: DuplicateMatch[];
+  aiCallsMade: number;
+  aiSkippedNoKey: boolean;
+};
+
+const INLINE_FUZZY_THRESHOLD = 0.5;
+const INLINE_TOP_K = 5;
+
+/**
+ * Build the union of deterministic + AI candidate matches for a draft customer.
+ * Caller passes `userId` so the AI usage row is attributed to the rep who
+ * triggered the create.
+ */
+export async function findDuplicatesForNewCustomer(
+  tenantId: string,
+  userId: string | null,
+  draft: DraftCustomerForCheck
+): Promise<FindDuplicatesResult> {
+  const draftTax = normTaxId(draft.taxId);
+  const draftBranch = (draft.branchCode ?? "00000").trim() || "00000";
+  const draftPhones = (draft.contacts ?? []).map((c) => normPhone(c.tel)).filter((x): x is string => !!x);
+  const draftEmails = (draft.contacts ?? []).map((c) => normEmail(c.email)).filter((x): x is string => !!x);
+  const draftName = normName(draft.name);
+  const draftGrams = ngrams(draftName);
+
+  // Candidate set: every existing customer in this tenant, plus minimum fields
+  // we need to score and render. Tenants typically have <50k customers; if this
+  // becomes a hot path we can pre-filter by first-3-gram bucket like the batch scan.
+  const rows = await prisma.customer.findMany({
+    where: { tenantId },
+    select: {
+      id: true,
+      customerCode: true,
+      name: true,
+      taxId: true,
+      branchCode: true,
+      ownerId: true,
+      owner: { select: { id: true, fullName: true } },
+      contacts: { select: { tel: true, email: true } },
+    },
+  });
+
+  // Track best match per existing-customer id so we don't list the same
+  // customer twice under different signals — keep the highest-confidence kind.
+  const matchByCustomer = new Map<string, DuplicateMatch>();
+  const upsertMatch = (m: DuplicateMatch) => {
+    const prev = matchByCustomer.get(m.customer.id);
+    if (!prev || m.confidence > prev.confidence) matchByCustomer.set(m.customer.id, m);
+  };
+
+  // ── Deterministic pass ──
+  for (const row of rows) {
+    const rowTax = normTaxId(row.taxId);
+    const rowBranch = (row.branchCode ?? "00000").trim() || "00000";
+    const customer = {
+      id: row.id,
+      customerCode: row.customerCode,
+      name: row.name,
+      taxId: row.taxId,
+      ownerId: row.ownerId,
+      owner: row.owner,
+    };
+
+    if (draftTax && rowTax && draftTax === rowTax && draftBranch === rowBranch) {
+      upsertMatch({ customer, kind: "taxid_collision", confidence: 0.99, reasonText: `Same TaxID ${draftTax} branch ${draftBranch}` });
+      continue;
+    }
+    const rowPhones = new Set(row.contacts.map((c) => normPhone(c.tel)).filter((x): x is string => !!x));
+    if (draftPhones.some((p) => rowPhones.has(p))) {
+      upsertMatch({ customer, kind: "phone_match", confidence: 0.9, reasonText: "Shared phone number" });
+    }
+    const rowEmails = new Set(row.contacts.map((c) => normEmail(c.email)).filter((x): x is string => !!x));
+    if (draftEmails.some((e) => rowEmails.has(e))) {
+      upsertMatch({ customer, kind: "email_match", confidence: 0.92, reasonText: "Shared email address" });
+    }
+    if (draftName.length >= 4 && normName(row.name) === draftName) {
+      upsertMatch({ customer, kind: "name_exact", confidence: 0.85, reasonText: "Identical normalized name" });
+    }
+  }
+
+  // ── Fuzzy candidate selection for AI ──
+  // Score every other row by 3-gram Jaccard, plus a phone/email boost. Send the
+  // top-K (excluding ones already covered by a deterministic signal) to AI.
+  type Scored = { row: typeof rows[number]; similarity: number };
+  const scored: Scored[] = [];
+  if (draftName.length >= 4) {
+    for (const row of rows) {
+      if (matchByCustomer.has(row.id)) continue;
+      const sim = jaccard(draftGrams, ngrams(normName(row.name)));
+      if (sim >= INLINE_FUZZY_THRESHOLD) scored.push({ row, similarity: sim });
+    }
+  }
+  scored.sort((a, b) => b.similarity - a.similarity);
+  const fuzzyTop = scored.slice(0, INLINE_TOP_K);
+
+  const draftAsRow: CustomerRow = {
+    id: "__draft__",
+    customerCode: null,
+    name: draft.name,
+    taxId: draft.taxId ?? null,
+    branchCode: draft.branchCode ?? null,
+    contacts: (draft.contacts ?? []).map((c) => ({ tel: c.tel ?? null, email: c.email ?? null })),
+  };
+
+  let aiCallsMade = 0;
+  let aiSkippedNoKey = false;
+  if (fuzzyTop.length > 0) {
+    const apiKey = await resolveAnthropicApiKey(tenantId);
+    if (!apiKey) {
+      aiSkippedNoKey = true;
+    } else {
+      for (const cand of fuzzyTop) {
+        const candRow: CustomerRow = {
+          id: cand.row.id,
+          customerCode: cand.row.customerCode,
+          name: cand.row.name,
+          taxId: cand.row.taxId,
+          branchCode: cand.row.branchCode,
+          contacts: cand.row.contacts,
+        };
+        const verdict = await adjudicateWithAI(apiKey, draftAsRow, candRow, {
+          tenantId,
+          userId,
+          feature: AiFeature.DEDUP_INLINE,
+        });
+        aiCallsMade++;
+        if (!verdict || !verdict.isDuplicate || verdict.confidence < 0.6) continue;
+        // Decide kind: if both have TaxIDs and they differ, flag it as a typo;
+        // if neither has a TaxID it's a name-only fuzz; else fall back to name_fuzz.
+        const candTax = normTaxId(cand.row.taxId);
+        const kind: DuplicateMatchKind = (draftTax && candTax && draftTax !== candTax)
+          ? "taxid_typo_suspected"
+          : "name_fuzz";
+        upsertMatch({
+          customer: {
+            id: cand.row.id,
+            customerCode: cand.row.customerCode,
+            name: cand.row.name,
+            taxId: cand.row.taxId,
+            ownerId: cand.row.ownerId,
+            owner: cand.row.owner,
+          },
+          kind,
+          confidence: verdict.confidence,
+          reasonText: verdict.reason,
+        });
+      }
+    }
+  }
+
+  const matches = Array.from(matchByCustomer.values()).sort((a, b) => b.confidence - a.confidence);
+  return { matches, aiCallsMade, aiSkippedNoKey };
 }
 
 // ── Merge logic ─────────────────────────────────────────────────────────────

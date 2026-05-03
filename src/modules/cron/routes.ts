@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { CronRunStatus, CronTriggerType } from "@prisma/client";
 import { prisma } from "../../lib/prisma.js";
 import { config } from "../../config.js";
-import { WORKER_TAG, getJobDef } from "../../lib/scheduler.js";
+import { WORKER_TAG, getJobDef, reapStuckCronJobRuns } from "../../lib/scheduler.js";
 
 /**
  * Vercel Cron HTTP endpoints.
@@ -40,6 +40,16 @@ export const cronRoutes: FastifyPluginAsync = async (app) => {
   async function runJobForAllTenants(jobKey: string): Promise<{ tenantResults: Array<{ tenantId: string; status: string; summary: string }> }> {
     const def = getJobDef(jobKey);
     if (!def) throw new Error(`Unknown job key: ${jobKey}`);
+
+    // Reap stuck CronJobRun rows before checking the overlap guard so a previously
+    // killed invocation (function timeout, deploy mid-flight) doesn't permanently
+    // block this tenant + jobKey. Runs every cron tick — at minute granularity for
+    // the syncMysqlPull job — so a stuck row clears within ~16 min worst case.
+    try {
+      await reapStuckCronJobRuns();
+    } catch (err) {
+      app.log.error({ err }, "[cron] reapStuckCronJobRuns failed");
+    }
 
     const configs = await prisma.cronJobConfig.findMany({
       where: { jobKey, isEnabled: true },
@@ -118,6 +128,32 @@ export const cronRoutes: FastifyPluginAsync = async (app) => {
   app.get("/cron/sync-mysql-pull", async (request) => {
     verifyCronSecret(request);
     return runJobForAllTenants("syncMysqlPull");
+  });
+
+  // ── Sync Job Reaper ───────────────────────────────────────────────────────
+  // Auto-fails MYSQL IntegrationSyncJob rows stuck in RUNNING past
+  // SYNC_JOB_STUCK_THRESHOLD_MINUTES (default 30) so the per-source enqueue
+  // lock is freed when a worker dies mid-pull. Companion to the
+  // CronJobRun watchdog at the top of runJobForAllTenants.
+  app.get("/cron/sync-job-reaper", async (request) => {
+    verifyCronSecret(request);
+    return runJobForAllTenants("syncJobReaper");
+  });
+
+  // ── Customer Dedup Scan ──────────────────────────────────────────────────
+  // Per-tenant: scan for duplicate customers and notify admins when new
+  // candidates appear since the last successful run.
+  app.get("/cron/customer-dedup-scan", async (request) => {
+    verifyCronSecret(request);
+    return runJobForAllTenants("customerDedupScan");
+  });
+
+  // ── Invoice Auto-Send ─────────────────────────────────────────────────────
+  // Finalizes DRAFT tenant invoices whose billing period has ended and emails
+  // them to the first active tenant admin.
+  app.get("/cron/invoice-auto-send", async (request) => {
+    verifyCronSecret(request);
+    return runJobForAllTenants("invoiceAutoSend");
   });
 
   // ── Trial Expiry (system-level, not per-tenant job) ───────────────────────

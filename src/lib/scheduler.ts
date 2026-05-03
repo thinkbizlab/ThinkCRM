@@ -81,6 +81,16 @@ export const JOB_DEFS: JobDef[] = [
     }
   },
   {
+    key: "customerDedupScan",
+    label: "Customer Dedup Scan",
+    description: "Scans for duplicate customers (deterministic + AI fuzzy) and notifies admins when new candidates appear since the last run.",
+    defaultCronExpr: "0 3 * * *", // 03:00 tenant TZ
+    run: async (tenantId) => {
+      const { runCustomerDedupScanForTenant } = await import("./dedup-notify.js");
+      return runCustomerDedupScanForTenant(tenantId);
+    }
+  },
+  {
     key: "invoiceAutoSend",
     label: "Invoice Auto-Send",
     description: "Finalizes DRAFT tenant invoices whose billing period has ended and emails them to the first active tenant admin.",
@@ -104,6 +114,37 @@ let initialized = false;
 
 function taskKey(tenantId: string, jobKey: string) {
   return `${tenantId}:${jobKey}`;
+}
+
+// ── Watchdog ──────────────────────────────────────────────────────────────────
+
+/**
+ * Auto-fail CronJobRun rows stuck in RUNNING past the threshold.
+ *
+ * On Vercel, an invocation can die mid-tick (function timeout, deploy
+ * interruption, OOM) without flipping its CronJobRun row to a terminal
+ * status. The next tick then hits the per-(tenantId, jobKey) overlap guard
+ * in cronRoutes.runJobForAllTenants and silently skips, halting all
+ * cron-driven work for that pair until the row is fixed by hand.
+ *
+ * Threshold is generous vs. Vercel's 5-min function budget — a real tick
+ * should never approach 15 min — and the sweep is global (not per-tenant)
+ * so a single call clears all stragglers in one statement.
+ */
+export async function reapStuckCronJobRuns(thresholdMinutes = 15): Promise<number> {
+  const cutoff = new Date(Date.now() - thresholdMinutes * 60 * 1000);
+  const { count } = await prisma.cronJobRun.updateMany({
+    where: { status: CronRunStatus.RUNNING, startedAt: { lt: cutoff } },
+    data: {
+      status: CronRunStatus.FAILURE,
+      completedAt: new Date(),
+      summary: `Auto-failed by watchdog: stuck RUNNING for >${thresholdMinutes}min`,
+    },
+  });
+  if (count > 0) {
+    console.warn(`[scheduler] reapStuckCronJobRuns: auto-failed ${count} stuck row(s) older than ${thresholdMinutes}min`);
+  }
+  return count;
 }
 
 // ── Run logging ───────────────────────────────────────────────────────────────
