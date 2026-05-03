@@ -495,7 +495,11 @@ async function upsertEntity(
         "customerCode",
         "name",
         "externalRef",
-        "customerType"
+        "customerType",
+        // `disabled` is enforced locally — assertCustomerBelongsToTenant +
+        // createVisitRecord both reject disabled customers — so we MUST
+        // persist it on the shadow row to honor the upstream's flag.
+        "disabled"
       ]);
       mapped = Object.fromEntries(
         Object.entries(mapped).filter(([k]) => SHADOW_FIELDS.has(k))

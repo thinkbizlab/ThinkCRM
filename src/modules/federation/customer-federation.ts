@@ -324,6 +324,14 @@ function mapLiveToShadow(live: Record<string, unknown>, cfg: FederationConfig): 
         (out as Record<string, unknown>)[k] = mapped[k];
       }
     }
+    // `disabled` is a boolean on Customer but ERPs commonly send 0/1 — coerce
+    // explicitly so live reads reflect the upstream flag without the caller
+    // needing to handle truthy-but-not-true values.
+    if (mapped.disabled !== undefined) {
+      const v = mapped.disabled;
+      (out as Record<string, unknown>).disabled =
+        v === true || v === 1 || v === "1" || v === "true" || v === "TRUE";
+    }
     return out;
   }
 
