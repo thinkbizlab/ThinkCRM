@@ -499,7 +499,13 @@ async function upsertEntity(
         // `disabled` is enforced locally — assertCustomerBelongsToTenant +
         // createVisitRecord both reject disabled customers — so we MUST
         // persist it on the shadow row to honor the upstream's flag.
-        "disabled"
+        "disabled",
+        // `ownerId` is a FK to User.id used by /customers list, kanban, and
+        // dashboard team filters. Persist so the operator-defined mapping
+        // (e.g. ERPNext's `sale_person` → User email) actually drives CRM
+        // ownership. Without this, federated customers stay NULL-owner and
+        // are invisible in every owner-scoped query.
+        "ownerId"
       ]);
       mapped = Object.fromEntries(
         Object.entries(mapped).filter(([k]) => SHADOW_FIELDS.has(k))
