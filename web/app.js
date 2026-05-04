@@ -8992,9 +8992,9 @@ function installMasterPageSizeDelegation() {
       try {
         if (key === "customer") {
           state.customerListPage = 1;
-          const bodyEl = document.querySelector("#cust-body");
-          const termOptions = state.cache.masterRenderers?.customerTermOptions || "";
-          if (bodyEl) refreshCustBody(bodyEl, termOptions);
+          // Server caps pageSize at 500; "all" maps to that ceiling.
+          state.customerListPageSize = v === "all" ? 500 : Math.max(1, Math.min(500, Number(v) || 100));
+          loadMaster().catch((err) => setStatus(err?.message || "Failed to reload customers", true));
         } else if (key === "item") {
           state.itemListPage = 1;
           state.cache.masterRenderers?.item?.();
@@ -9032,7 +9032,10 @@ function filteredCustomers() {
   const defs = getCustomFieldDefinitions("customers");
   const cfFilters = state.customerCustomFieldFilters || {};
   const groupFilter = state.customerGroupFilter || "";
-  return (state.cache.customers || []).filter((c) => {
+  // Server-paginated source. Search/group/cf filters narrow only the current
+  // page; full-set search needs /customers/search (not yet wired into list).
+  const source = state.cache.customerListPage || state.cache.customers || [];
+  return source.filter((c) => {
     if (q) {
       const matches =
         c.customerCode?.toLowerCase().includes(q) ||
@@ -9052,7 +9055,11 @@ function filteredCustomers() {
 }
 
 function getCachedCustomerById(customerId) {
-  return (state.cache.customers || []).find((customer) => customer.id === customerId) || null;
+  return (
+    (state.cache.customerListPage || []).find((c) => c.id === customerId) ||
+    (state.cache.customers || []).find((c) => c.id === customerId) ||
+    null
+  );
 }
 
 function dealsForCustomer(customerId) {
@@ -9369,9 +9376,11 @@ function buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk
         </tbody>
       </table>`;
 
-  const pageSize = getCustPageSize();
+  const pageSize = state.customerListPageSize || 100;
+  // Server-paginated: total comes from the server, not from `all.length`
+  // (which is just what's loaded for the current page, post-filter).
   const paginationHtml = masterPaginationHtml({
-    total: all.length,
+    total: state.customerListTotal || all.length,
     page,
     totalPages,
     key: "customer",
@@ -9496,15 +9505,19 @@ function attachCustBodyDelegation(bodyEl) {
 
     const prevBtn = t.closest('[data-page-prev="customer"]');
     if (prevBtn) {
-      state.customerListPage = Math.max(1, state.customerListPage - 1);
-      refreshCustBody(bodyEl, bodyEl._custCtx?.termOptions || "");
+      if (state.customerListPage <= 1) return;
+      state.customerListPage -= 1;
+      showPageLoading("Loading…");
+      loadMaster().finally(() => hidePageLoading());
       return;
     }
     const nextBtn = t.closest('[data-page-next="customer"]');
     if (nextBtn) {
       const totalPages = bodyEl._custCtx?.totalPages || 1;
-      state.customerListPage = Math.min(totalPages, state.customerListPage + 1);
-      refreshCustBody(bodyEl, bodyEl._custCtx?.termOptions || "");
+      if (state.customerListPage >= totalPages) return;
+      state.customerListPage += 1;
+      showPageLoading("Loading…");
+      loadMaster().finally(() => hidePageLoading());
       return;
     }
   });
@@ -9850,12 +9863,13 @@ function openBulkEditCustomersModal() {
 
 function refreshCustBody(bodyEl, termOptions) {
   const all = filteredCustomers();
-  const pageSize = getCustPageSize();
-  const totalPages = Math.max(1, Math.ceil(all.length / (pageSize === Infinity ? Math.max(1, all.length) : pageSize)));
+  const pageSize = state.customerListPageSize || 100;
+  // Server total drives page count; current-page rows come from the server.
+  const totalPages = Math.max(1, Math.ceil((state.customerListTotal || 0) / pageSize));
   state.customerListPage = Math.min(state.customerListPage, totalPages);
   const page = state.customerListPage;
-  const start = pageSize === Infinity ? 0 : (page - 1) * pageSize;
-  const slice = pageSize === Infinity ? all : all.slice(start, start + pageSize);
+  const start = (page - 1) * pageSize;
+  const slice = all;
   const role = state.user?.role ?? "REP";
   const isAdmin = role === "ADMIN";
   const apiLocked = isCustomerApiLocked();
@@ -9869,12 +9883,12 @@ function refreshCustBody(bodyEl, termOptions) {
 
 function renderCustomerListSection(container, termOptions) {
   const all = filteredCustomers();
-  const pageSize = getCustPageSize();
-  const totalPages = Math.max(1, Math.ceil(all.length / (pageSize === Infinity ? Math.max(1, all.length) : pageSize)));
+  const pageSize = state.customerListPageSize || 100;
+  const totalPages = Math.max(1, Math.ceil((state.customerListTotal || 0) / pageSize));
   state.customerListPage = Math.min(state.customerListPage, totalPages);
   const page = state.customerListPage;
-  const start = pageSize === Infinity ? 0 : (page - 1) * pageSize;
-  const slice = pageSize === Infinity ? all : all.slice(start, start + pageSize);
+  const start = (page - 1) * pageSize;
+  const slice = all;
   const role = state.user?.role ?? "REP";
   const isAdmin = role === "ADMIN";
   const canSeeTeam = ["MANAGER", "SUPERVISOR"].includes(role);
@@ -9937,11 +9951,12 @@ function renderCustomerListSection(container, termOptions) {
     </div>
   `;
 
-  // Search — only refreshes the body, keeps input alive. Debounced to avoid
-  // re-rendering the full table on every keystroke.
+  // Search narrows the CURRENT server page only — full-set search would
+  // require switching to /customers/search (TODO). Don't reset page: prev/next
+  // still walks the unfiltered server pagination, so the user can manually
+  // page through to find matches on other pages while the filter is active.
   const bodyEl = container.querySelector("#cust-body");
   const debouncedCustSearch = debounce(() => {
-    state.customerListPage = 1;
     refreshCustBody(bodyEl, termOptions);
   }, 250);
   container.querySelector("#cust-search-input")?.addEventListener("input", (e) => {
@@ -9978,10 +9993,10 @@ function renderCustomerListSection(container, termOptions) {
     openDuplicatesModal();
   });
 
-  // Customer group filter
+  // Customer group filter — narrows the current server page only (same
+  // semantics as the search input above).
   container.querySelector("#cust-group-filter")?.addEventListener("change", (e) => {
     state.customerGroupFilter = e.target.value || "";
-    state.customerListPage = 1;
     const bodyEl = container.querySelector("#cust-body");
     refreshCustBody(bodyEl, termOptions);
   });
@@ -9995,12 +10010,10 @@ function renderCustomerListSection(container, termOptions) {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
     state.customerCustomFieldFilters = collectCustomFieldFilters(fd, getCustomFieldDefinitions("customers"));
-    state.customerListPage = 1;
     renderCustomerListSection(container, termOptions);
   });
   container.querySelector("#cust-cf-filter-clear")?.addEventListener("click", () => {
     state.customerCustomFieldFilters = {};
-    state.customerListPage = 1;
     renderCustomerListSection(container, termOptions);
   });
 
@@ -11163,10 +11176,31 @@ async function loadMaster(page = state.masterPage || "customers", options = {}) 
   }
 
   if (page === "customers" && needsCustomers) {
+    // Bare-array fetch keeps `state.cache.customers` populated for non-list
+    // consumers (Excel import templates, lookup-by-id). Still capped at 2000
+    // server-side; tenants beyond that cap will see truncated templates —
+    // same behavior as today.
     requests.push(
       api(`/customers${scopeParam}`).then((customers) => {
         state.cache.customers = customers;
         state.cache.customerScopeLoaded = state.customerScope;
+      })
+    );
+  }
+  if (page === "customers") {
+    // Paginated fetch drives the list view itself. Re-runs every loadMaster
+    // (page change, scope change, refresh) so prev/next can navigate beyond
+    // the 2K cap on the bare endpoint.
+    const pageNum = state.customerListPage || 1;
+    const pageSize = state.customerListPageSize || 100;
+    const params = new URLSearchParams();
+    if (state.customerScope !== "mine") params.set("scope", state.customerScope);
+    params.set("page", String(pageNum));
+    params.set("pageSize", String(pageSize));
+    requests.push(
+      api(`/customers?${params.toString()}`).then((response) => {
+        state.cache.customerListPage = Array.isArray(response?.rows) ? response.rows : [];
+        state.customerListTotal = Number.isFinite(response?.total) ? response.total : 0;
       })
     );
   }
