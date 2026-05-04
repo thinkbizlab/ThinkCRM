@@ -249,6 +249,15 @@ export async function hydrateCustomers<T extends ShadowCustomer | null | undefin
     } catch (err) {
       // Don't 500 the page on a sluggish upstream — caller will set
       // X-Federation-Stale on the response header so clients know.
+      // Log so we can diagnose the failure from Vercel runtime logs without
+      // having to enable a debug flag (the page still renders successfully).
+      console.warn(
+        "[federation] hydrate failed for tenant=%s source=%s ref=%s: %s",
+        tenantId,
+        cfg.sourceId,
+        r.externalRef,
+        (err as Error)?.message ?? String(err)
+      );
       return { ...r, federationStatus: "stale" as const };
     }
   }));
