@@ -9197,9 +9197,16 @@ let _idleActivityHandler = null;
 // to the widget bundle loaded via index.html. If the widget bundle hasn't
 // finished loading yet we wait and retry; if the env secret isn't set the
 // endpoint returns 503 and we silently bail (dev installs).
+//
+// The widget is opt-in per tenant. The backend authoritatively gates on
+// ALLOWED_TENANT_SLUGS (see src/modules/widget/routes.ts); this frontend
+// list is just an optimisation so non-allowed tenants don't make the round
+// trip on every login. Keep the two lists in sync.
+const SUPPORT_WIDGET_TENANT_SLUGS = new Set(["workcrm"]);
 let _supportWidgetMounted = false;
 async function mountSupportWidget() {
   if (_supportWidgetMounted) return;
+  if (!SUPPORT_WIDGET_TENANT_SLUGS.has(state.user?.tenantSlug || "")) return;
   let result;
   try {
     result = await api("/widget-token");

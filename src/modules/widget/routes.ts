@@ -27,6 +27,11 @@ import { prisma } from "../../lib/prisma.js";
 const TOKEN_TTL_SECONDS = 300; // matches Primedesk's snippet (5 min)
 const ISSUER = "workcrm";
 const SOURCE_APP = "workcrm";
+// Currently the widget is enabled for one tenant only. Add slugs here when
+// more tenants opt in (and update the matching guard in mountSupportWidget()
+// in web/app.js so the frontend skips the network call for non-allowed
+// tenants). If this list grows it should move to an env var.
+const ALLOWED_TENANT_SLUGS = new Set(["workcrm"]);
 
 function base64url(input: Buffer | string): string {
   return (typeof input === "string" ? Buffer.from(input) : input)
@@ -79,6 +84,15 @@ export const widgetRoutes: FastifyPluginAsync = async (app) => {
     }
     const tenantId = requireTenantId(request);
     const userId = requireUserId(request);
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { slug: true }
+    });
+    if (!tenant || !ALLOWED_TENANT_SLUGS.has(tenant.slug)) {
+      // Per-tenant opt-in. Other tenants get a 403 even if the secret env
+      // var is set — they have to be added to ALLOWED_TENANT_SLUGS first.
+      throw app.httpErrors.forbidden("Support widget is not enabled for this tenant.");
+    }
     const user = await prisma.user.findFirst({
       where: { id: userId, tenantId, isActive: true },
       select: { id: true, email: true, fullName: true }
