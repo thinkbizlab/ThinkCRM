@@ -80,7 +80,7 @@ const customerGroupUpdateSchema = customerGroupSchema.partial();
 const customerSchemaBase = z.object({
   // customerCode is required for ACTIVE customers (real ERP code) but optional
   // for DRAFTs captured in the field before ERP sync.
-  customerCode: z.string().min(2).max(40).optional(),
+  customerCode: z.string().min(2).max(500).optional(),
   name: z.string().min(2).max(200),
   customerType: z.nativeEnum(CustomerType).optional(),
   taxId: z.string().max(20).optional(),
@@ -1277,7 +1277,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
   });
 
   const promoteBodySchema = z.object({
-    customerCode: z.string().trim().min(2).max(40)
+    customerCode: z.string().trim().min(2).max(500)
   });
 
   // Manual promotion: admin (or the rep who drafted it, for their own prospect)
@@ -2087,7 +2087,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
   });
 
   const customerImportRow = z.object({
-    customerCode: z.string().trim().min(2).max(40),
+    customerCode: z.string().trim().min(2).max(500),
     name: z.string().trim().min(2).max(200),
     customerType: z.nativeEnum(CustomerType).optional(),
     customerGroupCode: z.string().trim().min(1).max(50).optional(),
