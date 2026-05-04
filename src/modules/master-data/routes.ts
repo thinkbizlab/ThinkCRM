@@ -124,6 +124,15 @@ const customerSearchQuerySchema = z.object({
   scope: z.enum(["mine", "team", "all"]).optional().default("mine")
 });
 
+// Server-side pagination params for GET /customers. When `page` is present
+// the handler returns {rows,total,page,pageSize,totalPages} so tenants with
+// > 2K customers (PR #19's hard cap) can browse beyond the first page.
+// When absent, the handler keeps its legacy bare-array shape.
+const customerListPaginationSchema = z.object({
+  page: z.coerce.number().int().min(1).optional(),
+  pageSize: z.coerce.number().int().min(1).max(500).optional().default(100)
+});
+
 const itemSchema = z.object({
   itemCode: z.string().min(1).max(40),
   name: z.string().min(2).max(200),
@@ -500,26 +509,56 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     // every scope: ERP-marked-inactive customers shouldn't clutter the rep's
     // working set. Caller can opt back in with ?includeDisabled=true.
     const LIST_LIMIT = 2000;
-    const includeDisabled = (request.query as { includeDisabled?: string }).includeDisabled === "true";
+    const rawQuery = request.query as { includeDisabled?: string; page?: string };
+    const includeDisabled = rawQuery.includeDisabled === "true";
     const disabledClause = includeDisabled ? {} : { disabled: false };
+    // Server-side pagination kicks in only when ?page is present, so legacy
+    // callers (Excel templates, lookup-by-id consumers via state.cache.customers)
+    // still get the bare array they expect.
+    const wantsPagination = rawQuery.page !== undefined;
+    const pagination = customerListPaginationSchema.safeParse(request.query ?? {});
+    if (!pagination.success) {
+      throw app.httpErrors.badRequest(zodMsg(pagination.error));
+    }
+    const pageSize = pagination.data.pageSize;
+    const page = pagination.data.page ?? 1;
+    const skip = (page - 1) * pageSize;
 
+    let where: Prisma.CustomerWhereInput;
     if (query.scope === "unassigned") {
       requireRoleAtLeast(request, UserRole.ADMIN);
-      return prisma.customer.findMany({
-        where: { tenantId, ownerId: null, ...disabledClause },
-        include: includeShape,
-        orderBy: { createdAt: "desc" },
-        take: LIST_LIMIT
-      });
+      where = { tenantId, ownerId: null, ...disabledClause };
+    } else {
+      const visibleUserIdList = [...(await listVisibleUserIds(request))];
+      const ownerFilter =
+        query.scope === "team" || query.scope === "all"
+          ? { in: visibleUserIdList }
+          : requesterId;
+      where = { tenantId, ownerId: ownerFilter, ...disabledClause };
     }
 
-    const visibleUserIdList = [...(await listVisibleUserIds(request))];
-    const ownerFilter =
-      query.scope === "team" || query.scope === "all"
-        ? { in: visibleUserIdList }
-        : requesterId;
+    if (wantsPagination) {
+      const [rows, total] = await Promise.all([
+        prisma.customer.findMany({
+          where,
+          include: includeShape,
+          orderBy: { createdAt: "desc" },
+          skip,
+          take: pageSize
+        }),
+        prisma.customer.count({ where })
+      ]);
+      return {
+        rows,
+        total,
+        page,
+        pageSize,
+        totalPages: Math.max(1, Math.ceil(total / pageSize))
+      };
+    }
+
     return prisma.customer.findMany({
-      where: { tenantId, ownerId: ownerFilter, ...disabledClause },
+      where,
       include: includeShape,
       orderBy: { createdAt: "desc" },
       take: LIST_LIMIT

@@ -7,6 +7,7 @@ export const state = {
   cache: {
     paymentTerms: [],
     customers: [],
+    customerListPage: null,
     items: [],
     customerGroups: [],
     customFieldDefinitions: {
@@ -36,6 +37,8 @@ export const state = {
   masterPage: "payment-terms",
   customerListQuery: "",
   customerListPage: 1,
+  customerListPageSize: 100,
+  customerListTotal: 0,
   customerScope: "mine",
   customerSelectedIds: new Set(),
   paymentTermSelectedIds: new Set(),
