@@ -6,30 +6,55 @@ import { qs } from "./dom.js";
 
 // Show / hide the MS365, Google, and passkey buttons based on what the
 // server reports as configured for this workspace and what the browser supports.
+//
+// While the providers fetch is in flight, the #oauth-loading skeleton (3
+// animated placeholder bars) is visible inside #oauth-providers — so the
+// section appears at the same time as the username/password fields rather
+// than popping in 1-3 seconds later. When the fetch resolves we hide the
+// skeleton and swap in the actual buttons; if zero buttons would render we
+// hide the entire panel including the "or sign in with" divider.
+//
+// Per-tenant configuration: tenant admins toggle which sign-in options are
+// shown via Settings → Branding (loginShowGoogle / loginShowMicrosoft /
+// loginShowPasskey / loginShowSignup flags). The branding fetch sets
+// data-loginHiddenByAdmin on the relevant buttons before this runs.
 export async function loadOAuthProviderButtons({ getTenantSlug } = {}) {
-  const panel = qs("#oauth-providers");
+  const panel    = qs("#oauth-providers");
+  const loading  = qs("#oauth-loading");
+  const btnsWrap = qs("#oauth-btns");
   const ms365Btn  = qs("#oauth-ms365-btn");
   const googleBtn = qs("#oauth-google-btn");
   const passkeyBtn = qs("#oauth-passkey-btn");
   if (!panel || !ms365Btn || !googleBtn) return;
-  const hiddenByAdmin = (el) => el?.dataset?.loginHiddenByAdmin === "true";
-  const webauthnSupported = !!(window.PublicKeyCredential);
-  const passkeyAllowed = webauthnSupported && !hiddenByAdmin(passkeyBtn);
-  if (passkeyBtn) passkeyBtn.hidden = !passkeyAllowed;
+
+  const finish = ({ ms365 = false, google = false } = {}) => {
+    const hiddenByAdmin = (el) => el?.dataset?.loginHiddenByAdmin === "true";
+    const webauthnSupported = !!(window.PublicKeyCredential);
+    const passkeyAllowed = webauthnSupported && !hiddenByAdmin(passkeyBtn);
+    const ms365Allowed   = ms365  && !hiddenByAdmin(ms365Btn);
+    const googleAllowed  = google && !hiddenByAdmin(googleBtn);
+    if (passkeyBtn) passkeyBtn.hidden = !passkeyAllowed;
+    ms365Btn.hidden  = !ms365Allowed;
+    googleBtn.hidden = !googleAllowed;
+    if (loading) loading.hidden = true;
+    if (btnsWrap) btnsWrap.hidden = false;
+    // If nothing would render, hide the whole section (including the divider)
+    // so the login page collapses to just username/password.
+    panel.hidden = !ms365Allowed && !googleAllowed && !passkeyAllowed;
+  };
+
   try {
     const slug = getTenantSlug?.();
     const url = slug
       ? `/api/v1/auth/oauth/providers?tenantSlug=${encodeURIComponent(slug)}`
       : "/api/v1/auth/oauth/providers";
     const res = await fetch(url);
-    if (!res.ok) return;
-    const { ms365, google } = await res.json();
-    const ms365Allowed  = ms365  && !hiddenByAdmin(ms365Btn);
-    const googleAllowed = google && !hiddenByAdmin(googleBtn);
-    ms365Btn.hidden  = !ms365Allowed;
-    googleBtn.hidden = !googleAllowed;
-    panel.hidden     = !ms365Allowed && !googleAllowed && !passkeyAllowed;
-  } catch { /* ignore — OAuth buttons are optional */ }
+    if (!res.ok) { finish(); return; }
+    finish(await res.json());
+  } catch {
+    // Network failure / OAuth fetch optional — fall through with everything off.
+    finish();
+  }
 }
 
 // Wire the MS365 / Google buttons so a click redirects to the provider.
