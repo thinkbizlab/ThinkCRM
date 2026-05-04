@@ -162,7 +162,10 @@ describe("customer search", () => {
     expect(res.json()[0].name).toBe("Acme HQ");
   });
 
-  it("supports team scope and excludes disabled customers", async () => {
+  it("supports team scope and orders disabled customers last", async () => {
+    // Per PR #21: search includes disabled customers but sorts active rows
+    // first, disabled rows at the end. The list endpoint hides disabled by
+    // default; search surfaces them so reps can still find dormant accounts.
     const fixture = await setupFixture();
     const headers = await authHeader(fixture);
 
@@ -175,7 +178,8 @@ describe("customer search", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().map((customer: { name: string }) => customer.name)).toEqual([
       "Acme HQ",
-      "Acme Retail"
+      "Acme Retail",
+      "Acme Dormant"
     ]);
   });
 });
