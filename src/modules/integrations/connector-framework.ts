@@ -152,6 +152,30 @@ export type FieldMapping = {
  * same drain pass — it's a perf-only shortcut; the DB UNIQUE constraints
  * catch true duplicates regardless.
  */
+// Per-chunk concurrency for upsertEntity. Each upsert involves 4-7 DB
+// roundtrips; sequential processing is RTT-bound and gives ~50 rows/min on a
+// typical Vercel→Neon link. Running 10 in parallel saturates Prisma's pool
+// and lifts throughput ~5-10x with no schema or logic changes.
+const UPSERT_CONCURRENCY = 10;
+
+async function runWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i] as T, i);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 export async function processConnectorChunk(params: {
   tenantId: string;
   jobId: string;
@@ -166,6 +190,12 @@ export async function processConnectorChunk(params: {
   let successCount = 0;
   let duplicateCount = 0;
 
+  // Phase 1 (sync, fast): map + dedupe each record. Collect (rowRef, mapped)
+  // pairs that survive validation + dedup so we can run their upserts
+  // concurrently. Mapping failures and in-chunk duplicates are handled here
+  // sequentially since they don't touch the DB.
+  type Pending = { rowRef: string; mapped: Record<string, unknown> };
+  const pending: Pending[] = [];
   for (let index = 0; index < records.length; index += 1) {
     const rowRef = String(rowOffset + index + 1);
     const rawRecord = records[index] ?? {};
@@ -176,14 +206,17 @@ export async function processConnectorChunk(params: {
       }
       continue;
     }
-
     const rowDedupeKey = dedupeKey(entityType, mapped);
     if (rowDedupeKey && seenKeys.has(rowDedupeKey)) {
       duplicateCount += 1;
       continue;
     }
     if (rowDedupeKey) seenKeys.add(rowDedupeKey);
+    pending.push({ rowRef, mapped });
+  }
 
+  // Phase 2 (DB-bound): run upserts in parallel up to UPSERT_CONCURRENCY.
+  await runWithConcurrency(pending, UPSERT_CONCURRENCY, async ({ rowRef, mapped }) => {
     try {
       await upsertEntity(tenantId, entityType, mapped);
       successCount += 1;
@@ -208,7 +241,7 @@ export async function processConnectorChunk(params: {
         errors.push(makeError(rowRef, "UPSERT_FAILED", "Unknown processing error.", "internal"));
       }
     }
-  }
+  });
 
   if (errors.length > 0) {
     await prisma.integrationSyncError.createMany({
