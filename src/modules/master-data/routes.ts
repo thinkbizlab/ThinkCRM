@@ -620,7 +620,16 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     if (!federationCfg) return localRows;
 
     const localExternalRefs = new Set(localRows.map((r) => r.externalRef).filter((v): v is string => !!v));
-    const federatedHits = await searchFederatedCustomers(tenantId, query.q, query.limit).catch(() => []);
+    const federatedHits = await searchFederatedCustomers(tenantId, query.q, query.limit).catch((err) => {
+      // Federation failures here are expected to be transient (timeout, breaker
+      // open). Log so we can see the real reason; return empty so the route
+      // still serves the local-only results.
+      request.log.warn(
+        { err, tenantId, q: query.q },
+        "[federation] searchFederatedCustomers failed; returning local-only results"
+      );
+      return [];
+    });
     // Surface ALL upstream hits including disabled — keep the disabled flag on
     // the created shadow row so the frontend can render it greyed-out at the
     // bottom of the list. Filter only by "already in local results".
