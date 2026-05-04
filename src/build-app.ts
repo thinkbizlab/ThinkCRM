@@ -92,6 +92,7 @@ import { dealRoutes } from "./modules/deals/routes.js";
 import { visitRoutes } from "./modules/visits/routes.js";
 import { prospectRoutes } from "./modules/prospects/routes.js";
 import { enterFederationRequestScope } from "./modules/federation/customer-federation.js";
+import { widgetRoutes } from "./modules/widget/routes.js";
 import { integrationRoutes } from "./modules/integrations/routes.js";
 import { aiRoutes } from "./modules/ai/routes.js";
 import { dashboardRoutes } from "./modules/dashboard/routes.js";
@@ -340,6 +341,7 @@ export async function buildApp() {
   await app.register(dealRoutes, { prefix: "/api/v1" });
   await app.register(visitRoutes, { prefix: "/api/v1" });
   await app.register(prospectRoutes, { prefix: "/api/v1" });
+  await app.register(widgetRoutes, { prefix: "/api/v1" });
   await app.register(billingRoutes, { prefix: "/api/v1" });
   await app.register(integrationRoutes, { prefix: "/api/v1" });
   await app.register(aiRoutes, { prefix: "/api/v1" });

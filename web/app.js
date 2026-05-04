@@ -1504,6 +1504,7 @@ async function loginWithPasskey() {
     hideAppLoading();
     scheduleAdminChromeRefresh();
     startIdleWatch();
+    mountSupportWidget();
   } catch (err) {
     if (err.name === "NotAllowedError") {
       authMessage.textContent = "Passkey sign-in was cancelled.";
@@ -1559,6 +1560,7 @@ qs("#oauth-passkey-btn")?.addEventListener("click", loginWithPasskey);
   }
   hideAppLoading();
   scheduleAdminChromeRefresh();
+  mountSupportWidget();
 })();
 // Handle platform Connect redirect-backs (?xxx_connected=1 or ?xxx_error=…)
 // Stash params before app loads; act on them once the shell is ready.
@@ -9189,6 +9191,57 @@ let _idleActivityHandler = null;
 
 // ── Presence heartbeat ────────────────────────────────────────────────────────
 // Bumps the authenticated user's lastSeenAt every 60s while tab is visible
+// Primedesk support-widget mount. Runs once after login lands the user in
+// the app shell. Calls /api/v1/widget-token (which gates on the user's JWT
+// + the server's PRIMEDESK_WIDGET_SECRET) then hands the returned token
+// to the widget bundle loaded via index.html. If the widget bundle hasn't
+// finished loading yet we wait and retry; if the env secret isn't set the
+// endpoint returns 503 and we silently bail (dev installs).
+let _supportWidgetMounted = false;
+async function mountSupportWidget() {
+  if (_supportWidgetMounted) return;
+  let result;
+  try {
+    result = await api("/widget-token");
+  } catch (err) {
+    // 503 = secret not configured; anything else = log + skip silently so
+    // a Primedesk outage doesn't block the rest of the app.
+    if (typeof console !== "undefined") {
+      console.warn("[support-widget] token fetch failed:", err?.message || err);
+    }
+    return;
+  }
+  const token = result?.token;
+  if (!token) return;
+  // The widget bundle is `defer`-loaded; if it isn't ready yet, poll for
+  // window.PrimeDeskWidget for up to 8s before giving up.
+  const deadline = Date.now() + 8_000;
+  while (typeof window.PrimeDeskWidget?.init !== "function") {
+    if (Date.now() > deadline) {
+      if (typeof console !== "undefined") {
+        console.warn("[support-widget] PrimeDeskWidget global not available after 8s");
+      }
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  try {
+    window.PrimeDeskWidget.init({
+      sourceApp: "workcrm",
+      token,
+      context: { url: window.location.href },
+      theme: { primary: "#000000" },
+      style: "badge",
+      label: "Support",
+    });
+    _supportWidgetMounted = true;
+  } catch (err) {
+    if (typeof console !== "undefined") {
+      console.warn("[support-widget] init failed:", err?.message || err);
+    }
+  }
+}
+
 // so the Super Admin → Analytics dashboard can show "online now" counts.
 let _heartbeatTimerId = null;
 function startHeartbeat() {

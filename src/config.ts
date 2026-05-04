@@ -38,6 +38,11 @@ const configSchema = z.object({
   // Optional in dev/test; REQUIRED in production for integration credential encryption.
   // Generate with: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
   ENCRYPTION_KEY: z.preprocess(v => (v === "" ? undefined : v), z.string().regex(/^[0-9a-fA-F]{64}$/, "ENCRYPTION_KEY must be 64 hex characters").optional()),
+  // Optional: Primedesk support widget. Set to the secret you generated /
+  // rotated in the Primedesk admin. When unset, the widget endpoint returns
+  // 503 and the frontend silently skips mounting (so dev installs work
+  // without it). Min 32 chars matches Primedesk's secret length.
+  PRIMEDESK_WIDGET_SECRET: z.preprocess(v => (v === "" ? undefined : v), z.string().min(32).optional()),
   // Trust X-Forwarded-* from a reverse proxy (client IP, HTTPS). Enabled automatically on Vercel or when APP_URL is set; set TRUST_PROXY=1 for other hosts.
   TRUST_PROXY: z.preprocess(v => {
     if (v === undefined || v === "") return undefined;

@@ -1047,6 +1047,11 @@
       </div>
     </div>
 
-    <script type="module" src="/app.js?v=20260503-federation-merge"></script>
+    <script type="module" src="/app.js?v=20260504-widget"></script>
+    <!-- Primedesk support widget. Loads the widget bundle eagerly; the
+         actual mount runs from app.js after login (mountSupportWidget),
+         which uses the existing Bearer-auth `api()` helper to fetch
+         /api/v1/widget-token. The widget bundle exposes window.PrimeDeskWidget. -->
+    <script src="https://primedesk.workstationoffice.com/widget.js" defer></script>
   </body>
 </html>
