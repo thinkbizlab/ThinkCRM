@@ -491,18 +491,19 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       owner: { select: { id: true, fullName: true } }
     } as const;
 
-    // Hard cap on rows returned per list call. The list view renders only
-    // shadow-row fields (name, code, customerGroup, owner) — federation
-    // overlay isn't needed and would issue one live MySQL query per row.
-    // 2000 is enough for paged scrolling; clients should use /customers/search
-    // (already paginated + federation-aware) for finding specific records in
-    // tenants with > 2K customers.
+    // Hard cap on rows returned per list call — see PR #19. The list view
+    // renders only shadow-row fields; federation overlay reserved for
+    // /customers/:id detail. By default we hide disabled customers from
+    // every scope: ERP-marked-inactive customers shouldn't clutter the rep's
+    // working set. Caller can opt back in with ?includeDisabled=true.
     const LIST_LIMIT = 2000;
+    const includeDisabled = (request.query as { includeDisabled?: string }).includeDisabled === "true";
+    const disabledClause = includeDisabled ? {} : { disabled: false };
 
     if (query.scope === "unassigned") {
       requireRoleAtLeast(request, UserRole.ADMIN);
       return prisma.customer.findMany({
-        where: { tenantId, ownerId: null },
+        where: { tenantId, ownerId: null, ...disabledClause },
         include: includeShape,
         orderBy: { createdAt: "desc" },
         take: LIST_LIMIT
@@ -514,12 +515,8 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       query.scope === "team" || query.scope === "all"
         ? { in: visibleUserIdList }
         : requesterId;
-    // List view: skip `addresses` (unused in table + list-derived consumers)
-    // and narrow `contacts` to the fields the UI actually reads. Full
-    // relations are re-fetched by `/customers/:id` on detail open.
-    // No federation hydrate here — see LIST_LIMIT comment above.
     return prisma.customer.findMany({
-      where: { tenantId, ownerId: ownerFilter },
+      where: { tenantId, ownerId: ownerFilter, ...disabledClause },
       include: includeShape,
       orderBy: { createdAt: "desc" },
       take: LIST_LIMIT
