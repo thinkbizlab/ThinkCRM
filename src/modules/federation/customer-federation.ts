@@ -85,6 +85,20 @@ type FederationConfig = {
 
 // ── Config resolution + caching ─────────────────────────────────────────────
 
+/**
+ * Pull the first table identifier out of a SQL `FROM` clause. Used to infer
+ * the federation table when the source is in SQL mode and the operator
+ * hasn't set `customerTable` explicitly. Handles backtick quoting and
+ * optional `AS alias`. Returns null if the regex doesn't match cleanly.
+ */
+export function inferTableFromSql(sql: string | null | undefined): string | null {
+  if (!sql) return null;
+  // Strip a leading -- comment line if present, then match the first FROM.
+  const cleaned = sql.replace(/--[^\n]*\n/g, " ");
+  const m = /\bFROM\s+`?([A-Za-z_][A-Za-z0-9_]*)`?/i.exec(cleaned);
+  return m && m[1] ? m[1] : null;
+}
+
 const CONFIG_TTL_MS = 60_000;
 type CachedConfig = { value: FederationConfig | null; expiresAt: number };
 const tenantConfigCache = new Map<string, CachedConfig>();
@@ -153,10 +167,29 @@ export async function getFederationConfig(tenantId: string): Promise<FederationC
   const keyColumn = typeof raw.keyColumn === "string" && raw.keyColumn ? raw.keyColumn : "external_ref";
   const explicitTable = typeof raw.customerTable === "string" && raw.customerTable ? raw.customerTable : null;
   const legacyTable = typeof raw.table === "string" && raw.table ? raw.table : null;
+  // Best-effort inference for the common ERPNext / one-table-per-doctype case:
+  // when the source uses SQL mode, the table is usually right after `FROM`.
+  const inferredTable = inferTableFromSql(cfg.query.mode === "SQL" ? cfg.query.sql : null);
   const table = explicitTable
     ?? (cfg.query.mode === "TABLE" ? cfg.query.table : null)
     ?? legacyTable
-    ?? "customer";
+    ?? inferredTable;
+  if (!table) {
+    // Previously this defaulted to "customer", which silently produced
+    // "Table doesn't exist" errors in the per-row federation read for any
+    // tenant whose actual table wasn't named "customer" (every ERPNext
+    // tenant — table is `tabCustomer`). The error tripped the circuit
+    // breaker and the page served the cached/stale banner. Refuse to
+    // guess; mark the tenant as non-federated so reads fall through to
+    // the local shadow row, and log so the operator can fix Settings.
+    console.warn(
+      "[federation] tenant=%s source=%s has no customerTable configured and none could be inferred from the source SQL — federation disabled for this tenant; set 'Customer table' in Settings → Data Sync to enable.",
+      tenantId,
+      source.id
+    );
+    tenantConfigCache.set(tenantId, { value: null, expiresAt: Date.now() + CONFIG_TTL_MS });
+    return null;
+  }
   const value: FederationConfig = {
     sourceId: source.id,
     cfg,
