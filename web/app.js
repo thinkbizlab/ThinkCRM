@@ -8994,7 +8994,15 @@ function installMasterPageSizeDelegation() {
           state.customerListPage = 1;
           // Server caps pageSize at 500; "all" maps to that ceiling.
           state.customerListPageSize = v === "all" ? 500 : Math.max(1, Math.min(500, Number(v) || 100));
-          loadMaster().catch((err) => setStatus(err?.message || "Failed to reload customers", true));
+          const isSearchMode = !!(state.customerListQuery || "").trim();
+          if (isSearchMode) {
+            // Search results are cached client-side — no refetch needed.
+            const bodyEl = document.querySelector("#cust-body");
+            const termOptions = state.cache.masterRenderers?.customerTermOptions || "";
+            if (bodyEl) refreshCustBody(bodyEl, termOptions);
+          } else {
+            loadMaster().catch((err) => setStatus(err?.message || "Failed to reload customers", true));
+          }
         } else if (key === "item") {
           state.itemListPage = 1;
           state.cache.masterRenderers?.item?.();
@@ -9027,22 +9035,25 @@ function isCustomerGroupApiLocked() {
   return !!(state.user?.masterApiLock?.manageCustomerGroupsByApi || state.cache.masterApiLock?.manageCustomerGroupsByApi);
 }
 
+// Returns the rows to render in the customer master table.
+// - Empty search box → cached page (state.cache.customers, top 2000 by createdAt)
+// - With search text → server-fetched results (state.cache.customerSearchResults,
+//   set by triggerCustomerSearch). Server-side search covers the full tenant
+//   (Postgres + federated MySQL via /customers/search) so customers beyond
+//   the cached top-2000 are findable. Disabled customers come last.
 function filteredCustomers() {
   const q = (state.customerListQuery || "").toLowerCase().trim();
   const defs = getCustomFieldDefinitions("customers");
   const cfFilters = state.customerCustomFieldFilters || {};
   const groupFilter = state.customerGroupFilter || "";
-  // Server-paginated source. Search/group/cf filters narrow only the current
-  // page; full-set search needs /customers/search (not yet wired into list).
-  const source = state.cache.customerListPage || state.cache.customers || [];
+  // Source selection:
+  // - q set     → full-tenant server search results (PR #21, /customers/search)
+  // - else      → server-paginated current page (this PR)
+  // - fallback  → bare cache for non-list consumers
+  const source = q
+    ? (state.cache.customerSearchResults || [])
+    : (state.cache.customerListPage || state.cache.customers || []);
   return source.filter((c) => {
-    if (q) {
-      const matches =
-        c.customerCode?.toLowerCase().includes(q) ||
-        c.name?.toLowerCase().includes(q) ||
-        c.taxId?.toLowerCase().includes(q);
-      if (!matches) return false;
-    }
     if (groupFilter) {
       if (groupFilter === "__none__") {
         if (c.customerGroup) return false;
@@ -9052,6 +9063,29 @@ function filteredCustomers() {
     }
     return matchesCustomFieldFilters(c, defs, cfFilters);
   });
+}
+
+// Server-side search — used by the master-page search input. Returns full
+// tenant coverage including disabled customers (active first, disabled last)
+// and federation-only customers not yet in the cached top-2000.
+async function triggerCustomerSearch(bodyEl, termOptions) {
+  const q = (state.customerListQuery || "").trim();
+  if (!q || q.length < 2) {
+    // Empty / too short → clear results, fall back to cached page rendering
+    state.cache.customerSearchResults = null;
+    state.customerListPage = 1;
+    refreshCustBody(bodyEl, termOptions);
+    return;
+  }
+  try {
+    const scope = state.customerScope || "mine";
+    const rows = await api(`/customers/search?q=${encodeURIComponent(q)}&scope=${encodeURIComponent(scope)}&limit=100`);
+    state.cache.customerSearchResults = Array.isArray(rows) ? rows : [];
+    state.customerListPage = 1;
+    refreshCustBody(bodyEl, termOptions);
+  } catch (err) {
+    setStatus(err?.message || "Search failed.", true);
+  }
 }
 
 function getCachedCustomerById(customerId) {
@@ -9377,10 +9411,11 @@ function buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk
       </table>`;
 
   const pageSize = state.customerListPageSize || 100;
-  // Server-paginated: total comes from the server, not from `all.length`
-  // (which is just what's loaded for the current page, post-filter).
+  // Browse: total from server count. Search: total = number of search hits
+  // (server returns them all in one shot, client-paginates for display).
+  const isSearchMode = !!(state.customerListQuery || "").trim();
   const paginationHtml = masterPaginationHtml({
-    total: state.customerListTotal || all.length,
+    total: isSearchMode ? all.length : (state.customerListTotal || all.length),
     page,
     totalPages,
     key: "customer",
@@ -9507,8 +9542,15 @@ function attachCustBodyDelegation(bodyEl) {
     if (prevBtn) {
       if (state.customerListPage <= 1) return;
       state.customerListPage -= 1;
-      showPageLoading("Loading…");
-      loadMaster().finally(() => hidePageLoading());
+      // Search mode is client-paginated over cached results — just re-render.
+      // Browse mode needs a server fetch to get the new page's rows.
+      const isSearchMode = !!(state.customerListQuery || "").trim();
+      if (isSearchMode) {
+        refreshCustBody(bodyEl, bodyEl._custCtx?.termOptions || "");
+      } else {
+        showPageLoading("Loading…");
+        loadMaster().finally(() => hidePageLoading());
+      }
       return;
     }
     const nextBtn = t.closest('[data-page-next="customer"]');
@@ -9516,8 +9558,13 @@ function attachCustBodyDelegation(bodyEl) {
       const totalPages = bodyEl._custCtx?.totalPages || 1;
       if (state.customerListPage >= totalPages) return;
       state.customerListPage += 1;
-      showPageLoading("Loading…");
-      loadMaster().finally(() => hidePageLoading());
+      const isSearchMode = !!(state.customerListQuery || "").trim();
+      if (isSearchMode) {
+        refreshCustBody(bodyEl, bodyEl._custCtx?.termOptions || "");
+      } else {
+        showPageLoading("Loading…");
+        loadMaster().finally(() => hidePageLoading());
+      }
       return;
     }
   });
@@ -9864,12 +9911,17 @@ function openBulkEditCustomersModal() {
 function refreshCustBody(bodyEl, termOptions) {
   const all = filteredCustomers();
   const pageSize = state.customerListPageSize || 100;
-  // Server total drives page count; current-page rows come from the server.
-  const totalPages = Math.max(1, Math.ceil((state.customerListTotal || 0) / pageSize));
+  // Browse mode (no query): server already paginated; total comes from the
+  // count call, slice is the full page.
+  // Search mode: /customers/search returns up to 100 hits in one shot —
+  // client-paginate them so the same prev/next UI keeps working.
+  const isSearchMode = !!(state.customerListQuery || "").trim();
+  const total = isSearchMode ? all.length : (state.customerListTotal || 0);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
   state.customerListPage = Math.min(state.customerListPage, totalPages);
   const page = state.customerListPage;
   const start = (page - 1) * pageSize;
-  const slice = all;
+  const slice = isSearchMode ? all.slice(start, start + pageSize) : all;
   const role = state.user?.role ?? "REP";
   const isAdmin = role === "ADMIN";
   const apiLocked = isCustomerApiLocked();
@@ -9884,11 +9936,13 @@ function refreshCustBody(bodyEl, termOptions) {
 function renderCustomerListSection(container, termOptions) {
   const all = filteredCustomers();
   const pageSize = state.customerListPageSize || 100;
-  const totalPages = Math.max(1, Math.ceil((state.customerListTotal || 0) / pageSize));
+  const isSearchMode = !!(state.customerListQuery || "").trim();
+  const total = isSearchMode ? all.length : (state.customerListTotal || 0);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
   state.customerListPage = Math.min(state.customerListPage, totalPages);
   const page = state.customerListPage;
   const start = (page - 1) * pageSize;
-  const slice = all;
+  const slice = isSearchMode ? all.slice(start, start + pageSize) : all;
   const role = state.user?.role ?? "REP";
   const isAdmin = role === "ADMIN";
   const canSeeTeam = ["MANAGER", "SUPERVISOR"].includes(role);
@@ -9951,14 +10005,13 @@ function renderCustomerListSection(container, termOptions) {
     </div>
   `;
 
-  // Search narrows the CURRENT server page only — full-set search would
-  // require switching to /customers/search (TODO). Don't reset page: prev/next
-  // still walks the unfiltered server pagination, so the user can manually
-  // page through to find matches on other pages while the filter is active.
+  // Search — debounced server-side search. With a non-empty query we hit
+  // /customers/search (covers the full tenant, including federation + disabled).
+  // With an empty query we render from the server-paginated page.
   const bodyEl = container.querySelector("#cust-body");
   const debouncedCustSearch = debounce(() => {
-    refreshCustBody(bodyEl, termOptions);
-  }, 250);
+    triggerCustomerSearch(bodyEl, termOptions);
+  }, 300);
   container.querySelector("#cust-search-input")?.addEventListener("input", (e) => {
     state.customerListQuery = e.target.value;
     debouncedCustSearch();
@@ -9969,6 +10022,10 @@ function renderCustomerListSection(container, termOptions) {
     btn.addEventListener("click", async () => {
       state.customerScope = btn.dataset.scope;
       state.customerListPage = 1;
+      // Clear server-search results — they were scoped to the previous pill
+      // and would now show wrong-scope rows. The next search input keystroke
+      // (if any) re-fetches with the new scope.
+      state.cache.customerSearchResults = null;
       showPageLoading("Loading…");
       try { await loadMaster(); } finally { hidePageLoading(); }
     });

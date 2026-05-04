@@ -80,7 +80,7 @@ const customerGroupUpdateSchema = customerGroupSchema.partial();
 const customerSchemaBase = z.object({
   // customerCode is required for ACTIVE customers (real ERP code) but optional
   // for DRAFTs captured in the field before ERP sync.
-  customerCode: z.string().min(2).max(40).optional(),
+  customerCode: z.string().min(2).max(500).optional(),
   name: z.string().min(2).max(200),
   customerType: z.nativeEnum(CustomerType).optional(),
   taxId: z.string().max(20).optional(),
@@ -117,7 +117,10 @@ const customerUpdateSchema = customerSchemaBase.omit({ customerCode: true, statu
 
 const customerSearchQuerySchema = z.object({
   q: z.string().trim().min(2).max(120),
-  limit: z.coerce.number().int().min(1).max(20).optional().default(8),
+  // limit defaults to 8 (autocomplete-style) but can be raised for the
+  // master-page search-as-list use case. Hard cap 100 keeps response size
+  // bounded and matches the list view's per-page sizing.
+  limit: z.coerce.number().int().min(1).max(100).optional().default(8),
   scope: z.enum(["mine", "team", "all"]).optional().default("mine")
 });
 
@@ -576,11 +579,14 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
         ? { in: visibleUserIdList }
         : requesterId;
 
+    // Include disabled customers in results (active first, disabled at bottom)
+    // — admins/managers need to be able to find disabled customers to re-enable
+    // or check history. Sort: disabled ASC (false=0 first, true=1 last), then
+    // by name for stable order within each group.
     const localRows = await prisma.customer.findMany({
       where: {
         tenantId,
         ownerId: ownerFilter,
-        disabled: false,
         OR: [
           { name: { contains: query.q, mode: "insensitive" } },
           { customerCode: { contains: query.q, mode: "insensitive" } }
@@ -591,11 +597,13 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
         name: true,
         customerCode: true,
         status: true,
+        disabled: true,
         draftCreatedByUserId: true,
         externalRef: true,
         owner: { select: { id: true, fullName: true } }
       },
       orderBy: [
+        { disabled: "asc" },  // active (false) first, disabled (true) last
         { name: "asc" },
         { createdAt: "desc" }
       ],
@@ -613,19 +621,20 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
 
     const localExternalRefs = new Set(localRows.map((r) => r.externalRef).filter((v): v is string => !!v));
     const federatedHits = await searchFederatedCustomers(tenantId, query.q, query.limit).catch(() => []);
-    // Honor the upstream's disabled flag — never surface (and never auto-create
-    // a shadow row for) a customer the ERP has disabled. The disabled column
-    // name is taken from the operator's mapping if present, else "disabled".
+    // Surface ALL upstream hits including disabled — keep the disabled flag on
+    // the created shadow row so the frontend can render it greyed-out at the
+    // bottom of the list. Filter only by "already in local results".
     const disabledColumn = federationCfg.mappings.find((m) => m.targetField === "disabled")?.sourceField ?? "disabled";
     const isDisabled = (raw: Record<string, unknown>): boolean => {
       const v = raw[disabledColumn];
       return v === true || v === 1 || v === "1" || v === "true" || v === "TRUE";
     };
-    const newRefs = federatedHits.filter((hit) => !localExternalRefs.has(hit.externalRef) && !isDisabled(hit.raw));
+    const newRefs = federatedHits.filter((hit) => !localExternalRefs.has(hit.externalRef));
     if (newRefs.length === 0) return localRows;
 
     const created: typeof localRows = [];
     for (const hit of newRefs) {
+      const hitDisabled = isDisabled(hit.raw);
       // Upsert by (tenantId, externalRef) — there's a unique constraint on
       // that pair so concurrent searches won't dupe.
       const shadow = await prisma.customer.upsert({
@@ -636,15 +645,17 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
           externalRef: hit.externalRef,
           name: hit.name,
           status: "ACTIVE",
+          disabled: hitDisabled,
           // customerCode pulled from MySQL when present so list rows show ERP code
           customerCode: typeof hit.raw.customer_code === "string" ? hit.raw.customer_code : null
         },
-        update: { name: hit.name },
+        update: { name: hit.name, disabled: hitDisabled },
         select: {
           id: true,
           name: true,
           customerCode: true,
           status: true,
+          disabled: true,
           draftCreatedByUserId: true,
           externalRef: true,
           owner: { select: { id: true, fullName: true } }
@@ -652,7 +663,13 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       });
       created.push(shadow);
     }
-    return [...localRows, ...created].slice(0, query.limit);
+    // Merge local + federated, then re-sort: active first, disabled last.
+    // Within each group, preserve existing order (local-first within active so
+    // already-known customers come before fresh federation-created shadows).
+    const merged = [...localRows, ...created];
+    const activeRows = merged.filter((r) => !r.disabled);
+    const disabledRows = merged.filter((r) => r.disabled);
+    return [...activeRows, ...disabledRows].slice(0, query.limit);
   });
 
   app.get("/customers/:id", async (request, reply) => {
@@ -1299,7 +1316,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
   });
 
   const promoteBodySchema = z.object({
-    customerCode: z.string().trim().min(2).max(40)
+    customerCode: z.string().trim().min(2).max(500)
   });
 
   // Manual promotion: admin (or the rep who drafted it, for their own prospect)
@@ -2109,7 +2126,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
   });
 
   const customerImportRow = z.object({
-    customerCode: z.string().trim().min(2).max(40),
+    customerCode: z.string().trim().min(2).max(500),
     name: z.string().trim().min(2).max(200),
     customerType: z.nativeEnum(CustomerType).optional(),
     customerGroupCode: z.string().trim().min(1).max(50).optional(),
