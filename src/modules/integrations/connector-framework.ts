@@ -37,8 +37,16 @@ const flexibleBoolean = z.preprocess((v) => {
 }, z.boolean());
 
 const customerMappedSchema = z.object({
-  customerCode: z.string().min(2).max(40),
-  name: z.string().min(2).max(200),
+  // ERPNext's tabCustomer.name (which we map to customerCode) is VARCHAR(140)
+  // and contains long Thai company names with branch suffixes — observed up
+  // to 343 chars on workcrm. Bumped from 40 → 500 to match the realistic
+  // upstream domain. Postgres column is unbounded TEXT so no schema migration
+  // needed.
+  customerCode: z.string().min(2).max(500),
+  // Allow single-char names. ERPNext occasionally has rows with name="-" or
+  // similar — they're real customers and should sync rather than fail
+  // validation. Postgres column accepts anything.
+  name: z.string().min(1).max(200),
   customerType: z.nativeEnum(CustomerType).optional(),
   taxId: z.string().max(20).optional(),
   // Thai-style branch code (e.g. "00000" = HQ). Defaults to "00000"
@@ -267,7 +275,12 @@ function toRunStatus(summary: ConnectorSummary): JobStatus {
 
 type TransformStep = { rule: string; args?: Record<string, unknown> };
 
-const MAX_TRANSFORM_DEPTH = 3;
+// Was 3 — too tight for operator-built nested if/else chains. Real-world
+// example from a workcrm field mapping needs 4 levels (a chain of if-equals
+// then if-equals then if-contains then if-contains, with a `set` at the
+// bottom). Bumped to 8 which fits anything operators write through the UI
+// without hitting recursion-cap silent-passthrough bugs.
+const MAX_TRANSFORM_DEPTH = 8;
 
 function parseTransformRule(raw: string | null | undefined): TransformStep[] {
   if (!raw) return [];
