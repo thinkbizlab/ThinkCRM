@@ -408,13 +408,9 @@ export function renderBrandingSettingsPage({
               <input class="form-input" name="loginSupportEmail" type="email" maxlength="200" placeholder="support@acme.com" value="${escHtml(branding.loginSupportEmail || "")}" style="margin-top:var(--sp-1)" />
             </label>
           </div>
-          <div class="settings-field-row" style="flex-direction:column;gap:var(--sp-2);align-items:flex-start">
-            <span class="form-label">Visible Sign-in Options</span>
-            <label class="form-label" style="flex-direction:row;align-items:center;gap:var(--sp-2)"><input type="checkbox" name="loginShowSignup" ${branding.loginShowSignup !== false ? "checked" : ""} /> Show "Create a new workspace" link</label>
-            <label class="form-label" style="flex-direction:row;align-items:center;gap:var(--sp-2)"><input type="checkbox" name="loginShowGoogle" ${branding.loginShowGoogle !== false ? "checked" : ""} /> Show Google sign-in</label>
-            <label class="form-label" style="flex-direction:row;align-items:center;gap:var(--sp-2)"><input type="checkbox" name="loginShowMicrosoft" ${branding.loginShowMicrosoft !== false ? "checked" : ""} /> Show Microsoft 365 sign-in</label>
-            <label class="form-label" style="flex-direction:row;align-items:center;gap:var(--sp-2)"><input type="checkbox" name="loginShowPasskey" ${branding.loginShowPasskey !== false ? "checked" : ""} /> Show Passkey sign-in</label>
-          </div>
+          <p class="muted small" style="margin-top:var(--sp-2)">
+            Visible sign-in options moved to <strong>Settings &rarr; Login Methods</strong>.
+          </p>
         </details>
         <div style="display:flex;gap:var(--sp-2);align-items:center;flex-wrap:wrap">
           <button type="submit">Save Branding</button>
@@ -854,10 +850,10 @@ export function wireBrandingSettingsPage({ tenantId, tenantThemeMode = "LIGHT", 
       delete payload.accentGradientColorPicker;
       delete payload.accentGradientAngleRange;
       payload.accentGradientEnabled = fd.get("accentGradientEnabled") === "true" ? "true" : "false";
-      payload.loginShowSignup = fd.get("loginShowSignup") === "on" ? "true" : "false";
-      payload.loginShowGoogle = fd.get("loginShowGoogle") === "on" ? "true" : "false";
-      payload.loginShowMicrosoft = fd.get("loginShowMicrosoft") === "on" ? "true" : "false";
-      payload.loginShowPasskey = fd.get("loginShowPasskey") === "on" ? "true" : "false";
+      // loginShow* fields moved to Settings → Login Methods. Don't include
+      // them in this PUT; the server's branding upsert would otherwise
+      // overwrite the per-tenant choices (the form no longer has those
+      // checkboxes so fd.get returns null → "false" → silent regression).
       payload.themeTokens = {
         background: fd.get("tokenBackground") || undefined,
         text: fd.get("tokenText") || undefined,
@@ -917,11 +913,9 @@ export function wireBrandingSettingsPage({ tenantId, tenantThemeMode = "LIGHT", 
           loginFooterText: "",
           loginTermsUrl: "",
           loginPrivacyUrl: "",
-          loginSupportEmail: "",
-          loginShowSignup: "true",
-          loginShowGoogle: "true",
-          loginShowMicrosoft: "true",
-          loginShowPasskey: "true"
+          loginSupportEmail: ""
+          // loginShow* are owned by Settings → Login Methods; restore-default
+          // here is for visual branding only.
         }
       });
       setStatus("Branding restored to defaults.");
@@ -935,4 +929,82 @@ export function wireBrandingSettingsPage({ tenantId, tenantThemeMode = "LIGHT", 
 
   void tenantThemeMode;
   void renderSettings;
+}
+
+// ── Login Methods ──────────────────────────────────────────────────────────
+//
+// Per-tenant control over which sign-in options the login page shows. Backed
+// by the four loginShow* boolean fields on TenantBranding (originally lived
+// inside the Branding page; broken out so admins find them without scanning
+// a long branding form).
+//
+// Saving uses PUT /tenants/:id/branding/login-methods which only touches
+// these four columns — the full /branding endpoint would re-fill themeMode
+// to "LIGHT" (it has a default) and silently flip the theme.
+
+export function renderLoginMethodsPage({ branding, isAdmin }) {
+  const b = branding ?? {};
+  const isOn = (v) => v !== false; // undefined/null also default to on
+  const row = (name, label, hint) => `
+    <label class="settings-toggle-row">
+      <input type="checkbox" name="${name}" ${isOn(b[name]) ? "checked" : ""} />
+      <div class="settings-toggle-text">
+        <span class="settings-toggle-label">${escHtml(label)}</span>
+        ${hint ? `<span class="settings-toggle-hint">${escHtml(hint)}</span>` : ""}
+      </div>
+    </label>
+  `;
+  return `
+    <section class="card">
+      <header class="settings-section-header">
+        <h3 class="section-title">Login Methods</h3>
+        <p class="muted small">Choose which sign-in options appear on this workspace's login page. Note: a method only appears if both this toggle is on <strong>and</strong> the platform credentials for that provider are configured (Settings → Integrations).</p>
+      </header>
+      ${isAdmin ? `
+      <form id="login-methods-form" class="settings-form">
+        <div class="settings-toggle-list">
+          ${row("loginShowSignup",    "Show \\"Create a new workspace\\" link",
+                "Lets visitors start a brand-new tenant from the login page. Turn off if signups are invite-only.")}
+          ${row("loginShowGoogle",    "Show Google / Gmail sign-in",
+                "Requires a configured Google OAuth credential for this tenant (or a platform-level fallback).")}
+          ${row("loginShowMicrosoft", "Show Microsoft 365 sign-in",
+                "Requires a configured MS365 OAuth credential. Often used by tenants that standardise on Office 365.")}
+          ${row("loginShowPasskey",   "Show Passkey sign-in",
+                "Lets users sign in via WebAuthn (Touch ID / Face ID / hardware key) if their browser supports it.")}
+        </div>
+        <div style="display:flex;gap:var(--sp-2);align-items:center;margin-top:var(--sp-3)">
+          <button type="submit">Save Login Methods</button>
+        </div>
+      </form>
+      ` : `<div class="muted">Admin access required.</div>`}
+    </section>
+  `;
+}
+
+export function wireLoginMethodsPage({ tenantId }) {
+  const { loadSettings } = deps;
+  const form = qs("#login-methods-form");
+  if (!form) return;
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const submitBtn = form.querySelector('button[type="submit"]');
+    const originalText = submitBtn?.textContent;
+    if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "Saving..."; }
+    try {
+      const fd = new FormData(form);
+      const body = {
+        loginShowSignup:    fd.get("loginShowSignup")    === "on",
+        loginShowGoogle:    fd.get("loginShowGoogle")    === "on",
+        loginShowMicrosoft: fd.get("loginShowMicrosoft") === "on",
+        loginShowPasskey:   fd.get("loginShowPasskey")   === "on"
+      };
+      await api(`/tenants/${tenantId}/branding/login-methods`, { method: "PUT", body });
+      setStatus("Login methods saved.");
+      await loadSettings?.();
+    } catch (error) {
+      setStatus(error.message, true);
+    } finally {
+      if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = originalText || "Save Login Methods"; }
+    }
+  });
 }

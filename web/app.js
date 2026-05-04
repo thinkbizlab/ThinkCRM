@@ -4498,6 +4498,7 @@ function renderSettings() {
   const allNavItems = [
     { page: "company",        label: "Company Settings",      ic: "building", roles: ["ADMIN"] },
     { page: "branding",       label: "Branding & Theme",      ic: "palette", roles: ["ADMIN"] },
+    { page: "login-methods",  label: "Login Methods",          ic: "lockKey", roles: ["ADMIN"] },
     { page: "team-structure", label: "Team Structure",         ic: "users", roles: ["ADMIN", "DIRECTOR", "MANAGER", "SUPERVISOR", "REP"] },
     { page: "roles",          label: "Roles & Permissions",   ic: "lockKey", roles: ["ADMIN"] },
     { page: "kpi-targets",    label: "KPI Targets",            ic: "target", roles: ["ADMIN", "DIRECTOR", "MANAGER", "SUPERVISOR", "REP"] },
@@ -4816,6 +4817,10 @@ function renderSettings() {
           isAdmin
         })
       : `<section class="card"><div class="muted">Loading branding settings...</div></section>`;
+  } else if (page === "login-methods") {
+    pageHtml = settingsAdminModule?.renderLoginMethodsPage
+      ? settingsAdminModule.renderLoginMethodsPage({ branding, isAdmin })
+      : `<section class="card"><div class="muted">Loading login methods...</div></section>`;
   } else if (page === "team-structure") {
     const roleColorCls = { DIRECTOR: "org-role--director", MANAGER: "org-role--manager", SUPERVISOR: "org-role--supervisor", REP: "org-role--rep" };
 
@@ -8601,6 +8606,9 @@ function renderSettings() {
   if (page === "branding") {
     settingsAdminModule?.wireBrandingSettingsPage({ tenantId, tenantThemeMode, branding });
   }
+  if (page === "login-methods") {
+    settingsAdminModule?.wireLoginMethodsPage?.({ tenantId });
+  }
 
   qs("#theme-override-auto")?.addEventListener("click", () => {
     state.themeOverride = "AUTO";
@@ -11531,14 +11539,14 @@ async function loadSettings(page = state.settingsPage || "my-profile", options =
   const tenantId = state.user?.tenantId;
   if (!tenantId) return;
   state.settingsPage = page;
-  if (page === "company" || page === "branding") await ensureSettingsAdminModule();
+  if (page === "company" || page === "branding" || page === "login-methods") await ensureSettingsAdminModule();
   if (page === "roles") await ensureDelegationsModule();
   if (page === "cron-jobs") await ensureCronPickerModule();
   if (page === "branding") await ensureThemePresetsModule();
   const role = state.user?.role || "REP";
   const isAdmin = role === "ADMIN";
   const isManager = role === "ADMIN" || role === "DIRECTOR" || role === "MANAGER";
-  const wantsBranding = page === "company" || page === "branding" || page === "kpi-targets";
+  const wantsBranding = page === "company" || page === "branding" || page === "login-methods" || page === "kpi-targets";
   const needsBranding = wantsBranding && (force || !state.cache.branding);
   const needsCompanyConfig = page === "company" && isAdmin && (
     force ||
@@ -12782,6 +12790,7 @@ function renderSettingsFlyin() {
   const all = [
     { page: "company",        label: "Company Settings",     ic: "building",  roles: ["ADMIN"] },
     { page: "branding",       label: "Branding & Theme",     ic: "palette",   roles: ["ADMIN"] },
+    { page: "login-methods",  label: "Login Methods",         ic: "lockKey",   roles: ["ADMIN"] },
     { page: "team-structure", label: "Team Structure",        ic: "users",     roles: ["ADMIN", "DIRECTOR", "MANAGER", "SUPERVISOR", "REP"] },
     { page: "roles",          label: "Roles & Permissions",  ic: "lockKey",   roles: ["ADMIN"] },
     { page: "kpi-targets",    label: "KPI Targets",           ic: "target",    roles: ["ADMIN", "DIRECTOR", "MANAGER", "SUPERVISOR", "REP"] },

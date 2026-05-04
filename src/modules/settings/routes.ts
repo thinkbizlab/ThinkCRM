@@ -891,6 +891,56 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     return branding;
   });
 
+  // Narrow endpoint for the dedicated Settings → Login Methods page. The full
+  // /branding PUT runs the entire brandingSchema (which fills `themeMode`
+  // back to "LIGHT" via .default()), so saving "Show Google: off" via that
+  // path would silently reset the theme. This route accepts only the four
+  // loginShow* fields and updates only those columns.
+  const loginMethodsSchema = z.object({
+    loginShowSignup:    boolFromForm,
+    loginShowGoogle:    boolFromForm,
+    loginShowMicrosoft: boolFromForm,
+    loginShowPasskey:   boolFromForm
+  }).strict();
+  app.put("/tenants/:id/branding/login-methods", async (request) => {
+    const params = request.params as { id: string };
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    assertTenantPathAccess(request, params.id);
+    const parsed = loginMethodsSchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
+    }
+    // Drop undefined keys so Prisma writes only the fields the caller sent.
+    const data: Record<string, boolean> = {};
+    for (const [k, v] of Object.entries(parsed.data)) {
+      if (typeof v === "boolean") data[k] = v;
+    }
+    if (Object.keys(data).length === 0) {
+      throw app.httpErrors.badRequest("At least one loginShow* field is required.");
+    }
+    const branding = await prisma.tenantBranding.upsert({
+      where: { tenantId: params.id },
+      update: data,
+      // Branding row may not exist yet — create with passed flags + defaults
+      // for the few schema-required fields. The hex colors match the
+      // /branding endpoint's defaults.
+      create: {
+        tenantId: params.id,
+        primaryColor: "#7c3aed",
+        secondaryColor: "#0ea5e9",
+        ...data
+      }
+    });
+    await logAuditEvent(
+      params.id,
+      requireUserId(request),
+      "BRANDING_UPDATED",
+      { fields: Object.keys(data), via: "login-methods" },
+      request.ip
+    );
+    return branding;
+  });
+
   app.post("/tenants/:id/branding/logo", async (request, reply) => {
     const params = request.params as { id: string };
     requireRoleAtLeast(request, UserRole.ADMIN);
