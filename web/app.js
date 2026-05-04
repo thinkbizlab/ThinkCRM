@@ -11748,6 +11748,7 @@ loginForm.addEventListener("submit", async (event) => {
     hideAppLoading();
     scheduleAdminChromeRefresh();
     startIdleWatch();
+    mountSupportWidget();
   } catch (error) {
     hideAppLoading();
     authMessage.textContent = error.message;
@@ -12955,6 +12956,7 @@ async function bootstrap() {
     scheduleAdminChromeRefresh();
     startIdleWatch();
     initOfflineSupport().catch(() => {});
+    mountSupportWidget();
   } catch {
     clearTokens();
     clearQueue().catch(() => {});
