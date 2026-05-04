@@ -38,10 +38,14 @@ type Mysql2PoolConnection = {
 // ~50 connections, and 5×N instances + sync overhead can exhaust that.
 const POOL_CONNECTION_LIMIT = 2;
 const POOL_IDLE_TIMEOUT_MS = 30_000;
-// Live reads need to fail fast — never block a UI request for >3s on a sluggish
-// upstream. The scheduled pull keeps its own (longer) defaults.
-const LIVE_CONNECT_TIMEOUT_MS = 2_000;
-const LIVE_QUERY_TIMEOUT_MS = 3_000;
+// Live reads need to fail fast — never block a UI request for too long on a
+// sluggish upstream, but the budget has to actually accommodate a Vercel-SG →
+// remote-Thailand TCP+TLS+MySQL handshake on a cold start. Earlier 2s/3s caps
+// were tight enough that healthy hits were timing out and tripping the
+// circuit breaker; bumped to 5s each. The scheduled pull keeps its own
+// (longer) defaults.
+const LIVE_CONNECT_TIMEOUT_MS = 5_000;
+const LIVE_QUERY_TIMEOUT_MS = 5_000;
 
 // Circuit breaker — when the upstream MySQL is flapping, stop hammering it for
 // 30s. Callers see thrown errors which `hydrateCustomers` already catches and
@@ -79,6 +83,11 @@ function recordFailure(sourceId: string): void {
   if (s.failureTimestamps.length >= CIRCUIT_FAILURE_THRESHOLD) {
     s.openedUntil = now + CIRCUIT_OPEN_DURATION_MS;
     s.failureTimestamps = [];
+    console.warn(
+      "[federation] circuit OPEN for source=%s — refusing federation reads for %dms",
+      sourceId,
+      CIRCUIT_OPEN_DURATION_MS
+    );
   }
 }
 
