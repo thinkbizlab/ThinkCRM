@@ -196,16 +196,22 @@ export async function buildApp() {
     try { r2ConnectSrc.push(new URL(config.R2_PUBLIC_URL).origin); } catch { /* ignore */ }
   }
 
+  // Primedesk support widget loads a script from a different subdomain and
+  // makes XHR calls back to itself; both need to be allow-listed in CSP or
+  // the browser silently blocks them. Frame-src too in case the widget opens
+  // a chat panel inside an iframe (the bundle's docs don't say, but the cost
+  // of allowing one origin is trivial vs leaving a half-loaded widget).
+  const PRIMEDESK_ORIGIN = "https://primedesk.workstationoffice.com";
   await app.register(helmet, {
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
-        scriptSrc: ["'self'", "https://maps.googleapis.com", "https://maps.gstatic.com"],
-        styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+        scriptSrc: ["'self'", "https://maps.googleapis.com", "https://maps.gstatic.com", PRIMEDESK_ORIGIN],
+        styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com", PRIMEDESK_ORIGIN],
         fontSrc: ["'self'", "https://fonts.gstatic.com", "data:"],
         imgSrc: ["'self'", "data:", "https:"],
-        connectSrc: ["'self'", "https://maps.googleapis.com", ...r2ConnectSrc],
-        frameSrc: ["'none'"],
+        connectSrc: ["'self'", "https://maps.googleapis.com", ...r2ConnectSrc, PRIMEDESK_ORIGIN],
+        frameSrc: ["'self'", PRIMEDESK_ORIGIN],
         objectSrc: ["'none'"],
         upgradeInsecureRequests: config.NODE_ENV === "production" ? [] : null,
       }
