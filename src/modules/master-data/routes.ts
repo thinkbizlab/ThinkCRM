@@ -491,14 +491,22 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
       owner: { select: { id: true, fullName: true } }
     } as const;
 
+    // Hard cap on rows returned per list call. The list view renders only
+    // shadow-row fields (name, code, customerGroup, owner) — federation
+    // overlay isn't needed and would issue one live MySQL query per row.
+    // 2000 is enough for paged scrolling; clients should use /customers/search
+    // (already paginated + federation-aware) for finding specific records in
+    // tenants with > 2K customers.
+    const LIST_LIMIT = 2000;
+
     if (query.scope === "unassigned") {
       requireRoleAtLeast(request, UserRole.ADMIN);
-      const rows = await prisma.customer.findMany({
+      return prisma.customer.findMany({
         where: { tenantId, ownerId: null },
         include: includeShape,
-        orderBy: { createdAt: "desc" }
+        orderBy: { createdAt: "desc" },
+        take: LIST_LIMIT
       });
-      return hydrateCustomers(tenantId, rows);
     }
 
     const visibleUserIdList = [...(await listVisibleUserIds(request))];
@@ -509,12 +517,13 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     // List view: skip `addresses` (unused in table + list-derived consumers)
     // and narrow `contacts` to the fields the UI actually reads. Full
     // relations are re-fetched by `/customers/:id` on detail open.
-    const rows = await prisma.customer.findMany({
+    // No federation hydrate here — see LIST_LIMIT comment above.
+    return prisma.customer.findMany({
       where: { tenantId, ownerId: ownerFilter },
       include: includeShape,
-      orderBy: { createdAt: "desc" }
+      orderBy: { createdAt: "desc" },
+      take: LIST_LIMIT
     });
-    return hydrateCustomers(tenantId, rows);
   });
 
   app.get("/customers/search", async (request) => {
