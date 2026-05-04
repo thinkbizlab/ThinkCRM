@@ -57,9 +57,19 @@
                 </div>
                 <button class="login-submit" type="submit">Sign in</button>
               </form>
-              <div id="oauth-providers" class="oauth-providers" hidden>
+              <div id="oauth-providers" class="oauth-providers">
                 <div class="oauth-divider"><span>or sign in with</span></div>
-                <div class="oauth-btns">
+                <!-- Loading skeleton: shown while branding + provider configs
+                     are still in flight, so the section doesn't pop in seconds
+                     after the username/password fields. Hidden once
+                     loadOAuthProviderButtons() resolves; the entire #oauth-providers
+                     panel hides if zero buttons would have rendered. -->
+                <div id="oauth-loading" class="oauth-loading" aria-label="Loading sign-in options" role="status">
+                  <span class="oauth-loading-skeleton"></span>
+                  <span class="oauth-loading-skeleton"></span>
+                  <span class="oauth-loading-skeleton"></span>
+                </div>
+                <div class="oauth-btns" id="oauth-btns" hidden>
                   <button type="button" class="oauth-btn oauth-btn--passkey" id="oauth-passkey-btn" data-login-button="passkey" hidden>
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 18v3c0 .6.4 1 1 1h4v-3h3v-3h2l1.4-1.4a6.5 6.5 0 1 0-4-4Z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/></svg>
                     Passkey
@@ -1047,7 +1057,7 @@
       </div>
     </div>
 
-    <script type="module" src="/app.js?v=20260505-auth-me-slug"></script>
+    <script type="module" src="/app.js?v=20260505-login-skeleton"></script>
     <!-- Primedesk support widget. Loads the widget bundle eagerly; the
          actual mount runs from app.js after login (mountSupportWidget),
          which uses the existing Bearer-auth `api()` helper to fetch

@@ -370,6 +370,28 @@ body {
   content: ""; flex: 1; height: 1px; background: var(--border);
 }
 .oauth-btns { display: flex; flex-direction: column; gap: var(--sp-2); }
+.oauth-loading {
+  display: flex; flex-direction: column; gap: var(--sp-2);
+}
+.oauth-loading-skeleton {
+  display: block;
+  height: 42px;
+  border-radius: var(--r-md);
+  background: linear-gradient(90deg,
+    var(--surface) 0%,
+    var(--surface-raised) 50%,
+    var(--surface) 100%);
+  background-size: 200% 100%;
+  animation: oauth-skeleton-pulse 1.4s ease-in-out infinite;
+  border: 1px solid var(--border);
+}
+@keyframes oauth-skeleton-pulse {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .oauth-loading-skeleton { animation: none; opacity: 0.6; }
+}
 .oauth-btn {
   display: flex; align-items: center; justify-content: center; gap: var(--sp-2);
   width: 100%; padding: 11px 16px; border-radius: var(--r-md);
