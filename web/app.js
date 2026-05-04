@@ -8992,9 +8992,17 @@ function installMasterPageSizeDelegation() {
       try {
         if (key === "customer") {
           state.customerListPage = 1;
-          const bodyEl = document.querySelector("#cust-body");
-          const termOptions = state.cache.masterRenderers?.customerTermOptions || "";
-          if (bodyEl) refreshCustBody(bodyEl, termOptions);
+          // Server caps pageSize at 500; "all" maps to that ceiling.
+          state.customerListPageSize = v === "all" ? 500 : Math.max(1, Math.min(500, Number(v) || 100));
+          const isSearchMode = !!(state.customerListQuery || "").trim();
+          if (isSearchMode) {
+            // Search results are cached client-side — no refetch needed.
+            const bodyEl = document.querySelector("#cust-body");
+            const termOptions = state.cache.masterRenderers?.customerTermOptions || "";
+            if (bodyEl) refreshCustBody(bodyEl, termOptions);
+          } else {
+            loadMaster().catch((err) => setStatus(err?.message || "Failed to reload customers", true));
+          }
         } else if (key === "item") {
           state.itemListPage = 1;
           state.cache.masterRenderers?.item?.();
@@ -9038,10 +9046,14 @@ function filteredCustomers() {
   const defs = getCustomFieldDefinitions("customers");
   const cfFilters = state.customerCustomFieldFilters || {};
   const groupFilter = state.customerGroupFilter || "";
-  const sourceRows = q
+  // Source selection:
+  // - q set     → full-tenant server search results (PR #21, /customers/search)
+  // - else      → server-paginated current page (this PR)
+  // - fallback  → bare cache for non-list consumers
+  const source = q
     ? (state.cache.customerSearchResults || [])
-    : (state.cache.customers || []);
-  return sourceRows.filter((c) => {
+    : (state.cache.customerListPage || state.cache.customers || []);
+  return source.filter((c) => {
     if (groupFilter) {
       if (groupFilter === "__none__") {
         if (c.customerGroup) return false;
@@ -9077,7 +9089,11 @@ async function triggerCustomerSearch(bodyEl, termOptions) {
 }
 
 function getCachedCustomerById(customerId) {
-  return (state.cache.customers || []).find((customer) => customer.id === customerId) || null;
+  return (
+    (state.cache.customerListPage || []).find((c) => c.id === customerId) ||
+    (state.cache.customers || []).find((c) => c.id === customerId) ||
+    null
+  );
 }
 
 function dealsForCustomer(customerId) {
@@ -9394,9 +9410,12 @@ function buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk
         </tbody>
       </table>`;
 
-  const pageSize = getCustPageSize();
+  const pageSize = state.customerListPageSize || 100;
+  // Browse: total from server count. Search: total = number of search hits
+  // (server returns them all in one shot, client-paginates for display).
+  const isSearchMode = !!(state.customerListQuery || "").trim();
   const paginationHtml = masterPaginationHtml({
-    total: all.length,
+    total: isSearchMode ? all.length : (state.customerListTotal || all.length),
     page,
     totalPages,
     key: "customer",
@@ -9521,15 +9540,31 @@ function attachCustBodyDelegation(bodyEl) {
 
     const prevBtn = t.closest('[data-page-prev="customer"]');
     if (prevBtn) {
-      state.customerListPage = Math.max(1, state.customerListPage - 1);
-      refreshCustBody(bodyEl, bodyEl._custCtx?.termOptions || "");
+      if (state.customerListPage <= 1) return;
+      state.customerListPage -= 1;
+      // Search mode is client-paginated over cached results — just re-render.
+      // Browse mode needs a server fetch to get the new page's rows.
+      const isSearchMode = !!(state.customerListQuery || "").trim();
+      if (isSearchMode) {
+        refreshCustBody(bodyEl, bodyEl._custCtx?.termOptions || "");
+      } else {
+        showPageLoading("Loading…");
+        loadMaster().finally(() => hidePageLoading());
+      }
       return;
     }
     const nextBtn = t.closest('[data-page-next="customer"]');
     if (nextBtn) {
       const totalPages = bodyEl._custCtx?.totalPages || 1;
-      state.customerListPage = Math.min(totalPages, state.customerListPage + 1);
-      refreshCustBody(bodyEl, bodyEl._custCtx?.termOptions || "");
+      if (state.customerListPage >= totalPages) return;
+      state.customerListPage += 1;
+      const isSearchMode = !!(state.customerListQuery || "").trim();
+      if (isSearchMode) {
+        refreshCustBody(bodyEl, bodyEl._custCtx?.termOptions || "");
+      } else {
+        showPageLoading("Loading…");
+        loadMaster().finally(() => hidePageLoading());
+      }
       return;
     }
   });
@@ -9875,12 +9910,18 @@ function openBulkEditCustomersModal() {
 
 function refreshCustBody(bodyEl, termOptions) {
   const all = filteredCustomers();
-  const pageSize = getCustPageSize();
-  const totalPages = Math.max(1, Math.ceil(all.length / (pageSize === Infinity ? Math.max(1, all.length) : pageSize)));
+  const pageSize = state.customerListPageSize || 100;
+  // Browse mode (no query): server already paginated; total comes from the
+  // count call, slice is the full page.
+  // Search mode: /customers/search returns up to 100 hits in one shot —
+  // client-paginate them so the same prev/next UI keeps working.
+  const isSearchMode = !!(state.customerListQuery || "").trim();
+  const total = isSearchMode ? all.length : (state.customerListTotal || 0);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
   state.customerListPage = Math.min(state.customerListPage, totalPages);
   const page = state.customerListPage;
-  const start = pageSize === Infinity ? 0 : (page - 1) * pageSize;
-  const slice = pageSize === Infinity ? all : all.slice(start, start + pageSize);
+  const start = (page - 1) * pageSize;
+  const slice = isSearchMode ? all.slice(start, start + pageSize) : all;
   const role = state.user?.role ?? "REP";
   const isAdmin = role === "ADMIN";
   const apiLocked = isCustomerApiLocked();
@@ -9894,12 +9935,14 @@ function refreshCustBody(bodyEl, termOptions) {
 
 function renderCustomerListSection(container, termOptions) {
   const all = filteredCustomers();
-  const pageSize = getCustPageSize();
-  const totalPages = Math.max(1, Math.ceil(all.length / (pageSize === Infinity ? Math.max(1, all.length) : pageSize)));
+  const pageSize = state.customerListPageSize || 100;
+  const isSearchMode = !!(state.customerListQuery || "").trim();
+  const total = isSearchMode ? all.length : (state.customerListTotal || 0);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
   state.customerListPage = Math.min(state.customerListPage, totalPages);
   const page = state.customerListPage;
-  const start = pageSize === Infinity ? 0 : (page - 1) * pageSize;
-  const slice = pageSize === Infinity ? all : all.slice(start, start + pageSize);
+  const start = (page - 1) * pageSize;
+  const slice = isSearchMode ? all.slice(start, start + pageSize) : all;
   const role = state.user?.role ?? "REP";
   const isAdmin = role === "ADMIN";
   const canSeeTeam = ["MANAGER", "SUPERVISOR"].includes(role);
@@ -9964,7 +10007,7 @@ function renderCustomerListSection(container, termOptions) {
 
   // Search — debounced server-side search. With a non-empty query we hit
   // /customers/search (covers the full tenant, including federation + disabled).
-  // With an empty query we render from the cached page.
+  // With an empty query we render from the server-paginated page.
   const bodyEl = container.querySelector("#cust-body");
   const debouncedCustSearch = debounce(() => {
     triggerCustomerSearch(bodyEl, termOptions);
@@ -10007,10 +10050,10 @@ function renderCustomerListSection(container, termOptions) {
     openDuplicatesModal();
   });
 
-  // Customer group filter
+  // Customer group filter — narrows the current server page only (same
+  // semantics as the search input above).
   container.querySelector("#cust-group-filter")?.addEventListener("change", (e) => {
     state.customerGroupFilter = e.target.value || "";
-    state.customerListPage = 1;
     const bodyEl = container.querySelector("#cust-body");
     refreshCustBody(bodyEl, termOptions);
   });
@@ -10024,12 +10067,10 @@ function renderCustomerListSection(container, termOptions) {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
     state.customerCustomFieldFilters = collectCustomFieldFilters(fd, getCustomFieldDefinitions("customers"));
-    state.customerListPage = 1;
     renderCustomerListSection(container, termOptions);
   });
   container.querySelector("#cust-cf-filter-clear")?.addEventListener("click", () => {
     state.customerCustomFieldFilters = {};
-    state.customerListPage = 1;
     renderCustomerListSection(container, termOptions);
   });
 
@@ -11192,10 +11233,31 @@ async function loadMaster(page = state.masterPage || "customers", options = {}) 
   }
 
   if (page === "customers" && needsCustomers) {
+    // Bare-array fetch keeps `state.cache.customers` populated for non-list
+    // consumers (Excel import templates, lookup-by-id). Still capped at 2000
+    // server-side; tenants beyond that cap will see truncated templates —
+    // same behavior as today.
     requests.push(
       api(`/customers${scopeParam}`).then((customers) => {
         state.cache.customers = customers;
         state.cache.customerScopeLoaded = state.customerScope;
+      })
+    );
+  }
+  if (page === "customers") {
+    // Paginated fetch drives the list view itself. Re-runs every loadMaster
+    // (page change, scope change, refresh) so prev/next can navigate beyond
+    // the 2K cap on the bare endpoint.
+    const pageNum = state.customerListPage || 1;
+    const pageSize = state.customerListPageSize || 100;
+    const params = new URLSearchParams();
+    if (state.customerScope !== "mine") params.set("scope", state.customerScope);
+    params.set("page", String(pageNum));
+    params.set("pageSize", String(pageSize));
+    requests.push(
+      api(`/customers?${params.toString()}`).then((response) => {
+        state.cache.customerListPage = Array.isArray(response?.rows) ? response.rows : [];
+        state.customerListTotal = Number.isFinite(response?.total) ? response.total : 0;
       })
     );
   }
