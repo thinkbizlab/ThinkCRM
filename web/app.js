@@ -9198,16 +9198,17 @@ let _idleActivityHandler = null;
 // finished loading yet we wait and retry; if the env secret isn't set the
 // endpoint returns 503 and we silently bail (dev installs).
 //
-// The widget is opt-in per tenant. The backend authoritatively gates on
-// ALLOWED_TENANT_SLUGS (see src/modules/widget/routes.ts); we always make the
-// fetch and let the server respond with 200 (allowed) or 403 (not allowed).
-// The previous frontend short-circuit caused silent skips when state.user.
-// tenantSlug carried unexpected casing/whitespace — better to incur one HTTP
-// round-trip per login and surface the real reason in server logs.
+// The widget is opt-in per tenant. Backend authoritatively enforces via
+// ALLOWED_TENANT_SLUGS in src/modules/widget/routes.ts; this frontend
+// allowlist short-circuits the network call for non-allowed tenants. Both
+// lists must stay in sync. (The earlier "always fetch" diagnostic confirmed
+// /auth/me was missing tenantSlug — fixed in src/modules/auth/routes.ts so
+// state.user.tenantSlug is populated regardless of login path.)
+const SUPPORT_WIDGET_TENANT_SLUGS = new Set(["workcrm"]);
 let _supportWidgetMounted = false;
 async function mountSupportWidget() {
   if (_supportWidgetMounted) return;
-  if (!state.user) return; // not logged in yet
+  if (!SUPPORT_WIDGET_TENANT_SLUGS.has(state.user?.tenantSlug || "")) return;
   let result;
   try {
     result = await api("/widget-token");

@@ -88,16 +88,6 @@ export const widgetRoutes: FastifyPluginAsync = async (app) => {
       where: { id: tenantId },
       select: { slug: true }
     });
-    // Diagnostic: log every call (slug + allow result) so Vercel runtime
-    // logs make it obvious why a user gets a 403 vs 200. One log line per
-    // request; no PII beyond the tenant slug. Remove after the workcrm
-    // rollout settles.
-    console.log(
-      "[widget-token] tenantId=%s slug=%j allowed=%s",
-      tenantId,
-      tenant?.slug ?? null,
-      tenant ? ALLOWED_TENANT_SLUGS.has(tenant.slug) : false
-    );
     if (!tenant || !ALLOWED_TENANT_SLUGS.has(tenant.slug)) {
       // Per-tenant opt-in. Other tenants get a 403 even if the secret env
       // var is set — they have to be added to ALLOWED_TENANT_SLUGS first.

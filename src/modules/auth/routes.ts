@@ -1077,6 +1077,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       prisma.tenant.findUnique({
         where: { id: tenantId },
         select: {
+          slug: true,
           manageCustomersByApi: true,
           manageItemsByApi: true,
           managePaymentTermsByApi: true,
@@ -1089,6 +1090,11 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     }
     return {
       ...user,
+      // The login response includes `tenantSlug` but `/auth/me` historically did not.
+      // The mismatch silently broke any frontend code that branched on the slug after
+      // a cold-load (e.g. the support-widget tenant gate). Always include it now so
+      // `state.user.tenantSlug` is populated regardless of which path set it.
+      tenantSlug: tenant?.slug ?? null,
       avatarUrl: resolveAvatarUrl(user.id, user.avatarUrl, tenantId),
       subscription: subscription ? {
         status: subscription.status,
