@@ -9027,19 +9027,21 @@ function isCustomerGroupApiLocked() {
   return !!(state.user?.masterApiLock?.manageCustomerGroupsByApi || state.cache.masterApiLock?.manageCustomerGroupsByApi);
 }
 
+// Returns the rows to render in the customer master table.
+// - Empty search box → cached page (state.cache.customers, top 2000 by createdAt)
+// - With search text → server-fetched results (state.cache.customerSearchResults,
+//   set by triggerCustomerSearch). Server-side search covers the full tenant
+//   (Postgres + federated MySQL via /customers/search) so customers beyond
+//   the cached top-2000 are findable. Disabled customers come last.
 function filteredCustomers() {
   const q = (state.customerListQuery || "").toLowerCase().trim();
   const defs = getCustomFieldDefinitions("customers");
   const cfFilters = state.customerCustomFieldFilters || {};
   const groupFilter = state.customerGroupFilter || "";
-  return (state.cache.customers || []).filter((c) => {
-    if (q) {
-      const matches =
-        c.customerCode?.toLowerCase().includes(q) ||
-        c.name?.toLowerCase().includes(q) ||
-        c.taxId?.toLowerCase().includes(q);
-      if (!matches) return false;
-    }
+  const sourceRows = q
+    ? (state.cache.customerSearchResults || [])
+    : (state.cache.customers || []);
+  return sourceRows.filter((c) => {
     if (groupFilter) {
       if (groupFilter === "__none__") {
         if (c.customerGroup) return false;
@@ -9049,6 +9051,29 @@ function filteredCustomers() {
     }
     return matchesCustomFieldFilters(c, defs, cfFilters);
   });
+}
+
+// Server-side search — used by the master-page search input. Returns full
+// tenant coverage including disabled customers (active first, disabled last)
+// and federation-only customers not yet in the cached top-2000.
+async function triggerCustomerSearch(bodyEl, termOptions) {
+  const q = (state.customerListQuery || "").trim();
+  if (!q || q.length < 2) {
+    // Empty / too short → clear results, fall back to cached page rendering
+    state.cache.customerSearchResults = null;
+    state.customerListPage = 1;
+    refreshCustBody(bodyEl, termOptions);
+    return;
+  }
+  try {
+    const scope = state.customerScope || "mine";
+    const rows = await api(`/customers/search?q=${encodeURIComponent(q)}&scope=${encodeURIComponent(scope)}&limit=100`);
+    state.cache.customerSearchResults = Array.isArray(rows) ? rows : [];
+    state.customerListPage = 1;
+    refreshCustBody(bodyEl, termOptions);
+  } catch (err) {
+    setStatus(err?.message || "Search failed.", true);
+  }
 }
 
 function getCachedCustomerById(customerId) {
@@ -9937,13 +9962,13 @@ function renderCustomerListSection(container, termOptions) {
     </div>
   `;
 
-  // Search — only refreshes the body, keeps input alive. Debounced to avoid
-  // re-rendering the full table on every keystroke.
+  // Search — debounced server-side search. With a non-empty query we hit
+  // /customers/search (covers the full tenant, including federation + disabled).
+  // With an empty query we render from the cached page.
   const bodyEl = container.querySelector("#cust-body");
   const debouncedCustSearch = debounce(() => {
-    state.customerListPage = 1;
-    refreshCustBody(bodyEl, termOptions);
-  }, 250);
+    triggerCustomerSearch(bodyEl, termOptions);
+  }, 300);
   container.querySelector("#cust-search-input")?.addEventListener("input", (e) => {
     state.customerListQuery = e.target.value;
     debouncedCustSearch();
@@ -9954,6 +9979,10 @@ function renderCustomerListSection(container, termOptions) {
     btn.addEventListener("click", async () => {
       state.customerScope = btn.dataset.scope;
       state.customerListPage = 1;
+      // Clear server-search results — they were scoped to the previous pill
+      // and would now show wrong-scope rows. The next search input keystroke
+      // (if any) re-fetches with the new scope.
+      state.cache.customerSearchResults = null;
       showPageLoading("Loading…");
       try { await loadMaster(); } finally { hidePageLoading(); }
     });
