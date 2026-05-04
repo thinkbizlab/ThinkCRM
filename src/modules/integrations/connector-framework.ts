@@ -154,9 +154,12 @@ export type FieldMapping = {
  */
 // Per-chunk concurrency for upsertEntity. Each upsert involves 4-7 DB
 // roundtrips; sequential processing is RTT-bound and gives ~50 rows/min on a
-// typical Vercel→Neon link. Running 10 in parallel saturates Prisma's pool
-// and lifts throughput ~5-10x with no schema or logic changes.
-const UPSERT_CONCURRENCY = 10;
+// typical Vercel→Neon link. PR #17 moved this from 1 to 10 and observed
+// ~5x throughput (1000 rows/tick instead of 200). Bumping further to 20
+// after confirming no pool exhaustion at 10. Each instance still uses
+// at most ~2 federation pool conns + ~20 sync upsert conns — well within
+// Neon pooler defaults.
+const UPSERT_CONCURRENCY = 20;
 
 async function runWithConcurrency<T, R>(
   items: T[],
