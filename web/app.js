@@ -9199,14 +9199,15 @@ let _idleActivityHandler = null;
 // endpoint returns 503 and we silently bail (dev installs).
 //
 // The widget is opt-in per tenant. The backend authoritatively gates on
-// ALLOWED_TENANT_SLUGS (see src/modules/widget/routes.ts); this frontend
-// list is just an optimisation so non-allowed tenants don't make the round
-// trip on every login. Keep the two lists in sync.
-const SUPPORT_WIDGET_TENANT_SLUGS = new Set(["workcrm"]);
+// ALLOWED_TENANT_SLUGS (see src/modules/widget/routes.ts); we always make the
+// fetch and let the server respond with 200 (allowed) or 403 (not allowed).
+// The previous frontend short-circuit caused silent skips when state.user.
+// tenantSlug carried unexpected casing/whitespace — better to incur one HTTP
+// round-trip per login and surface the real reason in server logs.
 let _supportWidgetMounted = false;
 async function mountSupportWidget() {
   if (_supportWidgetMounted) return;
-  if (!SUPPORT_WIDGET_TENANT_SLUGS.has(state.user?.tenantSlug || "")) return;
+  if (!state.user) return; // not logged in yet
   let result;
   try {
     result = await api("/widget-token");
