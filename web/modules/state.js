@@ -79,6 +79,7 @@ export const state = {
       query: "",
       status: "",
       repIds: [],
+      coVisitOnly: false,
       dateFrom: `${y}-${pad(m + 1)}-01`,
       dateTo:   `${y}-${pad(m + 1)}-${pad(lastDay)}`
     };

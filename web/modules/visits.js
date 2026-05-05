@@ -19,7 +19,9 @@ let deps = {
   loadMyTasks: async () => {},
   attachOnBehalfOfField: async () => null,
   openCheckInModal: () => {},
-  openCheckOutModal: () => {}
+  openCheckOutModal: () => {},
+  openCoVisitCheckInModal: () => {},
+  openCoVisitCheckOutModal: () => {}
 };
 
 export function setVisitsDeps(d) {
@@ -185,6 +187,14 @@ export function renderVisits(visits) {
   const q = (f.query || "").toLowerCase();
   const statusLabel = { PLANNED: "Planned", CHECKED_IN: "Active", CHECKED_OUT: "Completed" };
 
+  // "My Co-Visits" filter — drops visits that don't have a coVisitor row for me.
+  // Server already returns coVisitors[] (masked); we just narrow client-side.
+  const COVISIT_ROLES = new Set(["ADMIN", "DIRECTOR", "MANAGER", "SUPERVISOR", "ASSISTANT_MANAGER", "SALES_ADMIN"]);
+  const canCoVisit = state.user?.role && COVISIT_ROLES.has(state.user.role);
+  if (f.coVisitOnly && canCoVisit) {
+    visits = visits.filter((v) => (v.coVisitors || []).some((cv) => cv.coVisitorUserId === state.user.id));
+  }
+
   const total = visits.length;
   const planned = visits.filter((visit) => visit.status === "PLANNED").length;
   const active = visits.filter((visit) => visit.status === "CHECKED_IN").length;
@@ -245,6 +255,11 @@ export function renderVisits(visits) {
             ${statusLabel[status]}
           </button>
         `).join("")}
+        ${canCoVisit ? `
+          <button class="vp-chip ${f.coVisitOnly ? "vp-chip--active" : ""}" data-vp-covisit-only title="Show only visits where I joined as a co-visitor">
+            My Co-Visits
+          </button>
+        ` : ""}
       </div>
       ${repMsHtml}
       <div class="vp-date-range">
@@ -260,6 +275,15 @@ export function renderVisits(visits) {
   `;
 
   attachVisitListListeners(qs("#vp-list-container"));
+
+  const coVisitToggleBtn = views.visits.querySelector("[data-vp-covisit-only]");
+  if (coVisitToggleBtn) {
+    coVisitToggleBtn.addEventListener("click", async () => {
+      state.visitPage.coVisitOnly = !state.visitPage.coVisitOnly;
+      // No reload — same visits, narrowed client-side.
+      renderVisits(state.cache.visits || []);
+    });
+  }
 
   views.visits.querySelectorAll("[data-vp-status]").forEach((btn) => {
     btn.addEventListener("click", async () => {
@@ -577,10 +601,16 @@ export async function openVisitDetail(visitId) {
   openVisitDetailPanel();
 
   try {
-    const [visit, changelogs] = await Promise.all([
+    // Lazy-cache competency templates the first time an eligible user opens
+    // a visit — they're tenant-wide and small, so once-per-session is fine.
+    const COVISIT_ROLES = new Set(["ADMIN", "DIRECTOR", "MANAGER", "SUPERVISOR", "ASSISTANT_MANAGER", "SALES_ADMIN"]);
+    const needsTemplates = state.user?.role && COVISIT_ROLES.has(state.user.role) && !state.cache.competencyTemplates;
+    const [visit, changelogs, templates] = await Promise.all([
       api(`/visits/${visitId}`),
-      api(`/changelogs?entityType=VISIT&entityId=${visitId}&limit=50`).catch(() => null)
+      api(`/changelogs?entityType=VISIT&entityId=${visitId}&limit=50`).catch(() => null),
+      needsTemplates ? api(`/competency-templates`).catch(() => []) : Promise.resolve(null)
     ]);
+    if (templates) state.cache.competencyTemplates = templates;
     renderVisitDetailContent(visit, changelogs);
   } catch (error) {
     visitDetailBody.innerHTML = `<div class="vd-loading" style="color:var(--danger-text,red)">${escHtml(error.message)}</div>`;
@@ -776,6 +806,113 @@ function renderVisitDetailContent(visit, changelogs) {
       </div>`;
   }
 
+  // ── Co-Visit panel ─────────────────────────────────────────────────────
+  // Shown to users eligible to co-visit (not the rep themselves). Server-side
+  // gating (canCoVisitRep) is the authority — this UI is just a hint, with
+  // the join button visible to all eligible roles. If the request is rejected
+  // (e.g. AM in a different team) the API returns 403 and we surface that.
+  const COVISIT_ROLES = new Set(["ADMIN", "DIRECTOR", "MANAGER", "SUPERVISOR", "ASSISTANT_MANAGER", "SALES_ADMIN"]);
+  const myCoVisitorRow = (visit.coVisitors || []).find((cv) => cv.coVisitorUserId === state.user?.id);
+  const otherCoVisitorRows = (visit.coVisitors || []).filter((cv) => cv.coVisitorUserId !== state.user?.id);
+  const showCoVisitPanel = !isOwnVisit && state.user?.role && COVISIT_ROLES.has(state.user.role);
+
+  let coVisitHtml = "";
+  if (showCoVisitPanel) {
+    let myStateHtml;
+    if (!myCoVisitorRow) {
+      myStateHtml = `
+        <p class="muted small" style="margin:0">Join this visit to record an evaluation. The rep won't see anything until you release.</p>
+        <button type="button" class="primary small vd-cv-join-btn" data-visit-id="${visit.id}">Join as Co-Visit</button>`;
+    } else if (!myCoVisitorRow.checkInAt) {
+      myStateHtml = `
+        <p class="muted small" style="margin:0">You've joined. Check in when you arrive at the customer site.</p>
+        <div class="vd-hero-actions" style="display:flex;gap:8px">
+          <button type="button" class="primary small vd-cv-checkin-btn" data-visit-id="${visit.id}" data-visit-customer="${customerNameForModal}">Check In</button>
+          <button type="button" class="ghost small vd-cv-leave-btn" data-visit-id="${visit.id}">Cancel join</button>
+        </div>`;
+    } else if (!myCoVisitorRow.checkOutAt) {
+      myStateHtml = `
+        <div class="vd-detail-rows">
+          <div class="vd-detail-row"><span class="vd-detail-row-label">My check-in</span><span class="vd-detail-row-value">${asDate(new Date(myCoVisitorRow.checkInAt))}</span></div>
+        </div>
+        <button type="button" class="primary small btn-success vd-cv-checkout-btn" data-visit-id="${visit.id}" data-visit-customer="${customerNameForModal}">Check Out</button>`;
+    } else if (!myCoVisitorRow.evalReleasedAt) {
+      // Eval form
+      const competencyOptions = (state.cache.competencyTemplates || [])
+        .filter((c) => c.isActive)
+        .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
+      const myCompetencyById = new Map((myCoVisitorRow.competencyScores || []).map((s) => [s.competencyTemplateId, s]));
+      const compRows = competencyOptions.map((c) => {
+        const existing = myCompetencyById.get(c.id);
+        const score = existing?.score ?? 0;
+        return `
+          <div class="vd-cv-comp-row" data-comp-id="${escHtml(c.id)}">
+            <div class="vd-cv-comp-label">${escHtml(c.name)}</div>
+            <div class="vd-cv-comp-stars">
+              ${[1,2,3,4,5].map((n) => `
+                <button type="button" class="vd-cv-star ${n <= score ? "active" : ""}" data-score="${n}" aria-label="${n} of 5">${n}</button>
+              `).join("")}
+            </div>
+          </div>`;
+      }).join("");
+      myStateHtml = `
+        <div class="vd-detail-rows">
+          <div class="vd-detail-row"><span class="vd-detail-row-label">Checked in</span><span class="vd-detail-row-value">${asDate(new Date(myCoVisitorRow.checkInAt))}</span></div>
+          <div class="vd-detail-row"><span class="vd-detail-row-label">Checked out</span><span class="vd-detail-row-value">${asDate(new Date(myCoVisitorRow.checkOutAt))}</span></div>
+        </div>
+        <div class="vd-cv-eval">
+          <label class="form-label" for="vd-cv-score"><span class="form-label-text">Overall score (1–5) <span class="req-star">*</span></span></label>
+          <select id="vd-cv-score" class="form-select">
+            <option value="">— select —</option>
+            ${[1,2,3,4,5].map((n) => `<option value="${n}" ${myCoVisitorRow.evalScore === n ? "selected" : ""}>${n}</option>`).join("")}
+          </select>
+          <label class="form-label" for="vd-cv-notes" style="margin-top:8px"><span class="form-label-text">Notes</span></label>
+          <textarea id="vd-cv-notes" class="form-input" rows="4" placeholder="Coaching notes (rep won't see this until you release)">${escHtml(myCoVisitorRow.evalNotes || "")}</textarea>
+          ${compRows ? `<div class="vd-cv-comp-list" style="margin-top:8px">${compRows}</div>` : ""}
+          <div class="vd-hero-actions" style="display:flex;gap:8px;margin-top:8px">
+            <button type="button" class="ghost small vd-cv-save-btn" data-visit-id="${visit.id}">Save</button>
+            <button type="button" class="primary small vd-cv-release-btn" data-visit-id="${visit.id}" title="Release evaluation to the rep">Release to rep</button>
+          </div>
+        </div>`;
+    } else {
+      myStateHtml = `
+        <div class="vd-cv-released">
+          <div class="vd-detail-rows">
+            <div class="vd-detail-row"><span class="vd-detail-row-label">Score</span><span class="vd-detail-row-value">${myCoVisitorRow.evalScore} / 5</span></div>
+            <div class="vd-detail-row"><span class="vd-detail-row-label">Released</span><span class="vd-detail-row-value">${asDate(new Date(myCoVisitorRow.evalReleasedAt))}</span></div>
+          </div>
+          ${myCoVisitorRow.evalNotes ? `<div class="vd-result-block">${escHtml(myCoVisitorRow.evalNotes)}</div>` : ""}
+        </div>`;
+    }
+
+    const othersHtml = otherCoVisitorRows.length
+      ? `<div class="vd-cv-others">
+          <p class="vd-section-title small">Other co-visitors</p>
+          ${otherCoVisitorRows.map((cv) => {
+            const stage = cv.evalReleasedAt
+              ? `Released · score ${cv.evalScore}/5`
+              : cv.checkOutAt
+                ? "Evaluating"
+                : cv.checkInAt
+                  ? "On site"
+                  : "Joined";
+            return `
+              <div class="vd-detail-row">
+                <span class="vd-detail-row-label">${escHtml(cv.coVisitor?.fullName || "—")}</span>
+                <span class="vd-detail-row-value">${escHtml(stage)}</span>
+              </div>`;
+          }).join("")}
+        </div>`
+      : "";
+
+    coVisitHtml = `
+      <div class="vd-section">
+        <p class="vd-section-title">${icon('users')} Co-Visit (private to supervisors)</p>
+        ${myStateHtml}
+        ${othersHtml}
+      </div>`;
+  }
+
   let changelogHtml;
   if (changelogs === null) {
     changelogHtml = `<div class="vd-section"><p class="vd-section-title">Change History</p><div class="vd-cl-restricted">Not available for your role.</div></div>`;
@@ -856,7 +993,7 @@ function renderVisitDetailContent(visit, changelogs) {
       </div>`;
   }
 
-  visitDetailBody.innerHTML = heroHtml + customerHtml + dealHtml + timingHtml + objectiveHtml + resultHtml + locationHtml + voiceNotesHtml + changelogHtml;
+  visitDetailBody.innerHTML = heroHtml + customerHtml + dealHtml + timingHtml + objectiveHtml + resultHtml + locationHtml + voiceNotesHtml + coVisitHtml + changelogHtml;
 
   visitDetailBody.querySelector(".vd-edit-btn")?.addEventListener("click", () => openVisitEditModal(visit));
 
@@ -877,6 +1014,105 @@ function renderVisitDetailContent(visit, changelogs) {
     const id = btn.dataset.visitId;
     const customer = btn.dataset.visitCustomer || "";
     deps.openCheckOutModal(id, customer, () => openVisitDetail(id));
+  });
+
+  // ── Co-Visit panel handlers ─────────────────────────────────────────────
+  visitDetailBody.querySelector(".vd-cv-join-btn")?.addEventListener("click", async (ev) => {
+    const id = ev.currentTarget.dataset.visitId;
+    try {
+      await api(`/visits/${id}/co-visitors`, { method: "POST" });
+      deps.setStatus("Joined as co-visitor.");
+      await openVisitDetail(id);
+    } catch (err) {
+      deps.setStatus(err?.message || "Could not join.", true);
+    }
+  });
+
+  visitDetailBody.querySelector(".vd-cv-leave-btn")?.addEventListener("click", async (ev) => {
+    const id = ev.currentTarget.dataset.visitId;
+    if (!confirm("Cancel your join? You can rejoin any time before checking in.")) return;
+    try {
+      await api(`/visits/${id}/co-visitors/me`, { method: "DELETE" });
+      deps.setStatus("Co-visit cancelled.");
+      await openVisitDetail(id);
+    } catch (err) {
+      deps.setStatus(err?.message || "Could not leave.", true);
+    }
+  });
+
+  visitDetailBody.querySelector(".vd-cv-checkin-btn")?.addEventListener("click", (ev) => {
+    const btn = ev.currentTarget;
+    const id = btn.dataset.visitId;
+    const customer = btn.dataset.visitCustomer || "";
+    deps.openCoVisitCheckInModal(id, customer, () => openVisitDetail(id));
+  });
+
+  visitDetailBody.querySelector(".vd-cv-checkout-btn")?.addEventListener("click", (ev) => {
+    const btn = ev.currentTarget;
+    const id = btn.dataset.visitId;
+    const customer = btn.dataset.visitCustomer || "";
+    deps.openCoVisitCheckOutModal(id, customer, () => openVisitDetail(id));
+  });
+
+  // Competency star rows: clicking a star toggles its and prior siblings
+  visitDetailBody.querySelectorAll(".vd-cv-comp-row").forEach((row) => {
+    row.querySelectorAll(".vd-cv-star").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const score = Number(btn.dataset.score);
+        row.querySelectorAll(".vd-cv-star").forEach((b) => {
+          b.classList.toggle("active", Number(b.dataset.score) <= score);
+        });
+        row.dataset.compScore = String(score);
+      });
+    });
+    // Seed dataset from prior active stars
+    const active = row.querySelectorAll(".vd-cv-star.active");
+    if (active.length > 0) row.dataset.compScore = String(active.length);
+  });
+
+  function readEvalPayload() {
+    const scoreEl = visitDetailBody.querySelector("#vd-cv-score");
+    const notesEl = visitDetailBody.querySelector("#vd-cv-notes");
+    const score = scoreEl?.value ? Number(scoreEl.value) : undefined;
+    const notes = notesEl?.value?.trim() || null;
+    const competencies = [...visitDetailBody.querySelectorAll(".vd-cv-comp-row")]
+      .map((row) => ({
+        competencyTemplateId: row.dataset.compId,
+        score: Number(row.dataset.compScore || 0)
+      }))
+      .filter((c) => c.score > 0);
+    return { score, notes, competencies };
+  }
+
+  visitDetailBody.querySelector(".vd-cv-save-btn")?.addEventListener("click", async (ev) => {
+    const id = ev.currentTarget.dataset.visitId;
+    const payload = readEvalPayload();
+    try {
+      await api(`/visits/${id}/co-visitors/me/evaluation`, { method: "PATCH", body: payload });
+      deps.setStatus("Evaluation saved (still hidden from rep).");
+      await openVisitDetail(id);
+    } catch (err) {
+      deps.setStatus(err?.message || "Could not save evaluation.", true);
+    }
+  });
+
+  visitDetailBody.querySelector(".vd-cv-release-btn")?.addEventListener("click", async (ev) => {
+    const id = ev.currentTarget.dataset.visitId;
+    const payload = readEvalPayload();
+    if (!payload.score) {
+      deps.setStatus("Pick a score before releasing.", true);
+      return;
+    }
+    if (!confirm("Release this evaluation to the rep? They'll see the score and notes on this visit.")) return;
+    try {
+      // Save first to make sure the latest field state is persisted, then release.
+      await api(`/visits/${id}/co-visitors/me/evaluation`, { method: "PATCH", body: payload });
+      await api(`/visits/${id}/co-visitors/me/release`, { method: "POST" });
+      deps.setStatus("Evaluation released to rep.");
+      await openVisitDetail(id);
+    } catch (err) {
+      deps.setStatus(err?.message || "Could not release.", true);
+    }
   });
 
   if (visit.voiceNotes?.length) {
