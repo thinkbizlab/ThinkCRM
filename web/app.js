@@ -21,6 +21,7 @@ import { loadOAuthProviderButtons, wireOAuthProviderButtons, consumeOAuthCallbac
 import { icon } from "./modules/icons.js";
 import { openDraftCustomerModal, openPromoteDraftModal, draftBadgeHtml, setDraftCustomerDeps } from "./modules/customer-drafts.js";
 import { enqueue, markDone, markFailed, markSyncing, getPendingOps, getQueueCount, clearQueue } from "./modules/offline-queue.js";
+import { setNotificationsDeps, initNotifications, onBellOpen } from "./modules/notifications.js";
 
 // Build version: extracted from this script's own URL (?v=...). Used to
 // version dynamic imports so a deploy bumping the version forces fresh
@@ -12676,6 +12677,32 @@ qs("#visit-customer-input")?.addEventListener("input", () => {
   }
 });
 
+// ── Visit EDIT modal: customer picker ─────────────────────────────────────
+// Reuses the same autocomplete helper as the create modal. When a different
+// customer is picked, refresh the deal dropdown to that customer's deals
+// (the previously-selected deal no longer fits the new customer; the
+// backend will null it on save unless this dropdown supplies a new one).
+initCustomerAutocomplete(
+  qs("#visit-edit-customer-input"), qs("#visit-edit-customer-list"), qs("#visit-edit-customer-id"),
+  async (customerId) => {
+    const dealSelect = qs("#visit-edit-deal-select");
+    if (!dealSelect) return;
+    dealSelect.innerHTML = `<option value="">Loading…</option>`;
+    try {
+      const deals = await api(`/deals?customerId=${encodeURIComponent(customerId)}`);
+      const active = deals.filter((d) => d.status !== "WON" && d.status !== "LOST");
+      if (!active.length) {
+        dealSelect.innerHTML = `<option value="">— No open deals —</option>`;
+      } else {
+        dealSelect.innerHTML = `<option value="">— No deal —</option>` +
+          active.map((d) => `<option value="${d.id}">${escHtml(d.dealName)}${d.stage?.stageName ? " · " + escHtml(d.stage.stageName) : ""}</option>`).join("");
+      }
+    } catch {
+      dealSelect.innerHTML = `<option value="">— Could not load deals —</option>`;
+    }
+  }
+);
+
 // Deal create modal
 qs("#deal-create-modal")?.addEventListener("click", (e) => {
   if (e.target.matches("[data-deal-modal-close]") || e.target.closest("[data-deal-modal-close]")) {
@@ -13141,9 +13168,26 @@ function closeAllPanels() {
   }
 }
 
+// Wire the bell to live data. Module owns rendering + polling; we just
+// inject what it needs (api, status, escHtml, checkout-modal) and call
+// initNotifications once so polling starts as soon as the app shell is up.
+setNotificationsDeps({
+  api,
+  setStatus,
+  escHtml,
+  openCheckOutModal
+});
+initNotifications();
+
 qs("#notif-btn")?.addEventListener("click", () => {
   const isOpen = notifPanel && !notifPanel.hidden;
-  isOpen ? closeAllPanels() : openPanel(notifPanel);
+  if (isOpen) {
+    closeAllPanels();
+  } else {
+    openPanel(notifPanel);
+    // Fire-and-forget — onBellOpen handles its own errors and re-renders.
+    onBellOpen();
+  }
 });
 
 // Settings flyin: rendered just-in-time so role changes and the active-page

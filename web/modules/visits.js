@@ -454,6 +454,16 @@ export async function openVisitEditModal(visit) {
   const modal = qs("#visit-edit-modal");
   if (!modal) return;
   qs("#visit-edit-id").value = visit.id;
+  // Customer picker — pre-populate with the visit's current customer.
+  // The autocomplete itself is wired up once at boot in app.js
+  // (initCustomerAutocomplete on #visit-edit-customer-input). Here we just
+  // seed the visible name + hidden id and reset the result list.
+  const customerInput = qs("#visit-edit-customer-input");
+  const customerHidden = qs("#visit-edit-customer-id");
+  const customerList = qs("#visit-edit-customer-list");
+  if (customerInput) customerInput.value = visit.customer?.name ?? "";
+  if (customerHidden) customerHidden.value = visit.customerId ?? "";
+  if (customerList) customerList.hidden = true;
   if (visit.plannedAt) {
     const date = new Date(visit.plannedAt);
     const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
@@ -1322,7 +1332,12 @@ qs("#visit-detail-close")?.addEventListener("click", () => closeVisitDetailPanel
     const latRaw = qs("#visit-edit-site-lat").value;
     const lngRaw = qs("#visit-edit-site-lng").value;
     const dealSelVal = qs("#visit-edit-deal-select")?.value ?? null;
-    const body = {};
+    const customerId = qs("#visit-edit-customer-id")?.value ?? "";
+    if (!customerId) {
+      setStatus("Please pick a customer from the suggestions.", true);
+      return;
+    }
+    const body = { customerId };
     if (plannedAt) body.plannedAt = new Date(plannedAt).toISOString();
     if (objective) body.objective = objective;
     if (latRaw && lngRaw) {
@@ -1355,6 +1370,35 @@ qs("#visit-detail-close")?.addEventListener("click", () => closeVisitDetailPanel
     } finally {
       submitBtn.disabled = false;
       submitBtn.textContent = "Save Changes";
+    }
+  });
+
+  // Delete a planned visit. Backend rejects deletion of CHECKED_IN/OUT
+  // visits, so this button is only useful (and only present) on the Edit
+  // modal which itself is only opened for PLANNED visits.
+  qs("#visit-edit-delete")?.addEventListener("click", async () => {
+    const { setStatus, loadMyTasks } = deps;
+    const id = qs("#visit-edit-id").value;
+    if (!id) return;
+    if (!window.confirm("Delete this planned visit? This cannot be undone.")) return;
+    const btn = qs("#visit-edit-delete");
+    btn.disabled = true;
+    btn.textContent = "Deleting…";
+    try {
+      await api(`/visits/${id}`, { method: "DELETE" });
+      closeVisitEditModal();
+      setStatus("Visit deleted.");
+      await Promise.all([loadVisits(), Promise.resolve(loadMyTasks()).catch(() => {})]);
+      // Close the visit detail panel too — the deleted visit is gone.
+      const visitDetailPanel = getVisitDetailPanel();
+      if (visitDetailPanel && !visitDetailPanel.hidden) {
+        visitDetailPanel.hidden = true;
+      }
+    } catch (error) {
+      setStatus(error.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Delete";
     }
   });
 })();

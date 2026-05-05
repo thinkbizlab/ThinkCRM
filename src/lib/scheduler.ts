@@ -216,6 +216,36 @@ function scheduleTask(tenantId: string, jobKey: string, cronExpr: string, timezo
   console.log(`[scheduler] Scheduled ${key} — "${cronExpr}" (${timezone})`);
 }
 
+/**
+ * Seed a CronJobConfig row for every JOB_DEF for a freshly-created tenant.
+ * Call from tenant-creation transactions so new tenants don't have to wait
+ * for each cron's natural firing cadence (the runJobForAllTenants self-heal
+ * works but is on each cron's schedule — daily/weekly crons take that long
+ * to populate).
+ *
+ * Accepts a Prisma TransactionClient so it composes inside the signup tx.
+ */
+export async function seedTenantCronJobConfigs(
+  // Anonymous shape: createMany on cronJobConfig is the only API surface we
+  // depend on, so accept anything that satisfies it (works for both
+  // PrismaClient and TransactionClient without importing Prisma's awkward
+  // generic types here).
+  tx: { cronJobConfig: { createMany: (args: { data: Array<{ tenantId: string; jobKey: string; cronExpr: string; timezone: string; isEnabled: boolean }>; skipDuplicates?: boolean }) => Promise<unknown> } },
+  tenantId: string,
+  timezone: string
+): Promise<void> {
+  await tx.cronJobConfig.createMany({
+    data: JOB_DEFS.map((def) => ({
+      tenantId,
+      jobKey: def.key,
+      cronExpr: def.defaultCronExpr,
+      timezone,
+      isEnabled: true
+    })),
+    skipDuplicates: true
+  });
+}
+
 /** Load (or create with defaults) all configs for a tenant and schedule their tasks. */
 async function loadAndScheduleTenant(tenantId: string): Promise<void> {
   // Read the tenant's timezone setting to use as default

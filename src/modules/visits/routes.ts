@@ -1150,7 +1150,8 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
       objective: z.string().trim().min(1).optional(),
       siteLat: z.number().min(-90).max(90).nullable().optional(),
       siteLng: z.number().min(-180).max(180).nullable().optional(),
-      dealId: z.string().min(1).nullable().optional()
+      dealId: z.string().min(1).nullable().optional(),
+      customerId: z.string().min(1).optional()
     })
     .strict()
     .refine((data) => Object.keys(data).length > 0, "At least one field is required.");
@@ -1174,7 +1175,49 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.badRequest("Only planned visits can be edited.");
     }
 
-    const beforeState = { plannedAt: visit.plannedAt, objective: visit.objective, siteLat: visit.siteLat, siteLng: visit.siteLng, dealId: visit.dealId };
+    // Customer reassignment: validate the target exists, isn't disabled, and
+    // belongs to this tenant (same checks the create flow runs). When the
+    // customer actually changes, the old deal is no longer applicable —
+    // clear it unless the caller explicitly supplied a new dealId.
+    let customerChanged = false;
+    if (parsed.data.customerId !== undefined && parsed.data.customerId !== visit.customerId) {
+      const customer = await prisma.customer.findFirst({
+        where: { id: parsed.data.customerId, tenantId },
+        select: { id: true, disabled: true, name: true, customerCode: true }
+      });
+      if (!customer) {
+        throw app.httpErrors.notFound("Customer not found in tenant.");
+      }
+      if (customer.disabled) {
+        throw app.httpErrors.badRequest(
+          `Customer "${customer.name}" (${customer.customerCode}) is disabled and cannot be assigned to a visit.`
+        );
+      }
+      customerChanged = true;
+    }
+
+    // If the caller supplied a dealId (new or unchanged), re-validate it
+    // against the post-change customerId so we never end up with a deal that
+    // belongs to a different customer than the visit.
+    if (parsed.data.dealId) {
+      const targetCustomerId = parsed.data.customerId ?? visit.customerId;
+      const deal = await prisma.deal.findFirst({
+        where: { id: parsed.data.dealId, tenantId, customerId: targetCustomerId ?? undefined },
+        select: { id: true }
+      });
+      if (!deal) {
+        throw app.httpErrors.badRequest("Deal must belong to the same tenant and customer.");
+      }
+    }
+
+    const beforeState = {
+      plannedAt: visit.plannedAt,
+      objective: visit.objective,
+      siteLat: visit.siteLat,
+      siteLng: visit.siteLng,
+      dealId: visit.dealId,
+      customerId: visit.customerId
+    };
 
     const updated = await prisma.visit.update({
       where: { id: params.id },
@@ -1183,7 +1226,14 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
         ...(parsed.data.objective !== undefined && { objective: parsed.data.objective }),
         ...(parsed.data.siteLat !== undefined && { siteLat: parsed.data.siteLat }),
         ...(parsed.data.siteLng !== undefined && { siteLng: parsed.data.siteLng }),
-        ...(parsed.data.dealId !== undefined && { dealId: parsed.data.dealId })
+        ...(parsed.data.customerId !== undefined && { customerId: parsed.data.customerId }),
+        // Auto-clear the old deal when reassigning customer unless the caller
+        // explicitly set a new dealId in the same patch.
+        ...(parsed.data.dealId !== undefined
+          ? { dealId: parsed.data.dealId }
+          : customerChanged
+            ? { dealId: null }
+            : {})
       }
     });
 
@@ -1195,11 +1245,70 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
       action: "UPDATE",
       changedById: repId,
       before: beforeState,
-      after: { plannedAt: updated.plannedAt, objective: updated.objective, siteLat: updated.siteLat, siteLng: updated.siteLng, dealId: updated.dealId },
+      after: {
+        plannedAt: updated.plannedAt,
+        objective: updated.objective,
+        siteLat: updated.siteLat,
+        siteLng: updated.siteLng,
+        dealId: updated.dealId,
+        customerId: updated.customerId
+      },
       context: { workflow: "EDIT" }
     });
 
     return updated;
+  });
+
+  /**
+   * Delete a planned visit. Only the owning rep may delete, and only while
+   * the visit is still PLANNED — once a rep has checked in (CHECKED_IN /
+   * CHECKED_OUT) the visit carries real fieldwork data (selfie, GPS,
+   * voice notes, deal-stage updates) and must be preserved for audit.
+   *
+   * Records an EntityChangelog DELETE entry with the row's pre-delete
+   * snapshot before actually deleting, so the audit trail survives the row.
+   */
+  app.delete("/visits/:id", async (request, reply) => {
+    const tenantId = requireTenantId(request);
+    const repId = requireUserId(request);
+    const params = request.params as { id: string };
+
+    const visit = await prisma.visit.findFirst({
+      where: { id: params.id, tenantId, repId }
+    });
+    if (!visit) {
+      throw app.httpErrors.notFound("Visit not found.");
+    }
+    if (visit.status !== VisitStatus.PLANNED) {
+      throw app.httpErrors.badRequest(
+        "Only planned visits can be deleted. A visit that has been checked in/out keeps an audit record."
+      );
+    }
+
+    await writeEntityChangelog({
+      db: prisma,
+      tenantId,
+      entityType: EntityType.VISIT,
+      entityId: visit.id,
+      action: "DELETE",
+      changedById: repId,
+      before: {
+        plannedAt: visit.plannedAt,
+        objective: visit.objective,
+        siteLat: visit.siteLat,
+        siteLng: visit.siteLng,
+        dealId: visit.dealId,
+        customerId: visit.customerId,
+        visitType: visit.visitType,
+        status: visit.status
+      },
+      after: null,
+      context: { workflow: "DELETE" }
+    });
+
+    await prisma.visit.delete({ where: { id: visit.id } });
+
+    return reply.code(204).send();
   });
 
   app.get("/calendar/events", async (request) => {
