@@ -94,7 +94,7 @@ const customerSchemaBase = z.object({
   ownerId: z.string().optional(),
   siteLat: z.number().min(-90).max(90).optional(),
   siteLng: z.number().min(-180).max(180).optional(),
-  externalRef: z.string().trim().max(100).optional(),
+  externalRef: z.string().trim().max(250).optional(),
   status: z.enum(["DRAFT", "ACTIVE"]).optional(),
   customFields: customFieldValuesSchema.optional()
 });
@@ -137,7 +137,7 @@ const itemSchema = z.object({
   itemCode: z.string().min(1).max(40),
   name: z.string().min(2).max(200),
   unitPrice: z.number().nonnegative(),
-  externalRef: z.string().trim().max(100).optional(),
+  externalRef: z.string().trim().max(250).optional(),
   isActive: z.boolean().optional(),
   customFields: customFieldValuesSchema.optional()
 });
@@ -2067,7 +2067,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     itemCode: z.string().trim().min(1).max(40),
     name: z.string().trim().min(2).max(200),
     unitPrice: z.coerce.number().nonnegative(),
-    externalRef: z.string().trim().max(100).optional(),
+    externalRef: z.string().trim().max(250).optional(),
     isActive: flexibleBooleanImport.optional()
   });
 
@@ -2142,7 +2142,7 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     taxId: z.string().trim().max(20).optional(),
     branchCode: z.string().trim().regex(/^[0-9]{1,5}$/, "branchCode must be 1-5 digits").optional(),
     parentCustomerCode: z.string().trim().min(2).max(40).optional(),
-    externalRef: z.string().trim().max(100).optional(),
+    externalRef: z.string().trim().max(250).optional(),
     siteLat: z.coerce.number().min(-90).max(90).optional(),
     siteLng: z.coerce.number().min(-180).max(180).optional(),
     disabled: flexibleBooleanImport.optional()
