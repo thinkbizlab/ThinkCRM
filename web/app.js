@@ -13233,15 +13233,15 @@ function closeAllPanels() {
 }
 
 // Wire the bell to live data. Module owns rendering + polling; we just
-// inject what it needs (api, status, escHtml, checkout-modal) and call
-// initNotifications once so polling starts as soon as the app shell is up.
+// inject what it needs (api, status, escHtml, checkout-modal). Polling is
+// kicked off from bootstrap() AFTER auth is confirmed — calling it on the
+// login page just fires a wasted /me/notifications 401 every minute.
 setNotificationsDeps({
   api,
   setStatus,
   escHtml,
   openCheckOutModal
 });
-initNotifications();
 
 qs("#notif-btn")?.addEventListener("click", () => {
   const isOpen = notifPanel && !notifPanel.hidden;
@@ -13475,6 +13475,10 @@ async function bootstrap() {
     startIdleWatch();
     initOfflineSupport().catch(() => {});
     mountSupportWidget();
+    // Kick off notification polling now that we're authenticated. Doing this
+    // here instead of at module top-level avoids a wasted 401 round-trip and
+    // a stray setInterval on the login page.
+    initNotifications();
   } catch {
     clearTokens();
     clearQueue().catch(() => {});
