@@ -51,6 +51,40 @@ export const cronRoutes: FastifyPluginAsync = async (app) => {
       app.log.error({ err }, "[cron] reapStuckCronJobRuns failed");
     }
 
+    // Self-heal missing CronJobConfig rows for active tenants. `startScheduler`
+    // creates these on long-lived servers but on Vercel each function instance
+    // is stateless — so any JOB_DEF added after a tenant's first request never
+    // gets its row, the cron route here finds an empty configs list, and the
+    // jobKey silently no-ops forever (this is what happened to syncJobReaper +
+    // customerDedupScan: their cron endpoints fired every tick returning 200,
+    // but the per-source enqueue lock + dedup scan never ran).
+    //
+    // Cheap idempotent upsert per active tenant on every cron call. Vercel
+    // crons are infrequent enough (15-min for the reaper, 1-min for the puller)
+    // that the extra DB round-trips don't matter, and the change makes the
+    // system robust to new job defs going forward.
+    try {
+      const activeTenants = await prisma.tenant.findMany({
+        where: { isActive: true },
+        select: { id: true, timezone: true }
+      });
+      for (const t of activeTenants) {
+        await prisma.cronJobConfig.upsert({
+          where: { tenantId_jobKey: { tenantId: t.id, jobKey } },
+          update: {},
+          create: {
+            tenantId: t.id,
+            jobKey,
+            cronExpr: def.defaultCronExpr,
+            timezone: t.timezone || "Asia/Bangkok",
+            isEnabled: true
+          }
+        });
+      }
+    } catch (err) {
+      app.log.error({ err, jobKey }, "[cron] CronJobConfig self-heal failed");
+    }
+
     const configs = await prisma.cronJobConfig.findMany({
       where: { jobKey, isEnabled: true },
       include: { tenant: { select: { id: true, isActive: true } } },
