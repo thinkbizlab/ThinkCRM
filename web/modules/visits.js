@@ -1092,4 +1092,33 @@ qs("#visit-detail-close")?.addEventListener("click", () => closeVisitDetailPanel
       submitBtn.textContent = "Save Changes";
     }
   });
+
+  // Delete a planned visit. Backend rejects deletion of CHECKED_IN/OUT
+  // visits, so this button is only useful (and only present) on the Edit
+  // modal which itself is only opened for PLANNED visits.
+  qs("#visit-edit-delete")?.addEventListener("click", async () => {
+    const { setStatus, loadMyTasks } = deps;
+    const id = qs("#visit-edit-id").value;
+    if (!id) return;
+    if (!window.confirm("Delete this planned visit? This cannot be undone.")) return;
+    const btn = qs("#visit-edit-delete");
+    btn.disabled = true;
+    btn.textContent = "Deleting…";
+    try {
+      await api(`/visits/${id}`, { method: "DELETE" });
+      closeVisitEditModal();
+      setStatus("Visit deleted.");
+      await Promise.all([loadVisits(), Promise.resolve(loadMyTasks()).catch(() => {})]);
+      // Close the visit detail panel too — the deleted visit is gone.
+      const visitDetailPanel = getVisitDetailPanel();
+      if (visitDetailPanel && !visitDetailPanel.hidden) {
+        visitDetailPanel.hidden = true;
+      }
+    } catch (error) {
+      setStatus(error.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Delete";
+    }
+  });
 })();
