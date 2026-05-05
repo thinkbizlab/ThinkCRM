@@ -9080,7 +9080,7 @@ function filteredCustomers() {
 // and federation-only customers not yet in the cached top-2000.
 async function triggerCustomerSearch(bodyEl, termOptions) {
   const q = (state.customerListQuery || "").trim();
-  if (!q || q.length < 2) {
+  if (!q || q.length < 3) {
     // Empty / too short → clear results, fall back to cached page rendering
     state.cache.customerSearchResults = null;
     state.customerListPage = 1;
@@ -10802,7 +10802,9 @@ function openNewCustomerModal(_termOptions) {
       ncmParentHidden.value = "";
       const q = ncmParentInput.value.trim();
       clearTimeout(parentDebounce);
-      if (q.length < 2) { renderSuggest([]); return; }
+      // 3-char threshold: with 70k+ customers a 2-char prefix would still
+      // match thousands of names; bumping to 3 keeps typeahead responsive.
+      if (q.length < 3) { renderSuggest([]); return; }
       parentDebounce = setTimeout(async () => {
         try {
           const rows = await api(`/customers/search?q=${encodeURIComponent(q)}&scope=all`);
@@ -12122,7 +12124,10 @@ loginForm.addEventListener("submit", async (event) => {
 // ── Customer autocomplete for modal forms ─────────────────────────────────────
 async function searchCustomers(query, limit = 8) {
   const q = String(query || "").trim();
-  if (q.length < 2) return [];
+  // 3-char threshold for typeahead pickers — see notes on the parent-customer
+  // picker above. The full-master-list search input keeps its own 2-char gate
+  // because the user has committed to a search context (button/page).
+  if (q.length < 3) return [];
   const params = new URLSearchParams({
     q,
     limit: String(limit)
@@ -12164,7 +12169,9 @@ function initCustomerAutocomplete(inputEl, listEl, hiddenEl, onSelect) {
   const renderMatches = debounce(async () => {
     const q = inputEl.value.trim();
     hiddenEl.value = "";
-    if (q.length < 2) { closeList(); return; }
+    // Keep this in sync with searchCustomers() — both gates protect against
+    // ultra-broad 2-char queries on 70k+ rows.
+    if (q.length < 3) { closeList(); return; }
     const reqId = ++activeRequest;
     let matches = [];
     try {

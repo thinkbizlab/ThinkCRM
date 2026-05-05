@@ -97,7 +97,7 @@ export function initQuickSearch({
       );
     }
 
-    if (q.length < 2) return [];
+    if (q.length < 3) return [];
 
     try {
       const params = new URLSearchParams({
