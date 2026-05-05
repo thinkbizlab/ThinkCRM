@@ -28,7 +28,8 @@ async function searchCustomers(query, limit = 8) {
     q,
     limit: String(limit)
   });
-  if (state.customerScope) params.set("scope", state.customerScope);
+  // Span the requester's full visible scope; see web/app.js searchCustomers().
+  params.set("scope", "team");
   return api(`/customers/search?${params.toString()}`);
 }
 
