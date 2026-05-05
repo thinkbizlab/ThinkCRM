@@ -1019,6 +1019,28 @@
       </div>
     </div>
 
+    <!-- ─── ANNOUNCEMENT MODAL ───────────────────────────────── -->
+    <!-- One persistent modal element that announcements.js fills with the
+         next unread announcement; after Accept the modal advances to the
+         next one (or hides if none left). -->
+    <div id="announcement-modal" class="modal-root" hidden aria-modal="true" role="dialog" aria-labelledby="announcement-modal-title">
+      <div class="modal-backdrop" aria-hidden="true"></div>
+      <div class="modal-panel card" style="max-width:520px">
+        <header class="modal-head">
+          <div>
+            <h3 id="announcement-modal-title">Announcement</h3>
+            <p class="muted small" id="announcement-modal-meta"></p>
+          </div>
+        </header>
+        <div class="modal-body" style="padding:var(--sp-3) 0">
+          <p id="announcement-modal-body" style="white-space:pre-wrap;line-height:1.55"></p>
+        </div>
+        <div class="modal-footer" style="display:flex;justify-content:flex-end;gap:var(--sp-2)">
+          <button type="button" id="announcement-accept-btn">Accept</button>
+        </div>
+      </div>
+    </div>
+
     <script type="module" src="/app.js?v=20260505-login-methods"></script>
     <!-- Primedesk support widget. Loads the widget bundle eagerly; the
          actual mount runs from app.js after login (mountSupportWidget),

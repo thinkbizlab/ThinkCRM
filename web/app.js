@@ -22,6 +22,12 @@ import { icon } from "./modules/icons.js";
 import { openDraftCustomerModal, openPromoteDraftModal, draftBadgeHtml, setDraftCustomerDeps } from "./modules/customer-drafts.js";
 import { enqueue, markDone, markFailed, markSyncing, getPendingOps, getQueueCount, clearQueue } from "./modules/offline-queue.js";
 import { setNotificationsDeps, initNotifications, onBellOpen } from "./modules/notifications.js";
+import {
+  checkUnreadAnnouncements,
+  adminListAnnouncements,
+  renderAdminPageHtml as renderAnnouncementsAdminHtml,
+  wireAdminPage as wireAnnouncementsAdminPage
+} from "./modules/announcements.js";
 
 // Build version: extracted from this script's own URL (?v=...). Used to
 // version dynamic imports so a deploy bumping the version forces fresh
@@ -1312,10 +1318,33 @@ function applyLoginCustomization(b) {
     welcomeEl.hidden = msg.length === 0;
   }
 
+  // Hero image rendering — two modes:
+  //   BACKGROUND  : image fills the .login-brand panel (CSS via --login-hero-image)
+  //   INLINE_LOGO : image is a small <img> stamped above the wordmark text
+  // INLINE_LOGO is meant for tenants who want a compact branded mark, not a
+  // full-bleed photo. Rendering is mutually exclusive — one mode at a time.
   const brandEl = qs(".login-brand");
+  const brandInner = qs(".login-brand-inner");
   if (brandEl) {
-    if (b.loginHeroImageUrl) {
-      document.documentElement.style.setProperty("--login-hero-image", `url(${JSON.stringify(b.loginHeroImageUrl)})`);
+    const layout = b.loginHeroLayout || "BACKGROUND";
+    const heroUrl = b.loginHeroImageUrl;
+    const inlineImgId = "login-hero-inline-img";
+    const existingInline = document.getElementById(inlineImgId);
+    if (existingInline) existingInline.remove();
+
+    if (heroUrl && layout === "INLINE_LOGO") {
+      document.documentElement.style.removeProperty("--login-hero-image");
+      brandEl.classList.remove("has-hero-image");
+      if (brandInner) {
+        const img = document.createElement("img");
+        img.id = inlineImgId;
+        img.className = "login-hero-inline-logo";
+        img.alt = "";
+        img.src = heroUrl;
+        brandInner.prepend(img);
+      }
+    } else if (heroUrl) {
+      document.documentElement.style.setProperty("--login-hero-image", `url(${JSON.stringify(heroUrl)})`);
       brandEl.classList.add("has-hero-image");
     } else {
       document.documentElement.style.removeProperty("--login-hero-image");
@@ -4694,6 +4723,13 @@ function renderSettings() {
       renderSettings();
     });
   }
+  // Lazy-load announcements admin list on first visit
+  if (page === "announcements" && state.cache.adminAnnouncements === undefined) {
+    state.cache.adminAnnouncements = null; // loading
+    adminListAnnouncements()
+      .then((data) => { state.cache.adminAnnouncements = data; renderSettings(); })
+      .catch(() => { state.cache.adminAnnouncements = { totalActiveUsers: 0, announcements: [] }; renderSettings(); });
+  }
   // Lazy-load custom field definitions for all entity types on first visit
   if (page === "custom-fields" && state.cache.customFieldSettings === undefined) {
     state.cache.customFieldSettings = null;
@@ -4753,6 +4789,7 @@ function renderSettings() {
     { page: "data-sync",      label: "Data Sync",              ic: "refresh", roles: ["ADMIN"] },
     { page: "custom-fields",  label: "Custom Fields",         ic: "clipboard", roles: ["ADMIN"] },
     { page: "cron-jobs",      label: "Scheduled Jobs",         ic: "clock", roles: ["ADMIN"] },
+    { page: "announcements",  label: "Announcements",          ic: "bell", roles: ["ADMIN"] },
     { page: "ai-usage",       label: "AI Usage",               ic: "activity", roles: ["ADMIN"] },
     { page: "logs",           label: "Logs",                   ic: "activity", roles: ["ADMIN"], view: "integrations" }
   ];
@@ -6699,6 +6736,13 @@ function renderSettings() {
         }).join("")}
       `;
     }
+  } else if (page === "announcements") {
+    const data = state.cache.adminAnnouncements;
+    if (!data) {
+      pageHtml = `<section class="card"><div class="muted">Loading…</div></section>`;
+    } else {
+      pageHtml = renderAnnouncementsAdminHtml(data);
+    }
   } else if (page === "ai-usage") {
     pageHtml = `<div id="ai-usage-mount"></div>`;
   }
@@ -6815,6 +6859,20 @@ function renderSettings() {
     ensureAiUsageModule().then((m) => m.loadAiUsage()).catch((err) => {
       const mount = document.querySelector("#ai-usage-mount");
       if (mount) mount.innerHTML = `<section class="card"><div class="muted" style="color:var(--danger)">${escHtml(err?.message || "Failed to load AI usage module.")}</div></section>`;
+    });
+  }
+
+  if (page === "announcements" && state.cache.adminAnnouncements) {
+    wireAnnouncementsAdminPage({
+      setStatus,
+      reload: async () => {
+        try {
+          state.cache.adminAnnouncements = await adminListAnnouncements();
+        } catch {
+          state.cache.adminAnnouncements = { totalActiveUsers: 0, announcements: [] };
+        }
+        renderSettings();
+      }
     });
   }
 
@@ -12213,6 +12271,7 @@ loginForm.addEventListener("submit", async (event) => {
     scheduleAdminChromeRefresh();
     startIdleWatch();
     mountSupportWidget();
+    void checkUnreadAnnouncements();
   } catch (error) {
     hideAppLoading();
     authMessage.textContent = error.message;
@@ -13306,6 +13365,7 @@ function renderSettingsFlyin() {
     { page: "data-sync",      label: "Data Sync",             ic: "refresh",   roles: ["ADMIN"] },
     { page: "custom-fields",  label: "Custom Fields",        ic: "clipboard", roles: ["ADMIN"] },
     { page: "cron-jobs",      label: "Scheduled Jobs",        ic: "clock",     roles: ["ADMIN"] },
+    { page: "announcements",  label: "Announcements",         ic: "bell",      roles: ["ADMIN"] },
     { page: "logs",           label: "Logs",                  ic: "activity",  roles: ["ADMIN"], view: "integrations" }
   ].filter(i => i.roles.includes(role));
   body.innerHTML = `
@@ -13479,6 +13539,7 @@ async function bootstrap() {
     // here instead of at module top-level avoids a wasted 401 round-trip and
     // a stray setInterval on the login page.
     initNotifications();
+    void checkUnreadAnnouncements();
   } catch (err) {
     // Surface the real error — silently catching makes the impersonation
     // flow indistinguishable from "stuck at login" when something throws

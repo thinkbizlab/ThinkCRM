@@ -382,7 +382,18 @@ export function renderBrandingSettingsPage({
               <span class="logo-upload-change-hint">${branding.loginHeroImageUrl ? "Click to change" : "Optional - click to upload"}</span>
               <input type="file" name="loginHeroFile" id="login-hero-file-input" accept="image/*" class="logo-file-input" />
             </div>
-            <span class="muted" style="font-size:0.78rem">Used as the background on the left hero panel. A dark overlay is applied for readability.</span>
+            ${branding.loginHeroImageUrl ? `
+              <div style="margin-top:var(--sp-2)">
+                <button type="button" class="ghost btn-danger" id="login-hero-remove-btn">Remove image</button>
+              </div>
+            ` : ""}
+            <label class="form-label" style="margin-top:var(--sp-3);display:block">Image style
+              <select class="form-input" name="loginHeroLayout" style="margin-top:var(--sp-1)">
+                <option value="BACKGROUND"${(branding.loginHeroLayout || "BACKGROUND") === "BACKGROUND" ? " selected" : ""}>Background fill — image covers the left panel</option>
+                <option value="INLINE_LOGO"${branding.loginHeroLayout === "INLINE_LOGO" ? " selected" : ""}>Compact logo — small image above the workspace text</option>
+              </select>
+            </label>
+            <span class="muted" style="font-size:0.78rem;display:block;margin-top:var(--sp-1)">Background fill applies a dark overlay for readability. Compact logo keeps the panel solid and shows your image as a small mark.</span>
           </div>
           <div class="settings-field-row">
             <label class="form-label" style="flex:1">Tagline Headline
@@ -925,6 +936,23 @@ export function wireBrandingSettingsPage({ tenantId, tenantThemeMode = "LIGHT", 
         }
       });
       setStatus("Branding restored to defaults.");
+      await loadSettings();
+    } catch (error) {
+      setStatus(error.message, true);
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+  });
+
+  q("#login-hero-remove-btn")?.addEventListener("click", async (event) => {
+    const btn = event.currentTarget;
+    if (!confirm("Remove the login hero image? Users will see the default background until you upload a new one.")) return;
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = "Removing...";
+    try {
+      await api(`/tenants/${tenantId}/branding/login-hero`, { method: "DELETE" });
+      setStatus("Login hero image removed.");
       await loadSettings();
     } catch (error) {
       setStatus(error.message, true);
