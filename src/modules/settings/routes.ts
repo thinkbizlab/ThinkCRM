@@ -2453,6 +2453,35 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     return invites;
   });
 
+  // Revoke an unaccepted invite. Hard-deletes the row so the token is no
+  // longer redeemable; the recipient's invite link starts returning 404.
+  // Admin-only, same-tenant. Audit-logged. If the invite was already accepted
+  // (acceptedAt != null) we refuse — at that point the user account exists
+  // and the right action is to deactivate the user, not revoke the invite.
+  app.delete("/users/pending-invites/:id", async (request, reply) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+    const actorId = requireUserId(request);
+    const params = request.params as { id: string };
+    const invite = await prisma.userInvite.findFirst({
+      where: { id: params.id, tenantId },
+      select: { id: true, email: true, role: true, acceptedAt: true }
+    });
+    if (!invite) throw app.httpErrors.notFound("Invite not found.");
+    if (invite.acceptedAt) {
+      throw app.httpErrors.conflict("Invite already accepted; deactivate the user instead.");
+    }
+    await prisma.userInvite.delete({ where: { id: invite.id } });
+    await logAuditEvent(
+      tenantId,
+      actorId,
+      "USER_INVITE_REVOKED",
+      { inviteId: invite.id, email: invite.email, role: invite.role },
+      request.ip
+    );
+    return reply.code(204).send();
+  });
+
   app.delete("/users/:id", async (request, reply) => {
     requireRoleAtLeast(request, UserRole.ADMIN);
     const tenantId = requireTenantId(request);
