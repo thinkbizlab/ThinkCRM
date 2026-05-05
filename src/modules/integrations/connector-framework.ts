@@ -55,7 +55,7 @@ const customerMappedSchema = z.object({
   ownerId: z.string().min(1).optional(),
   siteLat: z.number().min(-90).max(90).optional(),
   siteLng: z.number().min(-180).max(180).optional(),
-  externalRef: z.string().trim().max(100).optional(),
+  externalRef: z.string().trim().max(250).optional(),
   disabled: flexibleBoolean.optional(),
   customFields: z.record(z.string(), z.unknown()).optional()
 });
@@ -64,7 +64,7 @@ const itemMappedSchema = z.object({
   itemCode: z.string().min(1),
   name: z.string().min(1),
   unitPrice: z.number().nonnegative(),
-  externalRef: z.string().trim().max(100).optional(),
+  externalRef: z.string().trim().max(250).optional(),
   isActive: flexibleBoolean.optional(),
   customFields: z.record(z.string(), z.unknown()).optional()
 });
