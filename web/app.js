@@ -5206,14 +5206,26 @@ function renderSettings() {
     const directorGroupsHtml = [...directorMap.values()].map(({ director, teams: dt }) => buildDirectorGroup(director, dt)).join("");
     const noDirectorHtml = noDirectorTeams.map(buildTeamCol).join("");
 
+    // teamsLoaded distinguishes "still fetching /teams" from "fetched and
+    // got zero rows" — without it the empty-state flashes for a beat on every
+    // settings open while the API call is in flight.
+    const teamsLoaded = state.cache.teamsLoaded === true;
     pageHtml = `
       <div class="section-head" style="margin-bottom:var(--sp-5)">
         <h3 class="section-title" style="margin:0">Organization Chart</h3>
         ${isAdmin ? `<button id="team-create-btn">+ Create Team</button>` : ""}
       </div>
-      ${teams.length
-        ? `<div class="org-chart-scroll"><div class="org-chart">${directorGroupsHtml}${noDirectorHtml}</div></div>`
-        : `<div class="empty-state compact"><div class="empty-icon">${icon('users')}</div><div><strong>No teams yet</strong>${isAdmin ? `<p>Click "+ Create Team" to get started.</p>` : ""}</div></div>`}
+      ${!teamsLoaded
+        ? `<div class="org-chart-scroll"><div class="org-chart">
+            <div class="org-director-group" aria-busy="true" style="opacity:0.5">
+              <div class="org-director-node"><div class="org-avatar org-avatar--director" style="background:var(--surface-soft)"></div><div class="org-node-name">Loading…</div></div>
+              <div class="org-connector-v"></div>
+              <div class="org-director-teams"><div class="team-col" style="background:var(--surface-soft);min-height:160px"></div></div>
+            </div>
+          </div></div>`
+        : teams.length
+          ? `<div class="org-chart-scroll"><div class="org-chart">${directorGroupsHtml}${noDirectorHtml}</div></div>`
+          : `<div class="empty-state compact"><div class="empty-icon">${icon('users')}</div><div><strong>No teams yet</strong>${isAdmin ? `<p>Click "+ Create Team" to get started.</p>` : ""}</div></div>`}
     `;
   } else if (page === "roles") {
     const me = state.user;
@@ -12008,6 +12020,7 @@ async function loadSettings(page = state.settingsPage || "my-profile", options =
     requests.push(
       api("/teams").then((teams) => {
         state.cache.teams = teams;
+        state.cache.teamsLoaded = true;
       })
     );
   }
