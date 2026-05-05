@@ -1,11 +1,19 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  // postgresqlExtensions: lets us declare pg_trgm + btree_gin in the
+  // datasource so `prisma db push` (used by CI) creates them before the
+  // GIN trigram indexes on Customer try to use gin_trgm_ops / text_ops.
+  // Production runs `prisma migrate deploy` which uses migration SQL
+  // instead, but the migration also has CREATE EXTENSION IF NOT EXISTS
+  // so both paths converge on the same state.
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  directUrl  = env("DIRECT_URL")
+  extensions = [pg_trgm, btree_gin]
 }
 
 model Tenant {
