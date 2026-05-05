@@ -10,6 +10,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { config } from "../../config.js";
 import { z } from "zod";
 import { canActOnBehalfOf, listVisibleUserIds, requireTenantId, requireUserId, zodMsg } from "../../lib/http.js";
+import { canCoVisitRep } from "../../lib/co-visit.js";
 import { writeEntityChangelog } from "../../lib/changelog.js";
 import { prisma } from "../../lib/prisma.js";
 import { decryptCredential } from "../../lib/secrets.js";
@@ -84,6 +85,29 @@ const checkOutSchema = z.object({
   lng: z.number().min(-180).max(180),
   result: z.string().trim().min(1),
   capturedAt: z.string().datetime().optional()
+}).strict();
+
+const coVisitorCheckInSchema = z.object({
+  lat: z.number().min(-90).max(90),
+  lng: z.number().min(-180).max(180),
+  selfieUrl: z.string().min(1),
+  capturedAt: z.string().datetime().optional()
+}).strict();
+
+const coVisitorCheckOutSchema = z.object({
+  lat: z.number().min(-90).max(90),
+  lng: z.number().min(-180).max(180),
+  capturedAt: z.string().datetime().optional()
+}).strict();
+
+const coVisitorEvalSchema = z.object({
+  score: z.number().int().min(1).max(5).optional(),
+  notes: z.string().trim().max(4000).nullable().optional(),
+  competencies: z.array(z.object({
+    competencyTemplateId: z.string().min(1),
+    score: z.number().int().min(1).max(5),
+    notes: z.string().trim().max(2000).nullable().optional()
+  })).max(50).optional()
 }).strict();
 
 const commaArray = (inner: z.ZodTypeAny) =>
@@ -189,6 +213,74 @@ function calculateDistanceMeters(
     Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
 
   return 2 * EARTH_RADIUS_METERS * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// Mask a visit's coVisitors[] for the given requester.
+//
+//   own row (requester is the coVisitorUserId)        → full fields
+//   released row (evalReleasedAt set, not own)        → released-only fields
+//                                                       (score, notes, releaser, competencies)
+//   unreleased row (not own)                          → omitted entirely
+//   admin                                             → all rows in full
+//
+// Applied to both GET /visits and GET /visits/:id payloads. The check-in geo
+// + selfie + unreleased eval never leak to the rep until release.
+type CoVisitorRow = {
+  id: string;
+  tenantId: string;
+  visitId: string;
+  coVisitorUserId: string;
+  checkInAt: Date | null;
+  checkInLat: number | null;
+  checkInLng: number | null;
+  checkInDistanceM: number | null;
+  checkInSelfie: string | null;
+  checkOutAt: Date | null;
+  checkOutLat: number | null;
+  checkOutLng: number | null;
+  evalScore: number | null;
+  evalNotes: string | null;
+  evalReleasedAt: Date | null;
+  evalReleasedByUserId: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  coVisitor?: { id: string; fullName: string } | null;
+  releasedBy?: { id: string; fullName: string } | null;
+  competencyScores?: Array<{
+    id: string;
+    competencyTemplateId: string;
+    score: number;
+    notes: string | null;
+  }>;
+};
+
+function maskCoVisitorsForRequester(
+  rows: ReadonlyArray<CoVisitorRow>,
+  requesterId: string,
+  requesterRole: import("@prisma/client").UserRole | null | undefined
+): CoVisitorRow[] {
+  const isAdmin = requesterRole === "ADMIN";
+  if (isAdmin) return [...rows];
+  return rows.flatMap((row): CoVisitorRow[] => {
+    if (row.coVisitorUserId === requesterId) return [row];
+    if (row.evalReleasedAt) {
+      return [{
+        ...row,
+        // Strip the supervisor's check-in geo / selfie even after release —
+        // the rep only ever sees the evaluation, never where the supervisor
+        // physically was at check-in.
+        checkInAt: null,
+        checkInLat: null,
+        checkInLng: null,
+        checkInDistanceM: null,
+        checkInSelfie: null,
+        checkOutAt: null,
+        checkOutLat: null,
+        checkOutLng: null
+      }];
+    }
+    return [];
+  });
 }
 
 function startOfMonth(value: Date): Date {
@@ -450,7 +542,9 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    return prisma.visit.findMany({
+    const requesterId = requireUserId(request);
+    const requesterRole = request.requestContext.role;
+    const visits = await prisma.visit.findMany({
       where: {
         tenantId,
         status: query.status,
@@ -466,14 +560,27 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
         customer: true,
         prospect: { select: { id: true, displayName: true, status: true, siteLat: true, siteLng: true } },
         deal: true,
-        rep: true
+        rep: true,
+        coVisitors: {
+          include: {
+            coVisitor: { select: { id: true, fullName: true } },
+            releasedBy: { select: { id: true, fullName: true } },
+            competencyScores: { select: { id: true, competencyTemplateId: true, score: true, notes: true } }
+          }
+        }
       },
       orderBy: { plannedAt: "asc" }
     });
+    return visits.map((v) => ({
+      ...v,
+      coVisitors: maskCoVisitorsForRequester(v.coVisitors, requesterId, requesterRole)
+    }));
   });
 
   app.get("/visits/:id", async (request) => {
     const tenantId = requireTenantId(request);
+    const requesterId = requireUserId(request);
+    const requesterRole = request.requestContext.role;
     const visibleUserIds = await listVisibleUserIds(request);
     const params = request.params as { id: string };
     const visit = await prisma.visit.findFirst({
@@ -500,7 +607,14 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
           }
         },
         rep: { select: { id: true, fullName: true, email: true, avatarUrl: true } },
-        deal: { include: { stage: true } }
+        deal: { include: { stage: true } },
+        coVisitors: {
+          include: {
+            coVisitor: { select: { id: true, fullName: true } },
+            releasedBy: { select: { id: true, fullName: true } },
+            competencyScores: { select: { id: true, competencyTemplateId: true, score: true, notes: true } }
+          }
+        }
       }
     });
     if (!visit) {
@@ -518,7 +632,11 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
       orderBy: { createdAt: "desc" }
     });
 
-    return { ...visit, voiceNotes };
+    return {
+      ...visit,
+      coVisitors: maskCoVisitorsForRequester(visit.coVisitors, requesterId, requesterRole),
+      voiceNotes
+    };
   });
 
   app.get("/visits/:id/preparation-suggestions", async (request) => {
@@ -1477,5 +1595,327 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
         priority: query.priority
       }
     };
+  });
+
+  // ── Co-Visit subroutes ─────────────────────────────────────────────────
+  // A supervisor / manager / director / assistant manager / sales admin
+  // joins a rep's existing visit to evaluate them in the field. Multiple
+  // co-visitors per visit are supported. The rep does NOT see any of this
+  // until the supervisor explicitly releases the evaluation.
+  //
+  // Eligibility is centralized in canCoVisitRep (src/lib/co-visit.ts):
+  //   ADMIN/DIRECTOR/MANAGER/SUPERVISOR — anyone in their walkSubtree
+  //   ASSISTANT_MANAGER/SALES_ADMIN     — anyone with the same User.teamId
+  //   REP                               — never
+  //
+  // Every co-visit changelog entry is tagged context.scope = "supervisor"
+  // so the visit-detail GET can mask supervisor activity from rep readers.
+
+  // POST /visits/:id/co-visitors — supervisor joins.
+  app.post("/visits/:id/co-visitors", async (request, reply) => {
+    const tenantId = requireTenantId(request);
+    const observerId = requireUserId(request);
+    const params = request.params as { id: string };
+    const visit = await prisma.visit.findFirst({
+      where: { id: params.id, tenantId },
+      select: { id: true, repId: true, rep: { select: { id: true, managerUserId: true, teamId: true } } }
+    });
+    if (!visit) throw app.httpErrors.notFound("Visit not found.");
+
+    // Eligibility first — gives REPs / out-of-scope users a coherent 403
+    // instead of a "cannot co-visit your own visit" 400 they can't act on.
+    const eligible = await canCoVisitRep(request, visit.rep);
+    if (!eligible) {
+      throw app.httpErrors.forbidden("Not authorized to co-visit this rep.");
+    }
+    if (visit.repId === observerId) {
+      throw app.httpErrors.badRequest("You cannot co-visit your own visit.");
+    }
+    const existing = await prisma.visitCoVisitor.findUnique({
+      where: { visitId_coVisitorUserId: { visitId: visit.id, coVisitorUserId: observerId } }
+    });
+    if (existing) {
+      throw app.httpErrors.conflict("You have already joined this visit.");
+    }
+
+    const created = await prisma.visitCoVisitor.create({
+      data: {
+        tenantId,
+        visitId: visit.id,
+        coVisitorUserId: observerId
+      }
+    });
+    await writeEntityChangelog({
+      db: prisma,
+      tenantId,
+      entityType: EntityType.VISIT,
+      entityId: visit.id,
+      action: "UPDATE",
+      changedById: observerId,
+      after: { coVisitorJoined: created.id },
+      context: { scope: "supervisor", workflow: "CO_VISIT_JOIN", coVisitorUserId: observerId }
+    });
+    return reply.code(201).send(created);
+  });
+
+  // DELETE /visits/:id/co-visitors/me — un-join (only before check-in).
+  app.delete("/visits/:id/co-visitors/me", async (request, reply) => {
+    const tenantId = requireTenantId(request);
+    const observerId = requireUserId(request);
+    const params = request.params as { id: string };
+    const row = await prisma.visitCoVisitor.findUnique({
+      where: { visitId_coVisitorUserId: { visitId: params.id, coVisitorUserId: observerId } }
+    });
+    if (!row || row.tenantId !== tenantId) {
+      throw app.httpErrors.notFound("You have not joined this visit.");
+    }
+    if (row.checkInAt) {
+      throw app.httpErrors.conflict("Cannot leave after check-in.");
+    }
+    await prisma.visitCoVisitor.delete({ where: { id: row.id } });
+    await writeEntityChangelog({
+      db: prisma,
+      tenantId,
+      entityType: EntityType.VISIT,
+      entityId: params.id,
+      action: "UPDATE",
+      changedById: observerId,
+      before: { coVisitorJoined: row.id },
+      context: { scope: "supervisor", workflow: "CO_VISIT_LEAVE", coVisitorUserId: observerId }
+    });
+    return reply.code(204).send();
+  });
+
+  // POST /visits/:id/co-visitors/me/checkin — supervisor's own geo + selfie.
+  app.post("/visits/:id/co-visitors/me/checkin", async (request) => {
+    const tenantId = requireTenantId(request);
+    const observerId = requireUserId(request);
+    const params = request.params as { id: string };
+    const parsed = coVisitorCheckInSchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
+    }
+
+    const visit = await prisma.visit.findFirst({
+      where: { id: params.id, tenantId },
+      select: { id: true, siteLat: true, siteLng: true }
+    });
+    if (!visit) throw app.httpErrors.notFound("Visit not found.");
+
+    const row = await prisma.visitCoVisitor.findUnique({
+      where: { visitId_coVisitorUserId: { visitId: visit.id, coVisitorUserId: observerId } }
+    });
+    if (!row) throw app.httpErrors.notFound("You have not joined this visit.");
+    if (row.checkInAt) throw app.httpErrors.conflict("Already checked in.");
+
+    // Reuse the rep's R2 selfie pipeline. Same data:image base64 → R2 object
+    // upload, with a fallback to storing the raw ref if R2 is unavailable.
+    let selfieStorageRef = parsed.data.selfieUrl;
+    if (parsed.data.selfieUrl.startsWith("data:image/")) {
+      try {
+        const commaIdx = parsed.data.selfieUrl.indexOf(",");
+        const header = parsed.data.selfieUrl.slice(0, commaIdx);
+        const base64Data = parsed.data.selfieUrl.slice(commaIdx + 1);
+        const mimeMatch = header.match(/data:(image\/[a-zA-Z+]+);base64/);
+        const contentType = mimeMatch?.[1] ?? "image/jpeg";
+        const ext = contentType.split("/")[1]?.replace("jpeg", "jpg") ?? "jpg";
+        const imageBuffer = Buffer.from(base64Data, "base64");
+        const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { slug: true } });
+        if (tenant?.slug) {
+          const stored = await uploadBufferToR2({
+            tenantSlug: tenant.slug,
+            objectKeyOrRef: `visits/${visit.id}/co-${observerId}-selfie-${Date.now()}.${ext}`,
+            contentType,
+            data: imageBuffer
+          });
+          selfieStorageRef = stored.objectRef;
+        }
+      } catch (err) {
+        app.log.error({ err }, "co-visit selfie R2 upload failed — storing raw ref");
+      }
+    }
+
+    let distanceMeters: number | null = null;
+    if (visit.siteLat !== null && visit.siteLng !== null) {
+      const visitConfig = await prisma.tenantVisitConfig.findUnique({
+        where: { tenantId },
+        select: { checkInMaxDistanceM: true }
+      });
+      const maxDistanceM = visitConfig?.checkInMaxDistanceM ?? DEFAULT_CHECKIN_MAX_DISTANCE_M;
+      distanceMeters = calculateDistanceMeters(parsed.data.lat, parsed.data.lng, visit.siteLat, visit.siteLng);
+      if (distanceMeters > maxDistanceM) {
+        throw app.httpErrors.badRequest(
+          `Co-visit check-in is outside onsite range (${Math.round(distanceMeters)}m > ${maxDistanceM}m).`
+        );
+      }
+    }
+
+    const updated = await prisma.visitCoVisitor.update({
+      where: { id: row.id },
+      data: {
+        checkInAt: new Date(),
+        checkInLat: parsed.data.lat,
+        checkInLng: parsed.data.lng,
+        checkInDistanceM: distanceMeters,
+        checkInSelfie: selfieStorageRef
+      }
+    });
+    await writeEntityChangelog({
+      db: prisma,
+      tenantId,
+      entityType: EntityType.VISIT,
+      entityId: visit.id,
+      action: "UPDATE",
+      changedById: observerId,
+      after: { coVisitorCheckIn: updated.id, distanceM: distanceMeters },
+      context: { scope: "supervisor", workflow: "CO_VISIT_CHECK_IN", coVisitorUserId: observerId }
+    });
+    return updated;
+  });
+
+  // POST /visits/:id/co-visitors/me/checkout
+  app.post("/visits/:id/co-visitors/me/checkout", async (request) => {
+    const tenantId = requireTenantId(request);
+    const observerId = requireUserId(request);
+    const params = request.params as { id: string };
+    const parsed = coVisitorCheckOutSchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
+    }
+    const row = await prisma.visitCoVisitor.findUnique({
+      where: { visitId_coVisitorUserId: { visitId: params.id, coVisitorUserId: observerId } }
+    });
+    if (!row || row.tenantId !== tenantId) throw app.httpErrors.notFound("You have not joined this visit.");
+    if (!row.checkInAt) throw app.httpErrors.badRequest("Check in before checking out.");
+    if (row.checkOutAt) throw app.httpErrors.conflict("Already checked out.");
+
+    const updated = await prisma.visitCoVisitor.update({
+      where: { id: row.id },
+      data: {
+        checkOutAt: new Date(),
+        checkOutLat: parsed.data.lat,
+        checkOutLng: parsed.data.lng
+      }
+    });
+    await writeEntityChangelog({
+      db: prisma,
+      tenantId,
+      entityType: EntityType.VISIT,
+      entityId: params.id,
+      action: "UPDATE",
+      changedById: observerId,
+      after: { coVisitorCheckOut: updated.id },
+      context: { scope: "supervisor", workflow: "CO_VISIT_CHECK_OUT", coVisitorUserId: observerId }
+    });
+    return updated;
+  });
+
+  // PATCH /visits/:id/co-visitors/me/evaluation — overall score + notes +
+  // upsert competency rows. Stays unreleased; explicitly release with the
+  // /release route below.
+  app.patch("/visits/:id/co-visitors/me/evaluation", async (request) => {
+    const tenantId = requireTenantId(request);
+    const observerId = requireUserId(request);
+    const params = request.params as { id: string };
+    const parsed = coVisitorEvalSchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
+    }
+    const row = await prisma.visitCoVisitor.findUnique({
+      where: { visitId_coVisitorUserId: { visitId: params.id, coVisitorUserId: observerId } }
+    });
+    if (!row || row.tenantId !== tenantId) throw app.httpErrors.notFound("You have not joined this visit.");
+
+    // Validate competency template ids belong to this tenant before upsert.
+    const competencyIds = parsed.data.competencies?.map((c) => c.competencyTemplateId) ?? [];
+    if (competencyIds.length > 0) {
+      const found = await prisma.competencyTemplate.findMany({
+        where: { tenantId, id: { in: competencyIds } },
+        select: { id: true }
+      });
+      if (found.length !== new Set(competencyIds).size) {
+        throw app.httpErrors.badRequest("Unknown competency template id.");
+      }
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const u = await tx.visitCoVisitor.update({
+        where: { id: row.id },
+        data: {
+          evalScore: parsed.data.score === undefined ? undefined : parsed.data.score,
+          evalNotes: parsed.data.notes === undefined ? undefined : parsed.data.notes
+        }
+      });
+      if (parsed.data.competencies) {
+        for (const c of parsed.data.competencies) {
+          await tx.visitCoVisitorCompetencyScore.upsert({
+            where: {
+              visitCoVisitorId_competencyTemplateId: {
+                visitCoVisitorId: row.id,
+                competencyTemplateId: c.competencyTemplateId
+              }
+            },
+            create: {
+              visitCoVisitorId: row.id,
+              competencyTemplateId: c.competencyTemplateId,
+              score: c.score,
+              notes: c.notes ?? null
+            },
+            update: {
+              score: c.score,
+              notes: c.notes ?? null
+            }
+          });
+        }
+      }
+      return u;
+    });
+    await writeEntityChangelog({
+      db: prisma,
+      tenantId,
+      entityType: EntityType.VISIT,
+      entityId: params.id,
+      action: "UPDATE",
+      changedById: observerId,
+      after: { coVisitorEval: updated.id, score: updated.evalScore },
+      context: { scope: "supervisor", workflow: "CO_VISIT_EVAL_UPDATE", coVisitorUserId: observerId }
+    });
+    return updated;
+  });
+
+  // POST /visits/:id/co-visitors/me/release — make the evaluation visible
+  // to the rep on their own visit detail. Requires a non-null score.
+  app.post("/visits/:id/co-visitors/me/release", async (request) => {
+    const tenantId = requireTenantId(request);
+    const observerId = requireUserId(request);
+    const params = request.params as { id: string };
+    const row = await prisma.visitCoVisitor.findUnique({
+      where: { visitId_coVisitorUserId: { visitId: params.id, coVisitorUserId: observerId } }
+    });
+    if (!row || row.tenantId !== tenantId) throw app.httpErrors.notFound("You have not joined this visit.");
+    if (row.evalReleasedAt) throw app.httpErrors.conflict("Evaluation already released.");
+    if (row.evalScore == null) throw app.httpErrors.badRequest("Set a score before releasing.");
+
+    const updated = await prisma.visitCoVisitor.update({
+      where: { id: row.id },
+      data: {
+        evalReleasedAt: new Date(),
+        evalReleasedByUserId: observerId
+      }
+    });
+    // Release event is intentionally NOT scope=supervisor — when /changelogs
+    // is later opened to reps this entry should be visible to them since it
+    // describes the moment the eval became their record.
+    await writeEntityChangelog({
+      db: prisma,
+      tenantId,
+      entityType: EntityType.VISIT,
+      entityId: params.id,
+      action: "UPDATE",
+      changedById: observerId,
+      after: { coVisitorEvalReleased: updated.id, score: updated.evalScore },
+      context: { workflow: "CO_VISIT_EVAL_RELEASE", coVisitorUserId: observerId }
+    });
+    return updated;
   });
 };
