@@ -13479,7 +13479,13 @@ async function bootstrap() {
     // here instead of at module top-level avoids a wasted 401 round-trip and
     // a stray setInterval on the login page.
     initNotifications();
-  } catch {
+  } catch (err) {
+    // Surface the real error — silently catching makes the impersonation
+    // flow indistinguishable from "stuck at login" when something throws
+    // between handleImpersonation and showApp(). console.error is enough
+    // to triage from DevTools, and setStatus shows it to the user.
+    console.error("[bootstrap] failed to start app session:", err);
+    if (err?.message) setStatus(err.message, true);
     clearTokens();
     clearQueue().catch(() => {});
     hideAppLoading();
