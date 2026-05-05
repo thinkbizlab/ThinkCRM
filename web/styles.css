@@ -6404,9 +6404,17 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 }
 
 @media (max-width: 900px) {
-  .rp-thead, .rp-row { grid-template-columns: 1fr 130px; min-width: unset; }
-  .rp-thead span:nth-child(2), .rp-thead span:nth-child(4), .rp-thead span:nth-child(5),
-  .rp-row .rp-team-cell, .rp-row span:nth-child(4), .rp-row .rp-role-change-cell { display: none; }
+  /* 3-col grid on narrow viewports: user · role-badge · actions.
+     We hide Team, Reports-To, and the role <select> inside the actions cell —
+     but keep the cell itself visible so Admin can still tap the passkey and
+     trash buttons. The "Change Role" header still labels the actions column. */
+  .rp-thead, .rp-row { grid-template-columns: 1fr 110px auto; min-width: unset; }
+  .rp-thead span:nth-child(2), .rp-thead span:nth-child(4),
+  .rp-row .rp-team-cell, .rp-row > span:nth-child(4) { display: none; }
+  .rp-role-change-cell .rp-role-select,
+  .rp-role-change-cell .rp-locked,
+  .rp-role-change-cell .rp-locked-label { display: none; }
+  .rp-role-change-cell { gap: 4px; padding-left: 4px; }
 }
 
 @media (max-width: 768px) {
