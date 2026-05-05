@@ -527,6 +527,16 @@ type DrainState = {
   processed_count: number;
   /** Set once the connector returns fewer rows than chunkSize. */
   finished: boolean;
+  /**
+   * ISO timestamp set by `persistDrainState` after every chunk. Used by the
+   * reaper to distinguish a healthy long-running job (chunks landing every
+   * few seconds, so lastProgressAt stays fresh) from a truly orphaned one
+   * (worker died mid-pull, no further updates). Without this, the reaper
+   * had to fall back to `startedAt` and would falsely "reap" healthy jobs
+   * — the in-flight `persistDrainState` would resurrect them, producing
+   * harmless but noisy "Reaped 1" log lines every 15 min.
+   */
+  last_progress_at: string;
   payload_ref: string;
   mapping_version: string;
   idempotency_key: string;
@@ -544,6 +554,7 @@ function makeDrainState(cfg: MysqlSourceConfig, requestedBy: string): DrainState
     duplicate_count: 0,
     processed_count: 0,
     finished: false,
+    last_progress_at: new Date().toISOString(),
     payload_ref: `mysql-pull:${cfg.host}:${cfg.port}/${cfg.database}`,
     mapping_version: "v1",
     idempotency_key: crypto.randomUUID(),
@@ -674,10 +685,20 @@ function readDrainState(summaryJson: unknown): DrainState | null {
   // KEYSET-mode jobs start from the beginning (pre-existing rows get
   // re-upserted but stay idempotent).
   if (!("last_key" in o)) (o as { last_key: string | null }).last_key = null;
+  // Backwards-compat: legacy jobs persisted before progress tracking don't
+  // have last_progress_at. Default to "now" so the first chunk persists a
+  // fresh stamp instead of leaving a missing field for the reaper.
+  if (typeof o.last_progress_at !== "string") {
+    (o as { last_progress_at: string }).last_progress_at = new Date().toISOString();
+  }
   return o as unknown as DrainState;
 }
 
 async function persistDrainState(jobId: string, drain: DrainState, status: JobStatus): Promise<void> {
+  // Stamp every persistence with a fresh `last_progress_at` so the reaper
+  // can tell this job is healthy. (The reaper only kills jobs whose progress
+  // timestamp is older than the stuck-threshold.)
+  drain.last_progress_at = new Date().toISOString();
   await prisma.integrationSyncJob.update({
     where: { id: jobId },
     data: {
@@ -827,6 +848,7 @@ function makeFailedDrainShim(summaryJson: unknown, _reason: string): DrainState 
     duplicate_count: typeof base.duplicate_count === "number" ? base.duplicate_count : 0,
     processed_count: typeof base.processed_count === "number" ? base.processed_count : 0,
     finished: true,
+    last_progress_at: typeof base.last_progress_at === "string" ? base.last_progress_at : new Date().toISOString(),
     payload_ref: typeof base.payload_ref === "string" ? base.payload_ref : "mysql-pull:unknown",
     mapping_version: typeof base.mapping_version === "string" ? base.mapping_version : "v1",
     idempotency_key: typeof base.idempotency_key === "string" ? base.idempotency_key : crypto.randomUUID(),
@@ -837,18 +859,24 @@ function makeFailedDrainShim(summaryJson: unknown, _reason: string): DrainState 
 
 /**
  * Auto-fail MYSQL sync jobs that have been stuck in RUNNING for longer than
- * the configured threshold. The chunked drain persists progress after every
- * chunk, so a job that hasn't moved in `>thresholdMinutes` is almost
+ * the configured threshold. The chunked drain stamps `summaryJson.last_progress_at`
+ * every chunk, so a job that hasn't moved in `>thresholdMinutes` is almost
  * certainly orphaned (function timeout, OOM, deploy mid-flight) and the
  * lock-out blocks every subsequent enqueue for the same source.
  *
+ * The check uses `last_progress_at` (with a fallback to `startedAt` for
+ * legacy jobs persisted before this field existed) — NOT raw `startedAt`,
+ * because perfectly healthy syncs commonly run for 5+ hours and we don't
+ * want to falsely reap them every time the threshold elapses.
+ *
  * Threshold: SYNC_JOB_STUCK_THRESHOLD_MINUTES env var; default 30.
- * The longest legit per-chunk pull observed is single-digit minutes.
+ * The longest legit per-chunk pull observed is single-digit minutes, so a
+ * 30-min stale-progress threshold is comfortably loose.
  */
 export async function reapStuckMysqlJobs(tenantId: string): Promise<string> {
   const raw = parseInt(process.env.SYNC_JOB_STUCK_THRESHOLD_MINUTES ?? "", 10);
   const thresholdMinutes = Number.isFinite(raw) && raw >= 1 ? raw : 30;
-  const message = `Auto-failed: stuck RUNNING for >${thresholdMinutes} min`;
+  const message = `Auto-failed: no progress for >${thresholdMinutes} min`;
   const reaped = await prisma.$executeRaw`
     UPDATE "IntegrationSyncJob" AS j
     SET status = 'FAILED',
@@ -860,9 +888,12 @@ export async function reapStuckMysqlJobs(tenantId: string): Promise<string> {
       AND j."tenantId" = ${tenantId}
       AND s."sourceType" = 'MYSQL'
       AND j.status = 'RUNNING'
-      AND j."startedAt" < NOW() - (${thresholdMinutes}::int * INTERVAL '1 minute')
+      AND COALESCE(
+            (j."summaryJson"->>'last_progress_at')::timestamptz,
+            j."startedAt"
+          ) < NOW() - (${thresholdMinutes}::int * INTERVAL '1 minute')
   `;
-  return `Reaped ${reaped} stuck MySQL job(s) older than ${thresholdMinutes} min.`;
+  return `Reaped ${reaped} stuck MySQL job(s) with no progress for >${thresholdMinutes} min.`;
 }
 
 /**
