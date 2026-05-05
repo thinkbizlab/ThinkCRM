@@ -963,7 +963,7 @@ export function renderLoginMethodsPage({ branding, isAdmin }) {
       ${isAdmin ? `
       <form id="login-methods-form" class="settings-form">
         <div class="settings-toggle-list">
-          ${row("loginShowSignup",    "Show \\"Create a new workspace\\" link",
+          ${row("loginShowSignup",    'Show "Create a new workspace" link',
                 "Lets visitors start a brand-new tenant from the login page. Turn off if signups are invite-only.")}
           ${row("loginShowGoogle",    "Show Google / Gmail sign-in",
                 "Requires a configured Google OAuth credential for this tenant (or a platform-level fallback).")}
