@@ -12132,7 +12132,12 @@ async function searchCustomers(query, limit = 8) {
     q,
     limit: String(limit)
   });
-  if (state.customerScope) params.set("scope", state.customerScope);
+  // Pickers always span the requester's full visible scope (self + subordinate
+  // tree for managers, just self for REPs since the server collapses team→self
+  // for self-only roles). Don't read state.customerScope here — that's the
+  // master-page view toggle, and inheriting it would hide a subordinate's
+  // customer from a supervisor whenever the toggle happens to be on "mine".
+  params.set("scope", "team");
   return api(`/customers/search?${params.toString()}`);
 }
 

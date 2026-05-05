@@ -104,7 +104,8 @@ export function initQuickSearch({
         q,
         limit: "6"
       });
-      if (state.customerScope) params.set("scope", state.customerScope);
+      // Span the requester's full visible scope; see web/app.js searchCustomers().
+      params.set("scope", "team");
       const rows = await api(`/customers/search?${params.toString()}`);
       return rows.map((customer) => ({
         ...customer,
