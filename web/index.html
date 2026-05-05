@@ -7,7 +7,11 @@
     <title>ThinkCRM</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+    <!-- Async-load Google Fonts so it doesn't block first paint. The CSS
+         declares font-display: swap, so text renders in the system font
+         immediately and re-rasterises to Kanit once the font arrives. -->
+    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600;700&display=swap" onload="this.rel='stylesheet'" />
+    <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600;700&display=swap" /></noscript>
     <link rel="icon" type="image/svg+xml" href="/default-brand.svg" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="stylesheet" href="/styles.css?v=20260426a-perf" />
