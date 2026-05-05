@@ -667,6 +667,13 @@
         <form id="visit-edit-form" class="visit-modal-form">
           <input type="hidden" id="visit-edit-id" />
           <div class="visit-modal-fields">
+            <label class="form-label">Customer
+              <div class="ac-wrap" id="visit-edit-customer-wrap">
+                <input class="form-input" id="visit-edit-customer-input" type="text" placeholder="Type name or code…" autocomplete="off" />
+                <div class="ac-list" id="visit-edit-customer-list" hidden></div>
+                <input type="hidden" id="visit-edit-customer-id" />
+              </div>
+            </label>
             <label class="form-label" id="visit-edit-planned-at-label">Date &amp; time
               <input class="form-input" name="plannedAt" type="datetime-local" id="visit-edit-planned-at" />
             </label>
