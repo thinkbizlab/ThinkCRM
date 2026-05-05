@@ -1,7 +1,23 @@
 export const THEME_OVERRIDE_KEY = "thinkcrm_theme_override";
 
+// Tab-scoped impersonation: when the Login-as flow opens a new tab on the
+// same origin, the impersonation token is parked in sessionStorage (per-tab)
+// instead of localStorage (shared). That keeps the admin's tab on its own
+// session and the impersonation tab on its own. Read sessionStorage first.
+function _bootstrapToken() {
+  try {
+    const ses = sessionStorage.getItem("thinkcrm_token");
+    if (ses) return ses;
+  } catch {}
+  try {
+    return localStorage.getItem("thinkcrm_token") || "";
+  } catch {
+    return "";
+  }
+}
+
 export const state = {
-  token: localStorage.getItem("thinkcrm_token") || "",
+  token: _bootstrapToken(),
   user: null,
   googleMapsApiKey: null,
   cache: {

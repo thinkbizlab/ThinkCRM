@@ -14257,31 +14257,28 @@ applyThemeMode("LIGHT");
 
 // Handle impersonation token from URL.
 //   Super-admin → tenant-admin: tab opens at a different origin with no
-//     existing session, this IIFE seeds the token before bootstrap runs.
-//   Tenant-admin → tenant-user: tab opens at the SAME origin and inherits
-//     localStorage. We still want to overwrite the active token with the
-//     impersonation one and drop any stale refresh token (the impersonation
-//     JWT has no refresh pair, and the inherited refresh would silently
-//     refresh us BACK into the admin's session on the next 401).
+//     existing session.
+//   Tenant-admin → tenant-user: tab opens at the SAME origin and shares
+//     localStorage with the admin's tab.
+//
+// Both cases use sessionStorage (per-tab) instead of localStorage so:
+//   1. Admin's tab keeps its session — we never touch localStorage here.
+//   2. The impersonation tab is fully isolated — own token, own lifetime.
+//   3. No silent refresh back into the admin session via the inherited
+//      refresh token (api.js getRefreshToken returns "" when impersonating).
 (function handleImpersonation() {
   try {
     const params = new URLSearchParams(window.location.search);
     const token = params.get("impersonate_token");
     const slug = params.get("impersonate_slug");
     if (!token || !slug) return;
-    localStorage.setItem("thinkcrm_token", token);
-    localStorage.setItem("tenantSlug", slug);
-    // Drop any inherited refresh token from the admin's session — otherwise
-    // a 401 on this impersonation token would silently refresh us back into
-    // the admin user, which is exactly what the IIFE is meant to prevent.
-    localStorage.removeItem("thinkcrm_refresh");
+    sessionStorage.setItem("thinkcrm_impersonate", "1");
+    sessionStorage.setItem("thinkcrm_token", token);
+    sessionStorage.setItem("tenantSlug", slug);
     state.token = token;
     // Clean the URL so the token isn't sitting in the address bar / history.
     window.history.replaceState({}, "", "/dashboard");
   } catch (err) {
-    // If anything throws here we still want bootstrap to attempt to use
-    // whatever token landed in state/localStorage. Log to console so a
-    // stuck user can surface it from DevTools.
     console.error("[impersonate] failed to apply token from URL:", err);
   }
 })();
