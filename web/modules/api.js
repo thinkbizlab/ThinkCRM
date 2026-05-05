@@ -2,9 +2,18 @@ import { state } from "./state.js";
 
 const REFRESH_KEY = "thinkcrm_refresh";
 const TOKEN_KEY = "thinkcrm_token";
+const IMPERSONATE_FLAG = "thinkcrm_impersonate";
 
 let redirectingToLogin = false;
 let inflightRefresh = null;
+
+// In an impersonation tab the access token lives in sessionStorage (per-tab).
+// All token IO routes through here so we never touch the admin tab's
+// localStorage from the impersonation tab and vice versa. Detected purely
+// from sessionStorage so the flag is tab-local — no cross-tab leakage.
+function isImpersonating() {
+  try { return sessionStorage.getItem(IMPERSONATE_FLAG) === "1"; } catch { return false; }
+}
 
 function redirectToLogin() {
   if (redirectingToLogin) return;
@@ -12,8 +21,13 @@ function redirectToLogin() {
   state.token = "";
   state.user = null;
   try {
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(REFRESH_KEY);
+    if (isImpersonating()) {
+      sessionStorage.removeItem(TOKEN_KEY);
+      sessionStorage.removeItem(IMPERSONATE_FLAG);
+    } else {
+      localStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(REFRESH_KEY);
+    }
   } catch {}
   window.location.replace("/");
 }
@@ -21,22 +35,41 @@ function redirectToLogin() {
 export function storeTokens({ accessToken, refreshToken }) {
   if (accessToken) {
     state.token = accessToken;
-    try { localStorage.setItem(TOKEN_KEY, accessToken); } catch {}
+    try {
+      if (isImpersonating()) {
+        sessionStorage.setItem(TOKEN_KEY, accessToken);
+      } else {
+        localStorage.setItem(TOKEN_KEY, accessToken);
+      }
+    } catch {}
   }
-  if (refreshToken) {
+  // Refresh tokens are scoped to the real session (admin/normal user). The
+  // impersonation flow has no refresh pair — when it 401s, we redirect to
+  // login rather than silently elevating back into the admin's session via
+  // the inherited refresh token in shared localStorage.
+  if (refreshToken && !isImpersonating()) {
     try { localStorage.setItem(REFRESH_KEY, refreshToken); } catch {}
   }
 }
 
 export function getRefreshToken() {
+  // Impersonation tabs MUST NOT use the admin's refresh token (shared
+  // localStorage) — doing so would silently swap the impersonation back into
+  // an admin session on the next 401.
+  if (isImpersonating()) return "";
   try { return localStorage.getItem(REFRESH_KEY) || ""; } catch { return ""; }
 }
 
 export function clearTokens() {
   state.token = "";
   try {
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(REFRESH_KEY);
+    if (isImpersonating()) {
+      sessionStorage.removeItem(TOKEN_KEY);
+      sessionStorage.removeItem(IMPERSONATE_FLAG);
+    } else {
+      localStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(REFRESH_KEY);
+    }
   } catch {}
 }
 
