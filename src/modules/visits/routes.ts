@@ -1084,6 +1084,58 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
     return updated;
   });
 
+  /**
+   * Delete a planned visit. Only the owning rep may delete, and only while
+   * the visit is still PLANNED — once a rep has checked in (CHECKED_IN /
+   * CHECKED_OUT) the visit carries real fieldwork data (selfie, GPS,
+   * voice notes, deal-stage updates) and must be preserved for audit.
+   *
+   * Records an EntityChangelog DELETE entry with the row's pre-delete
+   * snapshot before actually deleting, so the audit trail survives the row.
+   */
+  app.delete("/visits/:id", async (request, reply) => {
+    const tenantId = requireTenantId(request);
+    const repId = requireUserId(request);
+    const params = request.params as { id: string };
+
+    const visit = await prisma.visit.findFirst({
+      where: { id: params.id, tenantId, repId }
+    });
+    if (!visit) {
+      throw app.httpErrors.notFound("Visit not found.");
+    }
+    if (visit.status !== VisitStatus.PLANNED) {
+      throw app.httpErrors.badRequest(
+        "Only planned visits can be deleted. A visit that has been checked in/out keeps an audit record."
+      );
+    }
+
+    await writeEntityChangelog({
+      db: prisma,
+      tenantId,
+      entityType: EntityType.VISIT,
+      entityId: visit.id,
+      action: "DELETE",
+      changedById: repId,
+      before: {
+        plannedAt: visit.plannedAt,
+        objective: visit.objective,
+        siteLat: visit.siteLat,
+        siteLng: visit.siteLng,
+        dealId: visit.dealId,
+        customerId: visit.customerId,
+        visitType: visit.visitType,
+        status: visit.status
+      },
+      after: null,
+      context: { workflow: "DELETE" }
+    });
+
+    await prisma.visit.delete({ where: { id: visit.id } });
+
+    return reply.code(204).send();
+  });
+
   app.get("/calendar/events", async (request) => {
     const tenantId = requireTenantId(request);
     const visibleUserIds = await listVisibleUserIds(request);
