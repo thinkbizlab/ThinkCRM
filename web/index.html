@@ -440,67 +440,17 @@
           <div class="side-panel-head">
             <div class="side-panel-head-left">
               <h3>Notifications</h3>
-              <span class="notif-count-badge">3 new</span>
+              <span class="notif-count-badge">All caught up</span>
             </div>
             <div class="side-panel-head-right">
-              <button class="sp-text-btn" id="notif-read-all">Mark all as read</button>
-              <span class="sp-sep">&#xB7;</span>
-              <button class="sp-text-btn">Settings</button>
               <button class="sp-close-btn" id="notif-close" aria-label="Close">
                 <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
               </button>
             </div>
           </div>
+          <!-- Populated by web/modules/notifications.js on bell open + 60s poll. -->
           <div class="notif-list" id="notif-list">
-            <div class="notif-item unread">
-              <div class="notif-icon" style="background:oklch(93% 0.04 25); color:oklch(50% 0.22 25)">
-                <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-              </div>
-              <div class="notif-body">
-                <p class="notif-title">Follow-up Overdue</p>
-                <p class="notif-desc">Deal "Security Audit Services" follow-up was due on Apr 8</p>
-                <div class="notif-meta">
-                  <span class="notif-time">2 hours ago</span>
-                  <span class="notif-priority-chip">High Priority</span>
-                </div>
-              </div>
-              <span class="notif-unread-dot"></span>
-            </div>
-            <div class="notif-item unread">
-              <div class="notif-icon" style="background:oklch(93% 0.04 240); color:oklch(52% 0.18 240)">
-                <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
-              </div>
-              <div class="notif-body">
-                <p class="notif-title">Visit Check-in Reminder</p>
-                <p class="notif-desc">Scheduled visit with Acme Corporation starts in 30 minutes</p>
-                <span class="notif-time">3 hours ago</span>
-              </div>
-              <span class="notif-unread-dot"></span>
-            </div>
-            <div class="notif-item unread">
-              <div class="notif-icon" style="background:var(--accent-subtle); color:var(--accent-dim)">
-                <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
-              </div>
-              <div class="notif-body">
-                <p class="notif-title">Deal Moved to Quotation</p>
-                <p class="notif-desc">Michael Torres moved "Cloud Migration Project" to Quotation stage</p>
-                <span class="notif-time">5 hours ago</span>
-              </div>
-              <span class="notif-unread-dot"></span>
-            </div>
-            <div class="notif-item">
-              <div class="notif-icon" style="background:oklch(93% 0.04 145); color:oklch(50% 0.17 145)">
-                <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-              </div>
-              <div class="notif-body">
-                <p class="notif-title">New Quotation Created</p>
-                <p class="notif-desc">Quotation QT-2026-044 has been created and sent for review</p>
-                <span class="notif-time">5 hours ago</span>
-              </div>
-            </div>
-          </div>
-          <div class="side-panel-footer">
-            <button class="sp-view-all-btn">View all notifications</button>
+            <div class="notif-empty">Loading…</div>
           </div>
         </div>
 

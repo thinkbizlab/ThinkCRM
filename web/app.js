@@ -21,6 +21,7 @@ import { loadOAuthProviderButtons, wireOAuthProviderButtons, consumeOAuthCallbac
 import { icon } from "./modules/icons.js";
 import { openDraftCustomerModal, openPromoteDraftModal, draftBadgeHtml, setDraftCustomerDeps } from "./modules/customer-drafts.js";
 import { enqueue, markDone, markFailed, markSyncing, getPendingOps, getQueueCount, clearQueue } from "./modules/offline-queue.js";
+import { setNotificationsDeps, initNotifications, onBellOpen } from "./modules/notifications.js";
 
 // Build version: extracted from this script's own URL (?v=...). Used to
 // version dynamic imports so a deploy bumping the version forces fresh
@@ -12749,9 +12750,26 @@ function closeAllPanels() {
   }
 }
 
+// Wire the bell to live data. Module owns rendering + polling; we just
+// inject what it needs (api, status, escHtml, checkout-modal) and call
+// initNotifications once so polling starts as soon as the app shell is up.
+setNotificationsDeps({
+  api,
+  setStatus,
+  escHtml,
+  openCheckOutModal
+});
+initNotifications();
+
 qs("#notif-btn")?.addEventListener("click", () => {
   const isOpen = notifPanel && !notifPanel.hidden;
-  isOpen ? closeAllPanels() : openPanel(notifPanel);
+  if (isOpen) {
+    closeAllPanels();
+  } else {
+    openPanel(notifPanel);
+    // Fire-and-forget — onBellOpen handles its own errors and re-renders.
+    onBellOpen();
+  }
 });
 
 // Settings flyin: rendered just-in-time so role changes and the active-page

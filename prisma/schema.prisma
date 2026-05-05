@@ -129,10 +129,22 @@ model User {
   devices                   UserDevice[]
   passkeys                  UserPasskey[]
   aiUsageEvents             AiUsageEvent[]
+  notificationState         UserNotificationState?
 
   @@unique([tenantId, email])
   @@index([tenantId, isActive, role])
   @@index([tenantId, lastSeenAt])
+}
+
+// Per-user "I last opened the bell at <ts>" marker. Powers the unread-dot
+// on the notifications bell — items whose underlying timestamp is newer
+// than `notifLastSeenAt` count as unread. Single row per user; updated
+// only when the user opens the bell panel. See src/modules/notifications.
+model UserNotificationState {
+  userId          String    @id
+  notifLastSeenAt DateTime?
+  updatedAt       DateTime  @updatedAt
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model UserDelegation {
