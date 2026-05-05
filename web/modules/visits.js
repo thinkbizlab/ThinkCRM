@@ -611,6 +611,11 @@ export async function openVisitDetail(visitId) {
       needsTemplates ? api(`/competency-templates`).catch(() => []) : Promise.resolve(null)
     ]);
     if (templates) state.cache.competencyTemplates = templates;
+    // Rep with released coaching feedback also needs competency names. Fetch
+    // if any coVisitor row carries competencyScores and the cache is empty.
+    if (!state.cache.competencyTemplates && (visit.coVisitors || []).some((cv) => (cv.competencyScores || []).length > 0)) {
+      state.cache.competencyTemplates = await api(`/competency-templates`).catch(() => []);
+    }
     renderVisitDetailContent(visit, changelogs);
   } catch (error) {
     visitDetailBody.innerHTML = `<div class="vd-loading" style="color:var(--danger-text,red)">${escHtml(error.message)}</div>`;
@@ -806,6 +811,45 @@ function renderVisitDetailContent(visit, changelogs) {
       </div>`;
   }
 
+  // ── Rep-facing "Coaching feedback" section ─────────────────────────────
+  // Server-side masking guarantees a rep only ever sees coVisitor rows where
+  // evalReleasedAt is set, with selfie / geo / timestamps stripped. Render a
+  // simple read-only summary of each released evaluation. Hidden when the
+  // visit isn't theirs OR when the masked array is empty.
+  let coachingHtml = "";
+  if (isOwnVisit && (visit.coVisitors || []).length > 0) {
+    const competencyById = new Map((state.cache.competencyTemplates || []).map((c) => [c.id, c]));
+    const items = visit.coVisitors.map((cv) => {
+      const compRows = (cv.competencyScores || []).length
+        ? `<div class="vd-detail-rows">${cv.competencyScores.map((s) => {
+            const tpl = competencyById.get(s.competencyTemplateId);
+            const name = tpl?.name ?? s.competencyTemplateId;
+            return `<div class="vd-detail-row">
+              <span class="vd-detail-row-label">${escHtml(name)}</span>
+              <span class="vd-detail-row-value">${s.score} / 5</span>
+            </div>`;
+          }).join("")}</div>`
+        : "";
+      const releaserName = cv.releasedBy?.fullName || cv.coVisitor?.fullName || "your supervisor";
+      const releasedDate = cv.evalReleasedAt ? asDate(new Date(cv.evalReleasedAt)) : "—";
+      return `
+        <div class="vd-coaching-card">
+          <div class="vd-detail-rows">
+            <div class="vd-detail-row"><span class="vd-detail-row-label">From</span><span class="vd-detail-row-value">${escHtml(releaserName)}</span></div>
+            <div class="vd-detail-row"><span class="vd-detail-row-label">Score</span><span class="vd-detail-row-value">${cv.evalScore ?? "—"} / 5</span></div>
+            <div class="vd-detail-row"><span class="vd-detail-row-label">Released</span><span class="vd-detail-row-value">${escHtml(releasedDate)}</span></div>
+          </div>
+          ${cv.evalNotes ? `<div class="vd-result-block">${escHtml(cv.evalNotes)}</div>` : ""}
+          ${compRows}
+        </div>`;
+    }).join("");
+    coachingHtml = `
+      <div class="vd-section">
+        <p class="vd-section-title">${icon('users')} Coaching feedback</p>
+        ${items}
+      </div>`;
+  }
+
   // ── Co-Visit panel ─────────────────────────────────────────────────────
   // Shown to users eligible to co-visit (not the rep themselves). Server-side
   // gating (canCoVisitRep) is the authority — this UI is just a hint, with
@@ -993,7 +1037,7 @@ function renderVisitDetailContent(visit, changelogs) {
       </div>`;
   }
 
-  visitDetailBody.innerHTML = heroHtml + customerHtml + dealHtml + timingHtml + objectiveHtml + resultHtml + locationHtml + voiceNotesHtml + coVisitHtml + changelogHtml;
+  visitDetailBody.innerHTML = heroHtml + customerHtml + dealHtml + timingHtml + objectiveHtml + resultHtml + locationHtml + voiceNotesHtml + coachingHtml + coVisitHtml + changelogHtml;
 
   visitDetailBody.querySelector(".vd-edit-btn")?.addEventListener("click", () => openVisitEditModal(visit));
 

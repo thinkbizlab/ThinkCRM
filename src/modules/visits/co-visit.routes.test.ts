@@ -362,6 +362,83 @@ describe("co-visit release preconditions", () => {
   });
 });
 
+describe("co-visit dashboard KPI", () => {
+  it("excludes co-visited visits from rep count when coVisitCountsAsRepVisit=false; supervisor co-visit count surfaces on dashboard", async () => {
+    const app = await buildApp();
+    const f = await createCoVisitFixture();
+
+    // Move the visit's plannedAt into the current month so the dashboard
+    // window picks it up (window resolves by month key, defaults to now).
+    await prisma.visit.update({
+      where: { id: f.visitId },
+      data: { plannedAt: new Date() }
+    });
+
+    // Supervisor joins + checks in. Rep's normal visit count for this visit
+    // should now be excluded (default flag is false).
+    const supHeaders = await authHeader(app, f.tenantId, f.supervisorId, UserRole.SUPERVISOR);
+    await app.inject({ method: "POST", url: `/api/v1/visits/${f.visitId}/co-visitors`, headers: supHeaders });
+    await app.inject({
+      method: "POST",
+      url: `/api/v1/visits/${f.visitId}/co-visitors/me/checkin`,
+      headers: supHeaders,
+      payload: { lat: 13.75, lng: 100.5, selfieUrl: "r2://t/s.jpg" }
+    });
+
+    // Sanity: dashboard for the supervisor (sees own subtree which includes rep).
+    const dashRes1 = await app.inject({
+      method: "GET",
+      url: `/api/v1/dashboard/overview`,
+      headers: supHeaders
+    });
+    expect(dashRes1.statusCode).toBe(200);
+    const k1 = dashRes1.json().kpis;
+    // Rep's only visit is co-visited and the flag is off → visitsPlanned excludes it.
+    expect(k1.visitsPlannedInPeriod).toBe(0);
+    // Supervisor's personal co-visit count = 1 (just checked in).
+    expect(k1.myCoVisitsInPeriod).toBe(1);
+    expect(k1.coVisitsInPeriod).toBe(1);
+
+    // Flip the flag on; now the rep's visit IS counted again.
+    await prisma.tenantVisitConfig.upsert({
+      where: { tenantId: f.tenantId },
+      update: { coVisitCountsAsRepVisit: true },
+      create: { tenantId: f.tenantId, coVisitCountsAsRepVisit: true }
+    });
+    const dashRes2 = await app.inject({
+      method: "GET",
+      url: `/api/v1/dashboard/overview`,
+      headers: supHeaders
+    });
+    const k2 = dashRes2.json().kpis;
+    expect(k2.visitsPlannedInPeriod).toBe(1);
+    expect(k2.myCoVisitsInPeriod).toBe(1);
+
+    await app.close();
+  });
+
+  it("PUT /tenants/:id/visit-config accepts the coVisitCountsAsRepVisit flag", async () => {
+    const app = await buildApp();
+    const f = await createCoVisitFixture();
+    const adminHeaders = await authHeader(app, f.tenantId, f.adminId, UserRole.ADMIN);
+
+    const res = await app.inject({
+      method: "PUT",
+      url: `/api/v1/tenants/${f.tenantId}/visit-config`,
+      headers: adminHeaders,
+      payload: {
+        checkInMaxDistanceM: 1500,
+        minVisitDurationMinutes: 20,
+        coVisitCountsAsRepVisit: true
+      }
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().coVisitCountsAsRepVisit).toBe(true);
+
+    await app.close();
+  });
+});
+
 describe("competency templates", () => {
   it("admin can CRUD templates; non-admin only reads", async () => {
     const app = await buildApp();

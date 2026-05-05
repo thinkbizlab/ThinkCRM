@@ -101,6 +101,21 @@ export function renderDashboard(data) {
           <div class="progress kpi-progress"><span style="width:${Math.min(completion, 100)}%"></span></div>
           <div class="muted">Completed visits</div>
         </article>
+        ${(() => {
+          // Co-Visit tile — visible to roles that can co-visit. Shows the
+          // requester's own count for the period; doubles as a discoverability
+          // hint for the feature even at zero.
+          const COVISIT_ROLES = new Set(["ADMIN", "DIRECTOR", "MANAGER", "SUPERVISOR", "ASSISTANT_MANAGER", "SALES_ADMIN"]);
+          if (!state.user?.role || !COVISIT_ROLES.has(state.user.role)) return "";
+          const myCount = data.kpis.myCoVisitsInPeriod ?? 0;
+          return `
+            <article class="kpi">
+              <div class="kpi-icon">${icon('users')}</div>
+              <h4>My Co-Visits</h4>
+              <strong>${myCount}</strong>
+              <div class="muted">Field evaluations this month</div>
+            </article>`;
+        })()}
       </div>
 
       <div class="dash-grid">

@@ -1180,16 +1180,21 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     const params = request.params as { id: string };
     requireRoleAtLeast(request, UserRole.ADMIN);
     assertTenantPathAccess(request, params.id);
-    const body = request.body as { checkInMaxDistanceM: number; minVisitDurationMinutes: number };
     const parsed = z.object({
       checkInMaxDistanceM: z.number().int().min(100).max(100_000),
-      minVisitDurationMinutes: z.number().int().min(1).max(480)
-    }).safeParse(body);
+      minVisitDurationMinutes: z.number().int().min(1).max(480),
+      coVisitCountsAsRepVisit: z.boolean().optional()
+    }).safeParse(request.body);
     if (!parsed.success) throw app.httpErrors.badRequest(zodMsg(parsed.error));
     return prisma.tenantVisitConfig.upsert({
       where: { tenantId: params.id },
       update: parsed.data,
-      create: { tenantId: params.id, ...parsed.data }
+      create: {
+        tenantId: params.id,
+        checkInMaxDistanceM: parsed.data.checkInMaxDistanceM,
+        minVisitDurationMinutes: parsed.data.minVisitDurationMinutes,
+        coVisitCountsAsRepVisit: parsed.data.coVisitCountsAsRepVisit ?? false
+      }
     });
   });
 

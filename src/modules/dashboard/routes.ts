@@ -79,7 +79,16 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
     }
     const visibleUserIdList = [...visibleUserIds];
 
-    const [scopedTargets, openDealsByOwner, createdDealsByOwner, wonDealsByOwner, lostDealsByOwner, visitsByRepStatus] = await Promise.all([
+    // Per-tenant flag: when false (default), a Visit with any checked-in
+    // co-visitor doesn't tick the rep's normal visit count — it counts only as
+    // the supervisor's co-visit KPI. When true, the rep keeps credit too.
+    const visitConfig = await prisma.tenantVisitConfig.findUnique({
+      where: { tenantId },
+      select: { coVisitCountsAsRepVisit: true }
+    });
+    const coVisitCountsForRep = visitConfig?.coVisitCountsAsRepVisit ?? false;
+
+    const [scopedTargets, openDealsByOwner, createdDealsByOwner, wonDealsByOwner, lostDealsByOwner, visitsByRepStatus, coVisitsBySupervisor] = await Promise.all([
       prisma.salesKpiTarget.findMany({
         where: {
           tenantId,
@@ -134,7 +143,23 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
         where: {
           tenantId,
           repId: { in: visibleUserIdList },
-          plannedAt: { gte: dateFrom, lt: dateTo }
+          plannedAt: { gte: dateFrom, lt: dateTo },
+          // Exclude co-visited visits from rep counts when the flag is off.
+          // none-with-checkInAt-set narrows to "no supervisor actually showed up"
+          // (a co-visitor who joined but never checked in doesn't count).
+          ...(coVisitCountsForRep ? {} : { coVisitors: { none: { checkInAt: { not: null } } } })
+        },
+        _count: { _all: true }
+      }),
+      // Supervisor's own co-visit count for the period (their personal KPI).
+      // Counts checked-in rows so a "joined but didn't show up" doesn't inflate
+      // the metric.
+      prisma.visitCoVisitor.groupBy({
+        by: ["coVisitorUserId"],
+        where: {
+          tenantId,
+          coVisitorUserId: { in: visibleUserIdList },
+          checkInAt: { not: null, gte: dateFrom, lt: dateTo }
         },
         _count: { _all: true }
       })
@@ -350,6 +375,11 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
         rank: index + 1
       }));
 
+    // Co-visit metrics — total across visible users, plus the requester's own
+    // count for the personal KPI tile.
+    const coVisitsInPeriod = coVisitsBySupervisor.reduce((sum, row) => sum + row._count._all, 0);
+    const myCoVisitsInPeriod = coVisitsBySupervisor.find((row) => row.coVisitorUserId === requesterId)?._count._all ?? 0;
+
     return {
       period: {
         month: monthKey,
@@ -364,6 +394,9 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
         visitCompletionRate: Number((visitCompletion * 100).toFixed(2)),
         dealsCreatedInPeriod,
         visitsPlannedInPeriod,
+        coVisitsInPeriod,
+        myCoVisitsInPeriod,
+        coVisitCountsForRep,
         usersInScope: visibleUserIdList.length
       },
       targetVsActual,
