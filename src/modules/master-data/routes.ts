@@ -116,7 +116,10 @@ const customerUpdateSchema = customerSchemaBase.omit({ customerCode: true, statu
 });
 
 const customerSearchQuerySchema = z.object({
-  q: z.string().trim().min(2).max(120),
+  // 3-char minimum keeps the query bounded — 2-char prefixes match thousands
+  // of rows on tenants with 70k+ customers, and the seq scan over a giant
+  // ILIKE result is the dominant cost.
+  q: z.string().trim().min(3).max(120),
   // limit defaults to 8 (autocomplete-style) but can be raised for the
   // master-page search-as-list use case. Hard cap 100 keeps response size
   // bounded and matches the list view's per-page sizing.
@@ -619,6 +622,12 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     const federationCfg = await getFederationConfig(tenantId);
     if (!federationCfg) return localRows;
 
+    // Skip the live MySQL roundtrip when the local shadow already has enough
+    // matches to fill the requested limit. Federation exists to surface rows
+    // that haven't been pulled yet — if local already overflows the limit,
+    // any net-new federated hits would just be sliced off below anyway.
+    if (localRows.length >= query.limit) return localRows;
+
     const localExternalRefs = new Set(localRows.map((r) => r.externalRef).filter((v): v is string => !!v));
     const federatedHits = await searchFederatedCustomers(tenantId, query.q, query.limit).catch((err) => {
       // Federation failures here are expected to be transient (timeout, breaker
@@ -641,37 +650,41 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
     const newRefs = federatedHits.filter((hit) => !localExternalRefs.has(hit.externalRef));
     if (newRefs.length === 0) return localRows;
 
-    const created: typeof localRows = [];
-    for (const hit of newRefs) {
-      const hitDisabled = isDisabled(hit.raw);
-      // Upsert by (tenantId, externalRef) — there's a unique constraint on
-      // that pair so concurrent searches won't dupe.
-      const shadow = await prisma.customer.upsert({
-        where: { tenantId_externalRef: { tenantId, externalRef: hit.externalRef } },
-        create: {
-          tenantId,
-          ownerId: requesterId,
-          externalRef: hit.externalRef,
-          name: hit.name,
-          status: "ACTIVE",
-          disabled: hitDisabled,
-          // customerCode pulled from MySQL when present so list rows show ERP code
-          customerCode: typeof hit.raw.customer_code === "string" ? hit.raw.customer_code : null
-        },
-        update: { name: hit.name, disabled: hitDisabled },
-        select: {
-          id: true,
-          name: true,
-          customerCode: true,
-          status: true,
-          disabled: true,
-          draftCreatedByUserId: true,
-          externalRef: true,
-          owner: { select: { id: true, fullName: true } }
-        }
-      });
-      created.push(shadow);
-    }
+    // Run the upserts in parallel — they're independent (each keyed on a
+    // distinct (tenantId, externalRef) pair) so the previous serial loop was
+    // burning N round trips for no reason. With limit=8 and a cold cache this
+    // alone shaves ~7×Prisma latency off the search response.
+    const created = await Promise.all(
+      newRefs.map((hit) => {
+        const hitDisabled = isDisabled(hit.raw);
+        // Upsert by (tenantId, externalRef) — there's a unique constraint on
+        // that pair so concurrent searches won't dupe.
+        return prisma.customer.upsert({
+          where: { tenantId_externalRef: { tenantId, externalRef: hit.externalRef } },
+          create: {
+            tenantId,
+            ownerId: requesterId,
+            externalRef: hit.externalRef,
+            name: hit.name,
+            status: "ACTIVE",
+            disabled: hitDisabled,
+            // customerCode pulled from MySQL when present so list rows show ERP code
+            customerCode: typeof hit.raw.customer_code === "string" ? hit.raw.customer_code : null
+          },
+          update: { name: hit.name, disabled: hitDisabled },
+          select: {
+            id: true,
+            name: true,
+            customerCode: true,
+            status: true,
+            disabled: true,
+            draftCreatedByUserId: true,
+            externalRef: true,
+            owner: { select: { id: true, fullName: true } }
+          }
+        });
+      })
+    );
     // Merge local + federated, then re-sort: active first, disabled last.
     // Within each group, preserve existing order (local-first within active so
     // already-known customers come before fresh federation-created shadows).

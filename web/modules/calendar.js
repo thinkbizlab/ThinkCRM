@@ -21,7 +21,9 @@ export function setCalendarDeps(d) {
 
 async function searchCustomers(query, limit = 8) {
   const q = String(query || "").trim();
-  if (q.length < 2) return [];
+  // 3-char threshold for typeahead; large tenants (70k+) make 2-char prefixes
+  // too broad to keep responsive.
+  if (q.length < 3) return [];
   const params = new URLSearchParams({
     q,
     limit: String(limit)
@@ -361,7 +363,7 @@ export function renderCalendar(calendarData) {
 
   const updateCustomerMatches = debounce(async () => {
     const q = customerInput?.value.trim() || "";
-    if (q.length < 2) { customerList.hidden = true; return; }
+    if (q.length < 3) { customerList.hidden = true; return; }
     const reqId = ++activeCustomerSearch;
     let matches = [];
     try {

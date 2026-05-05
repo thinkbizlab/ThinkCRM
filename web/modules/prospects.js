@@ -465,7 +465,7 @@ function openIdentifyDialog(prospect, onLinked) {
   let lastQuery = "";
   searchEl?.addEventListener("input", debounce(async (e) => {
     const q = e.target.value.trim();
-    if (q.length < 2) {
+    if (q.length < 3) {
       resultsEl.hidden = true;
       resultsEl.innerHTML = "";
       return;
