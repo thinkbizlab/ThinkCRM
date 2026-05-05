@@ -82,6 +82,8 @@ model Tenant {
   aiUsageEvents               AiUsageEvent[]
   visitCoVisitors             VisitCoVisitor[]
   competencyTemplates         CompetencyTemplate[]
+  announcements               Announcement[]
+  announcementAcks            AnnouncementAck[]
 }
 
 model User {
@@ -134,6 +136,8 @@ model User {
   coVisitorVisits           VisitCoVisitor[]           @relation("VisitCoVisitorUser")
   releasedCoVisitorEvals    VisitCoVisitor[]           @relation("VisitCoVisitorReleasedBy")
   notificationState         UserNotificationState?
+  createdAnnouncements      Announcement[]             @relation("AnnouncementCreatedBy")
+  announcementAcks          AnnouncementAck[]          @relation("AnnouncementAckUser")
 
   @@unique([tenantId, email])
   @@index([tenantId, isActive, role])
@@ -342,6 +346,12 @@ model TenantBranding {
   loginShowGoogle       Boolean   @default(true)
   loginShowMicrosoft    Boolean   @default(true)
   loginShowPasskey      Boolean   @default(true)
+  // Layout for the uploaded `loginHeroImageUrl`:
+  //   BACKGROUND   — image fills the left hero panel (current behaviour)
+  //   INLINE_LOGO  — image renders as a small logo above the wordmark/tagline,
+  //                  panel keeps its solid background. Use when a tenant just
+  //                  wants a compact branded mark, not a full-bleed photo.
+  loginHeroLayout       String    @default("BACKGROUND")
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
   tenant                Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1434,6 +1444,42 @@ model AuditLog {
 
   @@index([tenantId, createdAt])
   @@index([tenantId, action])
+}
+
+// Announcement: tenant-admin broadcast that every user in the tenant sees as a
+// modal until they click Accept. The modal disappears on ack and never returns
+// for that user. AnnouncementAck rows are the read receipt log.
+model Announcement {
+  id              String            @id @default(cuid())
+  tenantId        String
+  title           String
+  body            String
+  // Empty array = broadcast to every active user. Non-empty = only users
+  // whose role is in this list will see (and need to acknowledge) it.
+  roles           UserRole[]        @default([])
+  createdById     String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  tenant          Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdBy       User?             @relation("AnnouncementCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  acknowledgments AnnouncementAck[]
+
+  @@index([tenantId, createdAt])
+}
+
+model AnnouncementAck {
+  id             String       @id @default(cuid())
+  tenantId       String
+  announcementId String
+  userId         String
+  acknowledgedAt DateTime     @default(now())
+  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  announcement   Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  user           User         @relation("AnnouncementAckUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([announcementId, userId])
+  @@index([tenantId, userId])
+  @@index([tenantId, announcementId])
 }
 
 model RefreshToken {

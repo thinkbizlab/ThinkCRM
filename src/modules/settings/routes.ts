@@ -129,7 +129,8 @@ const brandingSchema = z.object({
   loginShowSignup:    boolFromForm,
   loginShowGoogle:    boolFromForm,
   loginShowMicrosoft: boolFromForm,
-  loginShowPasskey:   boolFromForm
+  loginShowPasskey:   boolFromForm,
+  loginHeroLayout:    z.enum(["BACKGROUND", "INLINE_LOGO"]).optional()
 });
 
 const kpiMonthPattern = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -1143,6 +1144,31 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
       loginHeroDownloadUrl,
       branding
     });
+  });
+
+  // Clear the login-screen hero image. The branding form's PATCH treats
+  // missing fields as "leave unchanged", so removing the image needs an
+  // explicit endpoint. The orphaned R2 object is left in place — a periodic
+  // cleanup job is the right tool for that, not request-time deletion.
+  app.delete("/tenants/:id/branding/login-hero", async (request, reply) => {
+    const params = request.params as { id: string };
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    assertTenantPathAccess(request, params.id);
+
+    const existing = await prisma.tenantBranding.findUnique({
+      where: { tenantId: params.id },
+      select: { tenantId: true }
+    });
+    if (!existing) {
+      // No branding row yet → nothing to clear.
+      return reply.code(204).send();
+    }
+
+    await prisma.tenantBranding.update({
+      where: { tenantId: params.id },
+      data: { loginHeroImageUrl: null }
+    });
+    return reply.code(204).send();
   });
 
   app.get("/tenants/:id/tax-config", async (request) => {

@@ -318,7 +318,8 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         loginShowSignup: true,
         loginShowGoogle: true,
         loginShowMicrosoft: true,
-        loginShowPasskey: true
+        loginShowPasskey: true,
+        loginHeroLayout: "BACKGROUND"
       });
     }
     const b = tenant.branding;
@@ -344,7 +345,8 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       loginShowSignup:       b?.loginShowSignup       ?? true,
       loginShowGoogle:       b?.loginShowGoogle       ?? true,
       loginShowMicrosoft:    b?.loginShowMicrosoft    ?? true,
-      loginShowPasskey:      b?.loginShowPasskey      ?? true
+      loginShowPasskey:      b?.loginShowPasskey      ?? true,
+      loginHeroLayout:       b?.loginHeroLayout       ?? "BACKGROUND"
     });
   });
 

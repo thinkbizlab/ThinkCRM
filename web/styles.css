@@ -177,6 +177,20 @@ body {
   max-width: 340px;
 }
 
+/* Compact-logo mode for the login hero image. Rendered when
+   `loginHeroLayout` is INLINE_LOGO — the image is stamped above the wordmark
+   text rather than used as a full-bleed background. Caps the size so any
+   uploaded asset (square, wide, square photo) lands at a reasonable scale. */
+.login-hero-inline-logo {
+  display: block;
+  max-width: 220px;
+  max-height: 100px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  margin-bottom: var(--sp-6);
+}
+
 /* Hide the app name until branding resolves, so whitelabel domains don't flash
    the default "ThinkCRM" before the tenant name paints. */
 .branding-pending { visibility: hidden; }

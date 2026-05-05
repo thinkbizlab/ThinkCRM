@@ -21,6 +21,7 @@ export const state = {
     visits: [],
     notifPrefs: undefined,
     cronJobs: undefined,
+    adminAnnouncements: undefined,
     myIntegrations: null,
     calendar: null,
     logs: [],
