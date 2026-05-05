@@ -2465,6 +2465,54 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     return reply.code(204).send();
   });
 
+  // Tenant-admin "Login as" — issue a 1h impersonation JWT for any active user
+  // in the same tenant. Mirrors the super-admin → tenant-admin flow at
+  // /super-admin/tenants/:id/impersonate but stays scoped within the caller's
+  // tenant. Cannot impersonate yourself. AuditLog records the actor + target
+  // so the impersonation trail is preserved even if the target then takes
+  // actions whose changelog rows attribute to them. Frontend opens the URL in
+  // a new tab via the existing handleImpersonation IIFE in app.js.
+  app.post("/admin/impersonate/:userId", async (request) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+    const actorId = requireUserId(request);
+    const params = request.params as { userId: string };
+
+    if (params.userId === actorId) {
+      throw app.httpErrors.badRequest("Cannot impersonate yourself.");
+    }
+    const target = await prisma.user.findFirst({
+      where: { id: params.userId, tenantId, isActive: true },
+      select: { id: true, email: true, role: true, fullName: true }
+    });
+    if (!target) throw app.httpErrors.notFound("User not found in this tenant.");
+
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: tenantId },
+      select: { slug: true }
+    });
+
+    const token = await app.jwt.sign(
+      { tenantId, userId: target.id, role: target.role, email: target.email },
+      { expiresIn: "1h" }
+    );
+    await logAuditEvent(
+      tenantId,
+      actorId,
+      "TENANT_ADMIN_IMPERSONATE",
+      { targetUserId: target.id, targetEmail: target.email, targetRole: target.role },
+      request.ip
+    );
+    return {
+      token,
+      tenantSlug: tenant?.slug,
+      userId: target.id,
+      email: target.email,
+      fullName: target.fullName,
+      expiresIn: "1h"
+    };
+  });
+
   app.post("/kpi-targets", async (request, reply) => {
     requireRoleAtLeast(request, UserRole.MANAGER);
     const tenantId = requireTenantId(request);

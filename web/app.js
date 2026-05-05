@@ -5393,6 +5393,7 @@ function renderSettings() {
                 <span class="rp-role-change-cell">
                   ${roleOptions(u)}
                   ${isAdmin ? `<button type="button" class="passkey-admin-btn ghost small" data-uid="${u.id}" data-name="${escHtml(u.fullName)}" title="Manage passkeys">${icon('key')}</button>` : ""}
+                  ${isAdmin && !isSelf ? `<button type="button" class="ghost small rp-login-as-btn" data-uid="${u.id}" data-name="${escHtml(u.fullName)}" title="Log in as ${escHtml(u.fullName)}">${icon('user')}</button>` : ""}
                   ${isAdmin && !isSelf ? `<button type="button" class="btn-danger-outline small rp-delete-user-btn" data-uid="${u.id}" data-name="${escHtml(u.fullName)}" title="Deactivate user">${icon('trash')}</button>` : ""}
                 </span>
               </div>`;
@@ -8366,6 +8367,32 @@ function renderSettings() {
   });
 
   qs("#rp-tbody")?.addEventListener("click", async (e) => {
+    // Login-as: tenant-admin impersonation. Opens the workspace in a new tab
+    // signed in as the target user. Audit trail is recorded server-side.
+    // NOTE: localStorage is shared across tabs on the same origin, so the
+    // new tab's token will overwrite this tab's admin token. The admin will
+    // need to log back in here when finished. Match the super-admin behavior.
+    const loginAsBtn = e.target.closest(".rp-login-as-btn");
+    if (loginAsBtn) {
+      const uid = loginAsBtn.dataset.uid;
+      const name = loginAsBtn.dataset.name || "this user";
+      if (!confirm(`Log in as ${name}? A new tab will open. Your admin session in this tab will be replaced — you'll need to log back in here when finished.\n\nThis action is recorded in the audit log.`)) return;
+      loginAsBtn.disabled = true;
+      try {
+        const res = await api(`/admin/impersonate/${uid}`, { method: "POST" });
+        const url = new URL(window.location.origin);
+        url.searchParams.set("impersonate_token", res.token);
+        url.searchParams.set("impersonate_slug", res.tenantSlug);
+        window.open(url.toString(), "_blank");
+        setStatus(`Opened ${name} in a new tab.`);
+      } catch (err) {
+        setStatus(err.message || "Failed to start impersonation.", true);
+      } finally {
+        loginAsBtn.disabled = false;
+      }
+      return;
+    }
+
     const btn = e.target.closest(".rp-delete-user-btn");
     if (!btn) return;
     const uid = btn.dataset.uid;
