@@ -1,11 +1,19 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  // postgresqlExtensions: lets us declare pg_trgm + btree_gin in the
+  // datasource so `prisma db push` (used by CI) creates them before the
+  // GIN trigram indexes on Customer try to use gin_trgm_ops / text_ops.
+  // Production runs `prisma migrate deploy` which uses migration SQL
+  // instead, but the migration also has CREATE EXTENSION IF NOT EXISTS
+  // so both paths converge on the same state.
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  directUrl  = env("DIRECT_URL")
+  extensions = [pg_trgm, btree_gin]
 }
 
 model Tenant {
@@ -426,6 +434,13 @@ model Customer {
   @@index([tenantId, name])
   @@index([tenantId, status])
   @@index([tenantId, parentCustomerId])
+  // GIN trigram indexes — make `name ILIKE '%q%'` and `customerCode ILIKE
+  // '%q%'` index-backed in /customers/search. Requires pg_trgm + btree_gin
+  // extensions (created in 20260505000000_customer_search_trgm_indexes).
+  // `tenantId` uses btree_gin's text_ops so the scalar column can sit in a
+  // GIN index alongside the trigram column.
+  @@index([tenantId(ops: raw("text_ops")), name(ops: raw("gin_trgm_ops"))], type: Gin, map: "Customer_tenant_name_trgm_idx")
+  @@index([tenantId(ops: raw("text_ops")), customerCode(ops: raw("gin_trgm_ops"))], type: Gin, map: "Customer_tenant_customerCode_trgm_idx")
 }
 
 enum CustomerStatus {
