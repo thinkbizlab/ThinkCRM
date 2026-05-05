@@ -370,6 +370,13 @@ body {
   content: ""; flex: 1; height: 1px; background: var(--border);
 }
 .oauth-btns { display: flex; flex-direction: column; gap: var(--sp-2); }
+/* `[hidden]` from the HTML attribute would normally render display:none,
+   but the class rules below win on specificity. Force the attribute to
+   take effect so JS toggling .hidden / data-loginHiddenByAdmin actually
+   hides the element. */
+.oauth-btns[hidden],
+.oauth-loading[hidden],
+.oauth-btn[hidden] { display: none !important; }
 .oauth-loading {
   display: flex; flex-direction: column; gap: var(--sp-2);
 }
