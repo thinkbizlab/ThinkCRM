@@ -12290,6 +12290,32 @@ qs("#visit-customer-input")?.addEventListener("input", () => {
   }
 });
 
+// ── Visit EDIT modal: customer picker ─────────────────────────────────────
+// Reuses the same autocomplete helper as the create modal. When a different
+// customer is picked, refresh the deal dropdown to that customer's deals
+// (the previously-selected deal no longer fits the new customer; the
+// backend will null it on save unless this dropdown supplies a new one).
+initCustomerAutocomplete(
+  qs("#visit-edit-customer-input"), qs("#visit-edit-customer-list"), qs("#visit-edit-customer-id"),
+  async (customerId) => {
+    const dealSelect = qs("#visit-edit-deal-select");
+    if (!dealSelect) return;
+    dealSelect.innerHTML = `<option value="">Loading…</option>`;
+    try {
+      const deals = await api(`/deals?customerId=${encodeURIComponent(customerId)}`);
+      const active = deals.filter((d) => d.status !== "WON" && d.status !== "LOST");
+      if (!active.length) {
+        dealSelect.innerHTML = `<option value="">— No open deals —</option>`;
+      } else {
+        dealSelect.innerHTML = `<option value="">— No deal —</option>` +
+          active.map((d) => `<option value="${d.id}">${escHtml(d.dealName)}${d.stage?.stageName ? " · " + escHtml(d.stage.stageName) : ""}</option>`).join("");
+      }
+    } catch {
+      dealSelect.innerHTML = `<option value="">— Could not load deals —</option>`;
+    }
+  }
+);
+
 // Deal create modal
 qs("#deal-create-modal")?.addEventListener("click", (e) => {
   if (e.target.matches("[data-deal-modal-close]") || e.target.closest("[data-deal-modal-close]")) {
