@@ -5415,8 +5415,9 @@ function renderSettings() {
             <span>Role</span>
             <span>Invited</span>
             <span>Expires</span>
+            <span></span>
           </div>
-          <div class="rp-tbody">
+          <div class="rp-tbody" id="rp-invites-tbody">
             ${(state.cache.pendingInvites || []).map(inv => {
               const roleLabel2 = { ADMIN: "Admin", DIRECTOR: "Sales Director", MANAGER: "Sales Manager", ASSISTANT_MANAGER: "Assistant Manager", SUPERVISOR: "Supervisor", SALES_ADMIN: "Sales Admin", REP: "Sales Rep" };
               const roleCls2   = { ADMIN: "rp-badge--admin", DIRECTOR: "rp-badge--director", MANAGER: "rp-badge--manager", ASSISTANT_MANAGER: "rp-badge--manager", SUPERVISOR: "rp-badge--supervisor", SALES_ADMIN: "rp-badge--supervisor", REP: "rp-badge--rep" };
@@ -5433,6 +5434,9 @@ function renderSettings() {
                 <span><span class="rp-badge ${roleCls2[inv.role] || ""}">${roleLabel2[inv.role] || inv.role}</span></span>
                 <span class="muted small">${created}</span>
                 <span class="muted small">${expires}</span>
+                <span class="rp-role-change-cell">
+                  <button type="button" class="btn-danger-outline small rp-revoke-invite-btn" data-invite-id="${escHtml(inv.id)}" data-invite-email="${escHtml(inv.email)}" title="Revoke invitation">${icon('trash')}</button>
+                </span>
               </div>`;
             }).join("")}
           </div>
@@ -8364,6 +8368,26 @@ function renderSettings() {
     state.cache.pendingInvites = null;
     await loadSettings("roles", { force: true });
     setStatus("");
+  });
+
+  // Pending-invite revoke. Listens on the invites tbody since it's a separate
+  // sibling table from the active-users one.
+  qs("#rp-invites-tbody")?.addEventListener("click", async (e) => {
+    const btn = e.target.closest(".rp-revoke-invite-btn");
+    if (!btn) return;
+    const inviteId = btn.dataset.inviteId;
+    const email = btn.dataset.inviteEmail || "this invite";
+    if (!confirm(`Revoke the invitation to ${email}? The link in their email will stop working.`)) return;
+    btn.disabled = true;
+    try {
+      await api(`/users/pending-invites/${inviteId}`, { method: "DELETE" });
+      state.cache.pendingInvites = (state.cache.pendingInvites || []).filter((inv) => inv.id !== inviteId);
+      renderSettings();
+      setStatus(`Invitation to ${email} revoked.`);
+    } catch (err) {
+      setStatus(err.message || "Failed to revoke invite.", true);
+      btn.disabled = false;
+    }
   });
 
   qs("#rp-tbody")?.addEventListener("click", async (e) => {
