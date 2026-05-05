@@ -80,6 +80,8 @@ model Tenant {
   syncExternalRefs            SyncExternalRef[]
   transformTemplates          TransformTemplate[]
   aiUsageEvents               AiUsageEvent[]
+  visitCoVisitors             VisitCoVisitor[]
+  competencyTemplates         CompetencyTemplate[]
 }
 
 model User {
@@ -129,6 +131,8 @@ model User {
   devices                   UserDevice[]
   passkeys                  UserPasskey[]
   aiUsageEvents             AiUsageEvent[]
+  coVisitorVisits           VisitCoVisitor[]           @relation("VisitCoVisitorUser")
+  releasedCoVisitorEvals    VisitCoVisitor[]           @relation("VisitCoVisitorReleasedBy")
   notificationState         UserNotificationState?
 
   @@unique([tenantId, email])
@@ -358,6 +362,11 @@ model TenantVisitConfig {
   tenantId                String   @unique
   checkInMaxDistanceM     Int      @default(1000)
   minVisitDurationMinutes Int      @default(15)
+  // When false (default), a visit that has any checked-in co-visitor does NOT
+  // count toward the rep's normal visit KPI — it counts only as the
+  // co-visitor's supervisor KPI. Flip on if a tenant wants the rep to keep
+  // visit credit even when supervised.
+  coVisitCountsAsRepVisit Boolean  @default(false)
   createdAt               DateTime @default(now())
   updatedAt               DateTime @updatedAt
   tenant                  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -768,17 +777,17 @@ model ProspectPhoto {
 }
 
 model Visit {
-  id               String      @id @default(cuid())
+  id               String           @id @default(cuid())
   tenantId         String
   repId            String
   customerId       String?
   prospectId       String?
   dealId           String?
-  visitNo          String      @default("")
+  visitNo          String           @default("")
   siteLat          Float?
   siteLng          Float?
   visitType        VisitType
-  status           VisitStatus @default(PLANNED)
+  status           VisitStatus      @default(PLANNED)
   plannedAt        DateTime
   objective        String?
   checkInAt        DateTime?
@@ -790,22 +799,106 @@ model Visit {
   checkOutLat      Float?
   checkOutLng      Float?
   result           String?
-  isDemo           Boolean     @default(false)
+  isDemo           Boolean          @default(false)
   createdByUserId  String?
-  createdAt        DateTime    @default(now())
-  updatedAt        DateTime    @updatedAt
-  tenant           Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  rep              User        @relation("VisitRep", fields: [repId], references: [id], onDelete: Restrict)
-  createdBy        User?       @relation("VisitCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
-  customer         Customer?   @relation(fields: [customerId], references: [id], onDelete: Restrict)
-  prospect         Prospect?   @relation(fields: [prospectId], references: [id], onDelete: Restrict)
-  deal             Deal?       @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  tenant           Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  rep              User             @relation("VisitRep", fields: [repId], references: [id], onDelete: Restrict)
+  createdBy        User?            @relation("VisitCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  customer         Customer?        @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  prospect         Prospect?        @relation(fields: [prospectId], references: [id], onDelete: Restrict)
+  deal             Deal?            @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  coVisitors       VisitCoVisitor[]
 
   @@unique([tenantId, visitNo])
   @@index([tenantId, repId, checkInAt])
   @@index([tenantId, status, plannedAt])
   @@index([tenantId, customerId])
   @@index([tenantId, prospectId])
+}
+
+// One row per supervisor who has joined a Visit as a co-visitor. A single
+// physical encounter can carry multiple rows — director + manager + assistant
+// manager may all join independently. Each row tracks that supervisor's own
+// check-in/out at the customer site and their evaluation of the rep.
+//
+// Visibility rule (enforced at API boundary, not in DB): the rep on the parent
+// Visit must NOT see any of these rows until evalReleasedAt is set. Once
+// released, only the released fields (score / notes / competency scores /
+// releasedAt / releaser name) are surfaced — never the supervisor's geo or
+// selfie. See src/modules/visits/routes.ts payload masking.
+model VisitCoVisitor {
+  id              String @id @default(cuid())
+  tenantId        String
+  visitId         String
+  coVisitorUserId String
+
+  // Supervisor's own check-in at the site, captured separately from the rep's
+  // check-in on Visit. Distance / selfie use the same conventions as Visit.
+  checkInAt        DateTime?
+  checkInLat       Float?
+  checkInLng       Float?
+  checkInDistanceM Float?
+  checkInSelfie    String?
+
+  checkOutAt  DateTime?
+  checkOutLat Float?
+  checkOutLng Float?
+
+  // Evaluation. Score is 1–5 (validated at API). Competency-level scores live
+  // in the child VisitCoVisitorCompetencyScore table.
+  evalScore            Int?
+  evalNotes            String?
+  evalReleasedAt       DateTime?
+  evalReleasedByUserId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant           Tenant                          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  visit            Visit                           @relation(fields: [visitId], references: [id], onDelete: Cascade)
+  coVisitor        User                            @relation("VisitCoVisitorUser", fields: [coVisitorUserId], references: [id], onDelete: Restrict)
+  releasedBy       User?                           @relation("VisitCoVisitorReleasedBy", fields: [evalReleasedByUserId], references: [id], onDelete: SetNull)
+  competencyScores VisitCoVisitorCompetencyScore[]
+
+  @@unique([visitId, coVisitorUserId])
+  @@index([tenantId, coVisitorUserId, checkInAt])
+  @@index([tenantId, coVisitorUserId, evalReleasedAt])
+}
+
+// Per-tenant evaluation rubric items the supervisor scores on each co-visit.
+// Soft-deleted via isActive=false so historical scores keep their FK.
+model CompetencyTemplate {
+  id          String                          @id @default(cuid())
+  tenantId    String
+  code        String
+  name        String
+  description String?
+  isActive    Boolean                         @default(true)
+  sortOrder   Int                             @default(0)
+  createdAt   DateTime                        @default(now())
+  updatedAt   DateTime                        @updatedAt
+  tenant      Tenant                          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  scores      VisitCoVisitorCompetencyScore[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, isActive, sortOrder])
+}
+
+model VisitCoVisitorCompetencyScore {
+  id                   String   @id @default(cuid())
+  visitCoVisitorId     String
+  competencyTemplateId String
+  score                Int
+  notes                String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  visitCoVisitor     VisitCoVisitor     @relation(fields: [visitCoVisitorId], references: [id], onDelete: Cascade)
+  competencyTemplate CompetencyTemplate @relation(fields: [competencyTemplateId], references: [id], onDelete: Restrict)
+
+  @@unique([visitCoVisitorId, competencyTemplateId])
 }
 
 model SalesKpiTarget {

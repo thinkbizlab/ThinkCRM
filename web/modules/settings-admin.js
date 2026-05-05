@@ -197,6 +197,11 @@ export function renderCompanySettingsPage({
             value="${visitCfg.minVisitDurationMinutes ?? 15}" required />
           <span class="form-hint">Visits shorter than this are highlighted in red on the visit detail. Default: 15 min.</span>
         </label>
+        <label class="form-label" style="max-width:520px">
+          <input type="checkbox" name="coVisitCountsAsRepVisit" ${visitCfg.coVisitCountsAsRepVisit ? "checked" : ""} />
+          <span style="margin-left:6px">Co-visited encounters also count toward the rep's normal visit KPI</span>
+          <span class="form-hint" style="display:block;margin-top:4px">Off (default): if a supervisor co-visited, the encounter only counts as their co-visit KPI — not the rep's. On: rep keeps visit credit too.</span>
+        </label>
         <button type="submit">Save Visit Settings</button>
       </form>
     ` : `<div class="muted">Admin access required.</div>`)}
@@ -557,7 +562,8 @@ export function wireCompanySettingsPage({ tenantId }) {
         method: "PUT",
         body: {
           checkInMaxDistanceM: Number(fd.get("checkInMaxDistanceM")),
-          minVisitDurationMinutes: Number(fd.get("minVisitDurationMinutes"))
+          minVisitDurationMinutes: Number(fd.get("minVisitDurationMinutes")),
+          coVisitCountsAsRepVisit: fd.get("coVisitCountsAsRepVisit") === "on"
         }
       });
       setStatus("Visit settings saved.");

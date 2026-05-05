@@ -489,7 +489,9 @@ async function ensureVisitsModule() {
       loadMyTasks,
       attachOnBehalfOfField,
       openCheckInModal,
-      openCheckOutModal
+      openCheckOutModal,
+      openCoVisitCheckInModal,
+      openCoVisitCheckOutModal
     });
     visitsModuleInitialized = true;
   }
@@ -2094,6 +2096,7 @@ const settingsPageRouteMap = {
   "team-structure": "/settings/team-structure",
   "roles":          "/settings/roles",
   "kpi-targets":    "/settings/kpi-targets",
+  "competencies":   "/settings/competencies",
   "integrations":   "/settings/integrations",
   "data-sync":      "/settings/data-sync",
   "cron-jobs":      "/settings/scheduled-jobs",
@@ -4327,6 +4330,236 @@ function openCheckOutModal(visitId, customerName, onSuccess) {
   });
 }
 
+// ── Co-Visit Check-In Modal ─────────────────────────────────────────────────
+// Mirrors openCheckInModal but POSTs to /co-visitors/me/checkin and skips the
+// rep-only offline-queue path (supervisors operate online from the field).
+// Reuses the same .mt-checkin-* CSS classes for visual consistency.
+function openCoVisitCheckInModal(visitId, customerName, onSuccess) {
+  qs("#mt-checkin-modal")?.remove();
+
+  document.body.insertAdjacentHTML("beforeend", `
+    <div id="mt-checkin-modal" class="mt-checkin-backdrop">
+      <div class="mt-checkin-dialog" role="dialog" aria-modal="true" aria-label="Co-Visit Check In">
+        <div class="mt-checkin-header">
+          <div class="mt-checkin-title">Co-Visit Check In</div>
+          <div class="mt-checkin-customer">${escHtml(customerName || "")}</div>
+          <button class="ced-close" id="mt-checkin-close" aria-label="Close">${icon('x', 14)}</button>
+        </div>
+        <div class="mt-checkin-body">
+          <div class="mt-checkin-section">
+            <div class="mt-checkin-section-label">
+              <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+              Location
+            </div>
+            <div id="mt-checkin-location-status" class="mt-checkin-status">Detecting location…</div>
+          </div>
+          <div class="mt-checkin-section">
+            <div class="mt-checkin-section-label">
+              <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M20.94 11A8.994 8.994 0 0 0 12 3a8.994 8.994 0 0 0-8.94 8"/><path d="M20.94 13A8.994 8.994 0 0 1 12 21a8.994 8.994 0 0 1-8.94-8"/></svg>
+              Selfie
+            </div>
+            <div class="mt-checkin-camera-wrap">
+              <video id="mt-checkin-video" class="mt-checkin-video" autoplay playsinline muted></video>
+              <canvas id="mt-checkin-canvas" class="mt-checkin-canvas" hidden></canvas>
+              <img id="mt-checkin-preview" class="mt-checkin-preview" hidden alt="Selfie preview" />
+            </div>
+            <div class="mt-checkin-camera-actions">
+              <button class="ghost" id="mt-checkin-capture">Take Photo</button>
+              <button class="ghost" id="mt-checkin-retake" hidden>Retake</button>
+            </div>
+          </div>
+        </div>
+        <div class="mt-checkin-footer">
+          <button class="ghost" id="mt-checkin-cancel">Cancel</button>
+          <button class="primary" id="mt-checkin-confirm" disabled>Confirm Check-In</button>
+        </div>
+      </div>
+    </div>`);
+
+  const modal      = qs("#mt-checkin-modal");
+  const video      = qs("#mt-checkin-video");
+  const canvas     = qs("#mt-checkin-canvas");
+  const preview    = qs("#mt-checkin-preview");
+  const locEl      = qs("#mt-checkin-location-status");
+  const confirmBtn = qs("#mt-checkin-confirm");
+  const captureBtn = qs("#mt-checkin-capture");
+  const retakeBtn  = qs("#mt-checkin-retake");
+
+  let coords = null;
+  let selfieDataUrl = null;
+  let stream = null;
+
+  function checkReady() {
+    confirmBtn.disabled = !(coords && selfieDataUrl);
+  }
+
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        locEl.textContent = `${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)}`;
+        locEl.className = "mt-checkin-status mt-checkin-status--ok";
+        checkReady();
+      },
+      () => {
+        locEl.textContent = "Location unavailable — using approximate.";
+        locEl.className = "mt-checkin-status mt-checkin-status--warn";
+        coords = { lat: 0, lng: 0 };
+        checkReady();
+      }
+    );
+  } else {
+    locEl.textContent = "Geolocation not supported.";
+    coords = { lat: 0, lng: 0 };
+  }
+
+  navigator.mediaDevices?.getUserMedia({ video: { facingMode: "user" }, audio: false })
+    .then(s => { stream = s; video.srcObject = s; })
+    .catch(() => {
+      const wrap = modal.querySelector(".mt-checkin-camera-wrap");
+      if (wrap) {
+        wrap.innerHTML = `<div class="mt-checkin-status mt-checkin-status--warn">Camera unavailable — check-in will proceed without selfie.</div>`;
+      }
+      selfieDataUrl = "no-selfie";
+      checkReady();
+    });
+
+  captureBtn.addEventListener("click", () => {
+    const w = video.videoWidth || 640;
+    const h = video.videoHeight || 480;
+    canvas.width = w;
+    canvas.height = h;
+    canvas.getContext("2d").drawImage(video, 0, 0, w, h);
+    selfieDataUrl = canvas.toDataURL("image/jpeg", 0.85);
+    preview.src = selfieDataUrl;
+    preview.hidden = false;
+    video.hidden = true;
+    captureBtn.hidden = true;
+    retakeBtn.hidden = false;
+    checkReady();
+  });
+
+  retakeBtn.addEventListener("click", () => {
+    selfieDataUrl = null;
+    preview.hidden = true;
+    video.hidden = false;
+    captureBtn.hidden = false;
+    retakeBtn.hidden = true;
+    confirmBtn.disabled = true;
+  });
+
+  function closeModal() {
+    stream?.getTracks().forEach(t => t.stop());
+    modal.remove();
+  }
+
+  qs("#mt-checkin-close").addEventListener("click", closeModal);
+  qs("#mt-checkin-cancel").addEventListener("click", closeModal);
+  modal.addEventListener("click", e => { if (e.target === modal) closeModal(); });
+
+  confirmBtn.addEventListener("click", async () => {
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = "Checking in…";
+    const payload = {
+      lat: coords.lat,
+      lng: coords.lng,
+      selfieUrl: selfieDataUrl || "no-selfie",
+      capturedAt: new Date().toISOString()
+    };
+    try {
+      await api(`/visits/${visitId}/co-visitors/me/checkin`, { method: "POST", body: payload });
+      setStatus("Co-visit check-in recorded.");
+      closeModal();
+      if (typeof onSuccess === "function") {
+        try { await onSuccess(); } catch (err) { setStatus(err?.message || "Refresh failed.", true); }
+      }
+    } catch (e) {
+      setStatus(e.message, true);
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = "Confirm Check-In";
+    }
+  });
+}
+
+// ── Co-Visit Check-Out Modal ────────────────────────────────────────────────
+// No `result` field (the rep records that on their own checkout). Geo only.
+function openCoVisitCheckOutModal(visitId, customerName, onSuccess) {
+  qs("#mt-checkout-modal")?.remove();
+
+  document.body.insertAdjacentHTML("beforeend", `
+    <div id="mt-checkout-modal" class="mt-checkin-backdrop">
+      <div class="mt-checkout-dialog" role="dialog" aria-modal="true" aria-label="Co-Visit Check Out">
+        <div class="mt-checkin-header">
+          <div>
+            <div class="mt-checkin-title">Co-Visit Check Out</div>
+            <div class="mt-checkin-customer">${escHtml(customerName || "")}</div>
+          </div>
+          <button class="ced-close" id="mt-checkout-close" aria-label="Close">${icon('x', 14)}</button>
+        </div>
+        <div class="mt-checkout-body">
+          <div class="mt-checkout-field">
+            <div class="mt-checkout-field-label">Location</div>
+            <div id="mt-checkout-location" class="mt-checkin-status mt-checkin-status--pending">Detecting location…</div>
+          </div>
+          <p class="muted small" style="margin:0">After check-out you'll fill in the evaluation back on the visit detail.</p>
+        </div>
+        <div class="mt-checkin-footer">
+          <button type="button" class="ghost" id="mt-checkout-cancel">Cancel</button>
+          <button type="button" class="primary" id="mt-checkout-confirm">Confirm Check-Out</button>
+        </div>
+      </div>
+    </div>`);
+
+  const modal      = qs("#mt-checkout-modal");
+  const confirmBtn = qs("#mt-checkout-confirm");
+  const locEl      = qs("#mt-checkout-location");
+
+  let coords = null;
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        locEl.textContent = `${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)}`;
+        locEl.className = "mt-checkin-status mt-checkin-status--ok";
+      },
+      () => {
+        locEl.textContent = "Location unavailable";
+        locEl.className = "mt-checkin-status mt-checkin-status--warn";
+        coords = { lat: 0, lng: 0 };
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  } else {
+    locEl.textContent = "Geolocation not supported";
+    locEl.className = "mt-checkin-status mt-checkin-status--warn";
+    coords = { lat: 0, lng: 0 };
+  }
+
+  function closeModal() { qs("#mt-checkout-modal")?.remove(); }
+  qs("#mt-checkout-close").addEventListener("click", closeModal);
+  qs("#mt-checkout-cancel").addEventListener("click", closeModal);
+  modal.addEventListener("click", e => { if (e.target === modal) closeModal(); });
+
+  confirmBtn.addEventListener("click", async () => {
+    if (!coords) { setStatus("Waiting for location…", true); return; }
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = "Checking out…";
+    const payload = { lat: coords.lat, lng: coords.lng, capturedAt: new Date().toISOString() };
+    try {
+      await api(`/visits/${visitId}/co-visitors/me/checkout`, { method: "POST", body: payload });
+      setStatus("Co-visit check-out recorded.");
+      closeModal();
+      if (typeof onSuccess === "function") {
+        try { await onSuccess(); } catch (err) { setStatus(err?.message || "Refresh failed.", true); }
+      }
+    } catch (e) {
+      setStatus(e.message, true);
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = "Confirm Check-Out";
+    }
+  });
+}
+
 // ── legacy stubs (kept so repHub nav wiring still calls something) ─────────────
 function paintRepHubFull() { loadMyTasks().catch(e => setStatus(e.message, true)); }
 
@@ -4450,6 +4683,17 @@ function renderSettings() {
     state.cache.cronJobs = null; // loading
     api("/cron-jobs").then(data => { state.cache.cronJobs = data; renderSettings(); }).catch(() => { state.cache.cronJobs = []; renderSettings(); });
   }
+  // Lazy-load competency templates (admin page; includes inactive ones)
+  if (page === "competencies" && state.cache.competencyTemplatesAdmin === undefined) {
+    state.cache.competencyTemplatesAdmin = null;
+    api("/competency-templates?includeInactive=true").then((rows) => {
+      state.cache.competencyTemplatesAdmin = rows;
+      renderSettings();
+    }).catch(() => {
+      state.cache.competencyTemplatesAdmin = [];
+      renderSettings();
+    });
+  }
   // Lazy-load custom field definitions for all entity types on first visit
   if (page === "custom-fields" && state.cache.customFieldSettings === undefined) {
     state.cache.customFieldSettings = null;
@@ -4503,6 +4747,7 @@ function renderSettings() {
     { page: "team-structure", label: "Team Structure",         ic: "users", roles: ["ADMIN", "DIRECTOR", "MANAGER", "SUPERVISOR", "REP"] },
     { page: "roles",          label: "Roles & Permissions",   ic: "lockKey", roles: ["ADMIN"] },
     { page: "kpi-targets",    label: "KPI Targets",            ic: "target", roles: ["ADMIN", "DIRECTOR", "MANAGER", "SUPERVISOR", "REP"] },
+    { page: "competencies",   label: "Co-Visit Competencies",  ic: "clipboard", roles: ["ADMIN"] },
     { page: "integrations",   label: "Integrations",          ic: "plug", roles: ["ADMIN"] },
     { page: "custom-domain",  label: "Custom Domain",          ic: "globe", roles: ["ADMIN"] },
     { page: "data-sync",      label: "Data Sync",              ic: "refresh", roles: ["ADMIN"] },
@@ -5281,6 +5526,66 @@ function renderSettings() {
             }).join("")}
           </div>
         ` : `<div class="empty-state compact"><div><strong>No KPI targets yet</strong>${canEditKpi ? `<p>Use the form above to set per-person targets.</p>` : ""}</div></div>`}
+      </section>
+    `;
+  } else if (page === "competencies") {
+    const templates = state.cache.competencyTemplatesAdmin;
+    const loading = templates === null;
+    const rowsHtml = (templates || []).slice().sort((a, b) =>
+      (a.sortOrder || 0) - (b.sortOrder || 0) || (a.name || "").localeCompare(b.name || "")
+    ).map((t) => `
+      <tr data-comp-id="${escHtml(t.id)}" class="${t.isActive ? "" : "muted"}">
+        <td><code>${escHtml(t.code)}</code></td>
+        <td>${escHtml(t.name)}</td>
+        <td>${escHtml(t.description || "")}</td>
+        <td style="text-align:right">${t.sortOrder ?? 0}</td>
+        <td>${t.isActive ? "Active" : "Inactive"}</td>
+        <td class="inline-actions">
+          <button class="ghost small comp-edit-btn" type="button" data-id="${escHtml(t.id)}">Edit</button>
+          ${t.isActive
+            ? `<button class="ghost small comp-deact-btn" type="button" data-id="${escHtml(t.id)}">Deactivate</button>`
+            : `<button class="ghost small comp-react-btn" type="button" data-id="${escHtml(t.id)}">Reactivate</button>`}
+        </td>
+      </tr>`).join("");
+
+    pageHtml = `
+      <section class="card">
+        <h3 class="section-title">${icon('clipboard')} Co-Visit Competency Rubric</h3>
+        <p class="muted" style="margin-bottom:var(--sp-3)">Items that supervisors score during a co-visit. The full list shows up on each evaluation form. Soft-deleted (Deactivate) items are hidden from new evals but kept on historical scores.</p>
+        ${isAdmin ? `
+          <form id="comp-create-form" class="settings-form">
+            <div class="settings-field-row">
+              <label class="form-label">Code
+                <input class="form-input" name="code" required maxlength="64" placeholder="rapport" />
+              </label>
+              <label class="form-label" style="flex:1 1 200px">Name
+                <input class="form-input" name="name" required maxlength="120" placeholder="Rapport with customer" />
+              </label>
+              <label class="form-label">Sort
+                <input class="form-input" name="sortOrder" type="number" min="0" max="9999" value="0" style="width:80px" />
+              </label>
+            </div>
+            <label class="form-label">Description (optional)
+              <input class="form-input" name="description" maxlength="500" placeholder="What good looks like" />
+            </label>
+            <button type="submit">Add Competency</button>
+          </form>
+        ` : ""}
+      </section>
+
+      <section class="card">
+        <h3 class="section-title">${icon('list')} All Competencies</h3>
+        ${loading ? `<div class="muted">Loading…</div>` : (templates || []).length ? `
+          <table class="table compact">
+            <thead>
+              <tr>
+                <th>Code</th><th>Name</th><th>Description</th>
+                <th style="text-align:right">Sort</th><th>Status</th><th></th>
+              </tr>
+            </thead>
+            <tbody>${rowsHtml}</tbody>
+          </table>
+        ` : `<div class="empty-state compact"><div><strong>No competencies yet</strong>${isAdmin ? `<p>Add your first one above.</p>` : ""}</div></div>`}
       </section>
     `;
   } else if (page === "integrations") {
@@ -8912,6 +9217,88 @@ function renderSettings() {
         const channels = existing.filter(ch => !(ch.channelType === removeType && ch.channelTarget === removeTarget));
         await api(`/teams/${teamId}/notification-channels`, { method: "PUT", body: { channels } });
         setStatus("Channel removed.");
+        await loadSettings();
+      } catch (error) {
+        setStatus(error.message, true);
+      }
+    });
+  });
+
+  // ── Competency Templates handlers ──────────────────────────────────────
+  qs("#comp-create-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const fd = new FormData(event.currentTarget);
+    const payload = {
+      code: String(fd.get("code") || "").trim(),
+      name: String(fd.get("name") || "").trim(),
+      description: String(fd.get("description") || "").trim() || undefined,
+      sortOrder: Number(fd.get("sortOrder") || 0)
+    };
+    try {
+      await api("/competency-templates", { method: "POST", body: payload });
+      setStatus("Competency added.");
+      state.cache.competencyTemplatesAdmin = undefined; // force reload
+      state.cache.competencyTemplates = undefined;
+      await loadSettings();
+    } catch (error) {
+      setStatus(error.message, true);
+    }
+  });
+
+  document.querySelectorAll(".comp-edit-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.id;
+      const existing = (state.cache.competencyTemplatesAdmin || []).find((t) => t.id === id);
+      if (!existing) return;
+      const newName = prompt("Edit name", existing.name);
+      if (newName == null) return;
+      const newDesc = prompt("Edit description (blank = clear)", existing.description || "");
+      if (newDesc == null) return;
+      const newSort = prompt("Edit sort order", String(existing.sortOrder ?? 0));
+      if (newSort == null) return;
+      try {
+        await api(`/competency-templates/${id}`, {
+          method: "PATCH",
+          body: {
+            name: newName.trim(),
+            description: newDesc.trim() || null,
+            sortOrder: Number(newSort) || 0
+          }
+        });
+        setStatus("Competency updated.");
+        state.cache.competencyTemplatesAdmin = undefined;
+        state.cache.competencyTemplates = undefined;
+        await loadSettings();
+      } catch (error) {
+        setStatus(error.message, true);
+      }
+    });
+  });
+
+  document.querySelectorAll(".comp-deact-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.id;
+      if (!confirm("Deactivate this competency? Existing scores keep it; new evals won't show it.")) return;
+      try {
+        await api(`/competency-templates/${id}`, { method: "DELETE" });
+        setStatus("Competency deactivated.");
+        state.cache.competencyTemplatesAdmin = undefined;
+        state.cache.competencyTemplates = undefined;
+        await loadSettings();
+      } catch (error) {
+        setStatus(error.message, true);
+      }
+    });
+  });
+
+  document.querySelectorAll(".comp-react-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.id;
+      try {
+        await api(`/competency-templates/${id}`, { method: "PATCH", body: { isActive: true } });
+        setStatus("Competency reactivated.");
+        state.cache.competencyTemplatesAdmin = undefined;
+        state.cache.competencyTemplates = undefined;
         await loadSettings();
       } catch (error) {
         setStatus(error.message, true);
