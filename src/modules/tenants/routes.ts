@@ -9,6 +9,7 @@ import { assertTenantPathAccess, requireRoleAtLeast, requireSuperAdmin, zodMsg }
 import { sendEmailCard, type EmailConfig } from "../../lib/email-notify.js";
 import { hashPassword } from "../../lib/password.js";
 import { prisma } from "../../lib/prisma.js";
+import { seedTenantCronJobConfigs } from "../../lib/scheduler.js";
 import { decryptField } from "../../lib/secrets.js";
 import { smtpPort } from "../../lib/smtp-port.js";
 import { getTenantUrl } from "../../lib/tenant-url.js";
@@ -126,6 +127,13 @@ export const tenantRoutes: FastifyPluginAsync = async (app) => {
           { tenantId: tenant.id, stageName: "Lost",        stageOrder: 4, isClosedLost: true }
         ]
       });
+
+      // Seed CronJobConfig rows for every JOB_DEF so daily/weekly crons
+      // (kpiAlert, weeklyDigest, customerDedupScan, etc.) are immediately
+      // configured for this tenant — without this, runJobForAllTenants's
+      // self-heal would only create them on each cron's first natural fire,
+      // which for a weekly job means the new tenant waits up to 7 days.
+      await seedTenantCronJobConfigs(tx, tenant.id, "Asia/Bangkok");
 
       // Generate email verification token (valid 24 hours)
       const emailVerifyToken = randomBytes(32).toString("hex");
@@ -352,6 +360,10 @@ export const tenantRoutes: FastifyPluginAsync = async (app) => {
           }
         ]
       });
+
+      // Seed CronJobConfig rows so daily/weekly crons are immediately
+      // configured (see comment in /tenants/signup for rationale).
+      await seedTenantCronJobConfigs(tx, createdTenant.id, "Asia/Bangkok");
 
       return { createdTenant, admin, defaultPaymentTermId: term.id };
     });
