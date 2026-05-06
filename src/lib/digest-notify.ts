@@ -14,6 +14,7 @@ import { prisma } from "./prisma.js";
 import { decryptCredential } from "./secrets.js";
 import { smtpPort } from "./smtp-port.js";
 import { fmtThaiDate, fmtThaiMonthYear, fmtBaht } from "./format.js";
+import { sendApnsToUser } from "./apns-notify.js";
 
 // ── Date helpers ─────────────────────────────────────────────────────────────
 
@@ -464,6 +465,22 @@ async function runDigestForTenant(opts: {
         ? `${teamMsgBase}\n${staleProspectsSection}`
         : teamMsgBase;
       await deliverToTeamChannels({ tenantId, teamId: team.id, message: teamMsg, appName });
+
+      // Push team digest to manager-tier members who haven't opted out.
+      for (const mgr of managerUsers) {
+        const prefs = (mgr.notifPrefs as Record<string, boolean> | null) ?? {};
+        if (prefs["weeklyDigest"] === false) continue;
+        try {
+          await sendApnsToUser({
+            userId: mgr.id,
+            title: `📊 สรุปทีม ${team.teamName} — ${appName}`,
+            body: teamMsg,
+            data: { type: "weekly_digest_team", tenantId, teamId: team.id }
+          });
+        } catch (err) {
+          console.error(`[digest] APNs team push error user=${mgr.id}:`, err);
+        }
+      }
     }
 
     // ── Individual rep digest sent to group channel ───────────────────────────
@@ -480,6 +497,17 @@ async function runDigestForTenant(opts: {
         stats: { repName: rep.fullName, ...stats }
       });
       await deliverToTeamChannels({ tenantId, teamId: team.id, message: repMsg, appName });
+
+      try {
+        await sendApnsToUser({
+          userId: rep.id,
+          title: `📊 สรุปประจำสัปดาห์ — ${appName}`,
+          body: repMsg,
+          data: { type: "weekly_digest_rep", tenantId }
+        });
+      } catch (err) {
+        console.error(`[digest] APNs rep push error user=${rep.id}:`, err);
+      }
     }
   }
 }

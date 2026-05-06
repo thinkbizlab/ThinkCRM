@@ -563,6 +563,8 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
       dateTo?: string;
       customerId?: string;
       dealId?: string;
+      limit?: string;
+      offset?: string;
     };
 
     // Multi-rep support: repIds=id1,id2 takes precedence over legacy repId
@@ -578,33 +580,66 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
+    // Opt-in pagination for mobile clients. When `limit` is present, the
+    // response becomes `{ rows, total, limit, offset }`; without it the legacy
+    // bare-array shape is preserved so the web client doesn't have to migrate.
+    const paginated = query.limit !== undefined;
+    const limit = paginated
+      ? Math.min(Math.max(parseInt(query.limit ?? "50", 10) || 50, 1), 200)
+      : undefined;
+    const offset = paginated
+      ? Math.max(parseInt(query.offset ?? "0", 10) || 0, 0)
+      : undefined;
+
     const requesterId = requireUserId(request);
     const requesterRole = request.requestContext.role;
-    const visits = await prisma.visit.findMany({
-      where: {
-        tenantId,
-        status: query.status,
-        repId: repIdList.length > 0 ? { in: repIdList } : { in: visibleUserIdList },
-        plannedAt: {
-          ...(query.dateFrom ? { gte: new Date(query.dateFrom) } : {}),
-          ...(query.dateTo   ? { lte: new Date(query.dateTo)   } : {})
-        },
-        ...(query.customerId ? { customerId: query.customerId } : {}),
-        ...(query.dealId     ? { dealId: query.dealId }         : {})
+    const where = {
+      tenantId,
+      status: query.status,
+      repId: repIdList.length > 0 ? { in: repIdList } : { in: visibleUserIdList },
+      plannedAt: {
+        ...(query.dateFrom ? { gte: new Date(query.dateFrom) } : {}),
+        ...(query.dateTo   ? { lte: new Date(query.dateTo)   } : {})
       },
-      include: {
-        customer: true,
-        prospect: { select: { id: true, displayName: true, status: true, siteLat: true, siteLng: true } },
-        deal: true,
-        rep: true,
-        coVisitors: {
-          include: {
-            coVisitor: { select: { id: true, fullName: true } },
-            releasedBy: { select: { id: true, fullName: true } },
-            competencyScores: { select: { id: true, competencyTemplateId: true, score: true, notes: true } }
-          }
+      ...(query.customerId ? { customerId: query.customerId } : {}),
+      ...(query.dealId     ? { dealId: query.dealId }         : {})
+    } satisfies Prisma.VisitWhereInput;
+
+    const include = {
+      customer: true,
+      prospect: { select: { id: true, displayName: true, status: true, siteLat: true, siteLng: true } },
+      deal: true,
+      rep: true,
+      coVisitors: {
+        include: {
+          coVisitor: { select: { id: true, fullName: true } },
+          releasedBy: { select: { id: true, fullName: true } },
+          competencyScores: { select: { id: true, competencyTemplateId: true, score: true, notes: true } }
         }
-      },
+      }
+    } satisfies Prisma.VisitInclude;
+
+    if (paginated) {
+      const [rows, total] = await Promise.all([
+        prisma.visit.findMany({
+          where,
+          include,
+          orderBy: { plannedAt: "asc" },
+          take: limit,
+          skip: offset
+        }),
+        prisma.visit.count({ where })
+      ]);
+      const masked = rows.map((v) => ({
+        ...v,
+        coVisitors: maskCoVisitorsForRequester(v.coVisitors, requesterId, requesterRole)
+      }));
+      return { rows: masked, total, limit, offset };
+    }
+
+    const visits = await prisma.visit.findMany({
+      where,
+      include,
       orderBy: { plannedAt: "asc" }
     });
     return visits.map((v) => ({
