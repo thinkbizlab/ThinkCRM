@@ -752,18 +752,49 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
   app.get("/deals", async (request) => {
     const tenantId = requireTenantId(request);
     const visibleUserIdList = [...(await listVisibleUserIds(request))];
-    const { customerId, customerGroupId } = request.query as {
+    const { customerId, customerGroupId, limit: limitRaw, offset: offsetRaw } = request.query as {
       customerId?: string;
       customerGroupId?: string;
+      limit?: string;
+      offset?: string;
     };
+
+    // Opt-in pagination for mobile clients. When `limit` is present, the
+    // response becomes `{ rows, total, limit, offset }`; without it the legacy
+    // bare-array shape is preserved so the web client doesn't have to migrate.
+    const paginated = limitRaw !== undefined;
+    const limit = paginated
+      ? Math.min(Math.max(parseInt(limitRaw ?? "50", 10) || 50, 1), 200)
+      : undefined;
+    const offset = paginated
+      ? Math.max(parseInt(offsetRaw ?? "0", 10) || 0, 0)
+      : undefined;
+
+    const where = {
+      tenantId,
+      ownerId: { in: visibleUserIdList },
+      ...(customerId ? { customerId } : {}),
+      ...(customerGroupId ? { customer: { customerGroupId } } : {})
+    } satisfies Prisma.DealWhereInput;
+    const include = { customer: true, stage: true, owner: true } satisfies Prisma.DealInclude;
+
+    if (paginated) {
+      const [rows, total] = await Promise.all([
+        prisma.deal.findMany({
+          where,
+          include,
+          orderBy: { createdAt: "desc" },
+          take: limit,
+          skip: offset
+        }),
+        prisma.deal.count({ where })
+      ]);
+      return { rows: rows.map(withDealCardFlags), total, limit, offset };
+    }
+
     const deals = await prisma.deal.findMany({
-      where: {
-        tenantId,
-        ownerId: { in: visibleUserIdList },
-        ...(customerId ? { customerId } : {}),
-        ...(customerGroupId ? { customer: { customerGroupId } } : {})
-      },
-      include: { customer: true, stage: true, owner: true },
+      where,
+      include,
       orderBy: { createdAt: "desc" }
     });
     return deals.map(withDealCardFlags);
