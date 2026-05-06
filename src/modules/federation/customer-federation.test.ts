@@ -336,6 +336,41 @@ describe("customer federation", () => {
     expect(mockHarness.callLog[0]!.sql).toContain("`cust_name`");
   });
 
+  it("searchFederatedCustomers also LIKE-matches the customerCode column when mapped", async () => {
+    // Tenant has explicit mappings for both name and customerCode → search
+    // should OR-match against the mapped code column too, so reps can find
+    // upstream customers by ERP code (not just by name).
+    const { tenantId } = await setupFederatedTenant({
+      mappings: [
+        { sourceField: "name",          targetField: "name" },
+        { sourceField: "cust_code_col", targetField: "customerCode" }
+      ]
+    });
+    mockHarness.responses.push([
+      { external_ref: "ERP-77", name: "Anything", cust_code_col: "C-12345" }
+    ]);
+    const hits = await searchFederatedCustomers(tenantId, "12345", 10);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]!.externalRef).toBe("ERP-77");
+    const lastCall = mockHarness.callLog[0]!;
+    expect(lastCall.sql).toContain("`cust_code_col`");
+    expect(lastCall.sql).toContain("OR");
+    // Both LIKE bind params (one for name, one for code) carry the wildcarded query.
+    expect(lastCall.values).toEqual(["%12345%", "%12345%"]);
+  });
+
+  it("searchFederatedCustomers stays name-only when no customerCode mapping is configured", async () => {
+    // Default fixture has no customerCode mapping. Don't guess a column name —
+    // not every upstream table has a code field, and a wrong guess would surface
+    // as `Unknown column` errors.
+    const { tenantId } = await setupFederatedTenant();
+    mockHarness.responses.push([{ external_ref: "ERP-9", name: "Acme HQ" }]);
+    await searchFederatedCustomers(tenantId, "Acme", 10);
+    const lastCall = mockHarness.callLog[0]!;
+    expect(lastCall.sql).not.toMatch(/\bOR\b/i);
+    expect(lastCall.values).toEqual(["%Acme%"]);
+  });
+
   it("circuit breaker opens after 5 consecutive failures", async () => {
     const { tenantId } = await setupFederatedTenant();
     // Five rapid failures should trip the breaker. The 6th call must

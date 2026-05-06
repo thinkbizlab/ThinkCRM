@@ -318,17 +318,34 @@ export async function searchFederatedCustomers(
   const cfg = await getFederationConfig(tenantId);
   if (!cfg) return [];
   const pool = await getOrCreatePool(cfg.sourceId, cfg.cfg);
-  // Prefer the operator-configured source column for `name` (Settings → Data
-  // Sync → Edit Mappings) so a tenant whose customer table uses `cust_name`
-  // still gets searchable. Fall back to `name` for the default convention.
+  // Prefer the operator-configured source columns (Settings → Data Sync → Edit
+  // Mappings) so a tenant whose customer table uses `cust_name` / `cust_code`
+  // still gets searchable. Fall back to common conventions otherwise.
+  // Only emit identifiers that pass strict validation — anything else gets
+  // dropped silently (treated as "column not present") to keep the WHERE safe.
+  const isSafeIdent = (id: string) => /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/.test(id);
   const nameColumn = cfg.mappings.find((m) => m.targetField === "name")?.sourceField || "name";
-  if (!/^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/.test(nameColumn)) {
+  if (!isSafeIdent(nameColumn)) {
     // A pathological mapping (containing SQL syntax) would break the WHERE.
     // Refuse and let the caller surface it; the breaker treats this as no result.
     return [];
   }
-  const sql = `SELECT * FROM ${quoteTableName(cfg.table)} WHERE \`${nameColumn}\` LIKE ? ORDER BY \`${nameColumn}\` LIMIT ${Number(limit)}`;
-  const rows = await runFederatedSelect(cfg.sourceId, pool, sql, [`%${query}%`]);
+  // Only OR-search the customerCode column when the operator has explicitly
+  // mapped one. Without a mapping we don't know what the upstream code column
+  // is named — guessing risks `Unknown column` errors on tenants whose
+  // customer table has no code field at all. Tenants that DO have an ERP code
+  // already map it via Settings → Data Sync (so the scheduled pull populates
+  // Customer.customerCode); piggybacking on that mapping for search is safe.
+  const codeMappingSource = cfg.mappings.find((m) => m.targetField === "customerCode")?.sourceField;
+  const codeColumn = codeMappingSource && isSafeIdent(codeMappingSource) ? codeMappingSource : null;
+
+  const where = codeColumn
+    ? `\`${nameColumn}\` LIKE ? OR \`${codeColumn}\` LIKE ?`
+    : `\`${nameColumn}\` LIKE ?`;
+  const params = codeColumn ? [`%${query}%`, `%${query}%`] : [`%${query}%`];
+  const sql = `SELECT * FROM ${quoteTableName(cfg.table)} WHERE ${where} ORDER BY \`${nameColumn}\` LIMIT ${Number(limit)}`;
+  const rows = await runFederatedSelect(cfg.sourceId, pool, sql, params);
+
   return rows.flatMap((r) => {
     const ext = r[cfg.keyColumn];
     const rawName = r[nameColumn];
