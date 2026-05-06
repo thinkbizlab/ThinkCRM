@@ -9952,6 +9952,7 @@ function buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk
             <th>Branch</th>
             <th>Name</th>
             <th>Owner</th>
+            <th>Status</th>
             <th>Contacts</th>
             <th>Actions</th>
           </tr>
@@ -9971,8 +9972,11 @@ function buildCustBodyHtml(all, page, totalPages, start, slice, isAdmin, canBulk
               <td>${start + i + 1}</td>
               <td>${isDraft ? `<span class="muted small">—</span>` : `<button class="cust-code-btn" data-id="${c.id}" data-code="${escHtml(c.customerCode || "")}">${escHtml(c.customerCode || "")}</button>`}</td>
               <td>${c.branchCode ? `<span class="cust-branch-pill" title="Branch code (00000 = HQ)">${escHtml(c.branchCode)}</span>` : '<span class="muted small">—</span>'}</td>
-              <td><button class="cust-name-btn" data-id="${c.id}" data-code="${escHtml(c.customerCode || "")}">${escHtml(c.name)}</button>${isDraft ? ` ${draftBadgeHtml()}` : ""}${c.parentCustomerId ? ` <span class="cust-parent-pill" title="Has parent customer">child</span>` : ""}${c.customerGroup ? ` <span class="cust-group-pill" title="Customer group">${escHtml(c.customerGroup.name)}</span>` : ""}${c.disabled ? ' <span class="cust-disabled-pill" title="Disabled — cannot be used for new deals/visits/quotations">Disabled</span>' : ""}</td>
+              <td><button class="cust-name-btn" data-id="${c.id}" data-code="${escHtml(c.customerCode || "")}">${escHtml(c.name)}</button>${isDraft ? ` ${draftBadgeHtml()}` : ""}${c.parentCustomerId ? ` <span class="cust-parent-pill" title="Has parent customer">child</span>` : ""}${c.customerGroup ? ` <span class="cust-group-pill" title="Customer group">${escHtml(c.customerGroup.name)}</span>` : ""}</td>
               <td>${ownerName ? escHtml(ownerName) : '<span class="muted small">—</span>'}</td>
+              <td>${c.disabled
+                ? '<span class="chip chip-warning" title="Inactive — cannot be used for new deals/visits/quotations">Inactive</span>'
+                : '<span class="chip chip-success">Active</span>'}</td>
               <td>${c.contacts?.length
                 ? `<button class="cust-badge-contact cust-contacts-btn" data-id="${c.id}" title="View contacts"><svg width="11" height="11" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>${c.contacts.length}</button>`
                 : '<span class="muted small">—</span>'}</td>
