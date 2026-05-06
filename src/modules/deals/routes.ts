@@ -779,8 +779,7 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
         customer: {
           include: {
             contacts: true,
-            addresses: true,
-            paymentTerm: true
+            addresses: true
           }
         },
         stage: true,
