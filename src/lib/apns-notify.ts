@@ -10,6 +10,7 @@
 import { readFileSync } from "node:fs";
 import { createSign } from "node:crypto";
 import { config } from "../config.js";
+import { prisma } from "./prisma.js";
 
 // ── APNs JWT token (cached, refreshed every 50 min — Apple requires < 60 min) ──
 
@@ -138,4 +139,61 @@ export async function sendApnsPush(opts: ApnsPushOptions): Promise<ApnsPushResul
 
   const body = await res.json().catch(() => ({})) as { reason?: string };
   return { ok: false, statusCode: res.status, reason: body.reason };
+}
+
+export interface SendApnsToUserResult {
+  sentCount: number;
+  failedCount: number;
+}
+
+/**
+ * Fan out an APNs push to every iOS device registered to a user.
+ * No-op when APNs isn't configured. Drops device tokens Apple reports as
+ * permanently invalid (410 Unregistered, BadDeviceToken) so they don't get
+ * retried indefinitely.
+ */
+export async function sendApnsToUser(opts: {
+  userId: string;
+  title: string;
+  body: string;
+  data?: Record<string, unknown>;
+  badge?: number;
+}): Promise<SendApnsToUserResult> {
+  if (!isApnsConfigured()) return { sentCount: 0, failedCount: 0 };
+
+  const devices = await prisma.userDevice.findMany({
+    where: { userId: opts.userId, platform: "IOS" },
+    select: { id: true, deviceToken: true }
+  });
+  if (devices.length === 0) return { sentCount: 0, failedCount: 0 };
+
+  let sentCount = 0;
+  let failedCount = 0;
+
+  await Promise.all(devices.map(async (d) => {
+    try {
+      const r = await sendApnsPush({
+        deviceToken: d.deviceToken,
+        title: opts.title,
+        body: opts.body,
+        data: opts.data,
+        ...(opts.badge != null ? { badge: opts.badge } : {})
+      });
+      if (r.ok) {
+        sentCount += 1;
+        return;
+      }
+      failedCount += 1;
+      if (r.statusCode === 410 || r.reason === "BadDeviceToken" || r.reason === "Unregistered") {
+        await prisma.userDevice.delete({ where: { id: d.id } }).catch(() => {});
+      } else {
+        console.warn(`[apns] push failed user=${opts.userId} status=${r.statusCode} reason=${r.reason ?? "?"}`);
+      }
+    } catch (err) {
+      failedCount += 1;
+      console.error(`[apns] push error user=${opts.userId}:`, err);
+    }
+  }));
+
+  return { sentCount, failedCount };
 }

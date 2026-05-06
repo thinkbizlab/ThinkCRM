@@ -22,6 +22,7 @@ import { prisma } from "./prisma.js";
 import { decryptCredential } from "./secrets.js";
 import { smtpPort } from "./smtp-port.js";
 import { fmtThaiMonthYear, fmtBaht } from "./format.js";
+import { sendApnsToUser } from "./apns-notify.js";
 
 // ── Date helpers ─────────────────────────────────────────────────────────────
 
@@ -291,6 +292,18 @@ async function deliverPersonal(opts: {
     } catch (err) {
       console.error(`[kpi-alert] personal delivery error user=${userId} provider=${acct.provider}:`, err);
     }
+  }
+
+  try {
+    const apns = await sendApnsToUser({
+      userId,
+      title: `🎯 แจ้งเตือน KPI — ${appName}`,
+      body: message,
+      data: { type: "kpi_alert", tenantId }
+    });
+    if (apns.sentCount > 0) sent = true;
+  } catch (err) {
+    console.error(`[kpi-alert] APNs delivery error user=${userId}:`, err);
   }
 
   return sent;
