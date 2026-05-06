@@ -24,12 +24,14 @@ function getApnsJwt(): string {
 
   const keyId = config.APNS_KEY_ID;
   const teamId = config.APNS_TEAM_ID;
-  const keyPath = config.APNS_KEY_PATH;
-  if (!keyId || !teamId || !keyPath) {
-    throw new Error("APNs is not configured (APNS_KEY_ID, APNS_TEAM_ID, APNS_KEY_PATH required).");
+  if (!keyId || !teamId) {
+    throw new Error("APNs is not configured (APNS_KEY_ID and APNS_TEAM_ID required).");
   }
 
-  const key = readFileSync(keyPath, "utf8");
+  const key = loadApnsPrivateKey();
+  if (!key) {
+    throw new Error("APNs is not configured (set APNS_PRIVATE_KEY or APNS_KEY_PATH).");
+  }
   const iat = Math.floor(now / 1000);
 
   const header = Buffer.from(JSON.stringify({ alg: "ES256", kid: keyId })).toString("base64url");
@@ -45,6 +47,20 @@ function getApnsJwt(): string {
   cachedJwt = `${signingInput}.${sig.toString("base64url")}`;
   cachedJwtAt = now;
   return cachedJwt;
+}
+
+/**
+ * Resolve the .p8 private key from APNS_PRIVATE_KEY (PEM string in env, preferred
+ * on Vercel / other serverless hosts) or fall back to reading APNS_KEY_PATH from
+ * disk (preferred for local dev). The Vercel env-var dashboard sometimes stores
+ * newlines as literal `\n` two-character sequences — normalize those back.
+ */
+function loadApnsPrivateKey(): string | null {
+  const inline = config.APNS_PRIVATE_KEY;
+  if (inline) return inline.includes("\\n") ? inline.replace(/\\n/g, "\n") : inline;
+  const keyPath = config.APNS_KEY_PATH;
+  if (keyPath) return readFileSync(keyPath, "utf8");
+  return null;
 }
 
 /** Convert a DER-encoded ECDSA signature to the raw 64-byte r||s format used by JWT ES256. */
@@ -98,7 +114,12 @@ const APNS_HOST: Record<string, string> = {
 
 /** Whether APNs is configured and available. */
 export function isApnsConfigured(): boolean {
-  return !!(config.APNS_KEY_ID && config.APNS_TEAM_ID && config.APNS_KEY_PATH && config.APNS_BUNDLE_ID);
+  return !!(
+    config.APNS_KEY_ID
+    && config.APNS_TEAM_ID
+    && config.APNS_BUNDLE_ID
+    && (config.APNS_PRIVATE_KEY || config.APNS_KEY_PATH)
+  );
 }
 
 /**

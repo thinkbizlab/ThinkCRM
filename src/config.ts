@@ -65,7 +65,12 @@ const configSchema = z.object({
   APNS_KEY_ID: z.preprocess(v => (v === "" ? undefined : v), z.string().optional()),
   APNS_TEAM_ID: z.preprocess(v => (v === "" ? undefined : v), z.string().optional()),
   APNS_BUNDLE_ID: z.preprocess(v => (v === "" ? undefined : v), z.string().optional()),
-  // Path to the .p8 private key file, or the key content as a string.
+  // Either: the full PEM contents of the .p8 key (preferred for serverless — paste
+  // into the Vercel env-var UI; literal `\n` escape sequences are normalized to
+  // real newlines so the dashboard's escaping doesn't matter)…
+  APNS_PRIVATE_KEY: z.preprocess(v => (v === "" ? undefined : v), z.string().optional()),
+  // …or a path to the .p8 file on disk (used as a fallback when APNS_PRIVATE_KEY
+  // isn't set; convenient for local dev where you can keep the key as a file).
   APNS_KEY_PATH: z.preprocess(v => (v === "" ? undefined : v), z.string().optional()),
   // Set to "production" for App Store builds; defaults to "development" for TestFlight/dev.
   APNS_ENVIRONMENT: z.enum(["development", "production"]).default("development"),
