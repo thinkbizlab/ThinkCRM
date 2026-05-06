@@ -5,7 +5,7 @@ import {
   VisitType,
   type Prisma
 } from "../../lib/prisma-generated.js";
-import { ChannelType, IntegrationPlatform, SourceStatus } from "@prisma/client";
+import { ChannelType, IntegrationPlatform, SourceStatus, Prisma as PrismaRuntime } from "@prisma/client";
 import type { FastifyPluginAsync } from "fastify";
 import { config } from "../../config.js";
 import { z } from "zod";
@@ -363,6 +363,28 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
     if ((input.customerId ? 1 : 0) + (input.prospectId ? 1 : 0) !== 1) {
       throw app.httpErrors.badRequest("Visit must reference exactly one of customerId or prospectId.");
     }
+    // visitNo is generated as `V-NNNNNN` from MAX(visitNo)+1 within the
+    // tenant. Reading MAX rather than COUNT keeps the sequence stable across
+    // deletions (count would collide on the first reused slot). Two
+    // concurrent creates can still race — both read the same MAX, both pick
+    // the same next number — so we wrap the transaction in a small retry
+    // loop on the P2002 (tenantId, visitNo) unique-constraint violation.
+    const MAX_RETRIES = 5;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await runCreateVisitTransaction();
+      } catch (err) {
+        const isUniqueViolation =
+          err instanceof PrismaRuntime.PrismaClientKnownRequestError &&
+          err.code === "P2002" &&
+          Array.isArray(err.meta?.target) &&
+          (err.meta.target as string[]).includes("visitNo");
+        if (isUniqueViolation && attempt < MAX_RETRIES) continue;
+        throw err;
+      }
+    }
+
+    async function runCreateVisitTransaction() {
     return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       if (input.customerId) {
         const customer = await tx.customer.findFirst({
@@ -409,8 +431,18 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
         }
       }
 
-      const visitCount = await tx.visit.count({ where: { tenantId: input.tenantId } });
-      const visitNo = `V-${String(visitCount + 1).padStart(6, "0")}`;
+      // Highest existing visitNo for this tenant. Parsing the trailing digits
+      // means a future format change (e.g. `VST-00001`) won't trip us up, and
+      // skipping deleted slots avoids count-vs-max collisions.
+      const lastVisit = await tx.visit.findFirst({
+        where: { tenantId: input.tenantId },
+        orderBy: { visitNo: "desc" },
+        select: { visitNo: true }
+      });
+      const lastNum = lastVisit?.visitNo
+        ? parseInt(lastVisit.visitNo.replace(/^[^0-9]+/, ""), 10) || 0
+        : 0;
+      const visitNo = `V-${String(lastNum + 1).padStart(6, "0")}`;
       const created = await tx.visit.create({
         data: {
           tenantId: input.tenantId,
@@ -438,6 +470,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
       });
       return created;
     });
+    }
   }
 
   app.post("/visits/planned", async (request, reply) => {
