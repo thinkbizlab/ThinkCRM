@@ -431,17 +431,20 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
         }
       }
 
-      // Highest existing visitNo for this tenant. Parsing the trailing digits
-      // means a future format change (e.g. `VST-00001`) won't trip us up, and
-      // skipping deleted slots avoids count-vs-max collisions.
-      const lastVisit = await tx.visit.findFirst({
-        where: { tenantId: input.tenantId },
-        orderBy: { visitNo: "desc" },
-        select: { visitNo: true }
-      });
-      const lastNum = lastVisit?.visitNo
-        ? parseInt(lastVisit.visitNo.replace(/^[^0-9]+/, ""), 10) || 0
-        : 0;
+      // Highest existing visitNo for this tenant — true NUMERIC max across
+      // any prefix. We can't use `orderBy: { visitNo: 'desc' }` + parse
+      // because Postgres orders strings lexically: `VIS-000030` sorts AFTER
+      // `V-000113` (`-` < `I`), so a tenant that has both prefixes (legacy
+      // imports + app-generated rows) keeps re-picking the wrong row and
+      // every create P2002s on a number that already exists. Strip the
+      // non-digit prefix in SQL and CAST so the MAX is over real integers.
+      const numericMax = await tx.$queryRaw<{ max: number | null }[]>`
+        SELECT MAX(CAST(REGEXP_REPLACE("visitNo", '^[^0-9]+', '') AS INTEGER)) AS max
+        FROM "Visit"
+        WHERE "tenantId" = ${input.tenantId}
+          AND "visitNo" ~ '[0-9]'
+      `;
+      const lastNum = numericMax[0]?.max ?? 0;
       const visitNo = `V-${String(lastNum + 1).padStart(6, "0")}`;
       const created = await tx.visit.create({
         data: {
