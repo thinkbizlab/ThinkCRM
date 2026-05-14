@@ -18,6 +18,9 @@ import { getTenantUrl } from "../../lib/tenant-url.js";
 import { smtpPort } from "../../lib/smtp-port.js";
 import { uploadBufferToR2, buildR2PublicUrl, createR2PresignedDownload } from "../../lib/r2-storage.js";
 import { formatThaiDateTime, googleMapsLink, formatDuration } from "../../lib/line-notify.js";
+import { reverseGeocodeTH, formatThaiAddressLine, type ThaiAddressParts } from "../../lib/geocoder.js";
+import { applyCheckInWatermark } from "../../lib/image-watermark.js";
+import { fmtThaiShortDateTime } from "../../lib/format.js";
 
 const DEFAULT_CHECKIN_MAX_DISTANCE_M = 1_000; // fallback when tenant has no visit config
 const EARTH_RADIUS_METERS = 6371000;
@@ -749,6 +752,16 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.badRequest(zodMsg(parsed.error));
     }
 
+    // Reverse-geocode the check-in coords so we can both (a) burn the address
+    // into the selfie watermark and (b) persist the parts on the Visit row for
+    // list/notification consumers. Tolerant of API failure: address columns
+    // stay null and the watermark gracefully shows timestamp only.
+    const geoParts: ThaiAddressParts | null = await reverseGeocodeTH(
+      parsed.data.lat,
+      parsed.data.lng,
+    ).catch(() => null);
+    const addressLine = formatThaiAddressLine(geoParts);
+
     // Upload selfie to R2 before the transaction (avoids holding a TX open during I/O).
     let selfieStorageRef = parsed.data.selfieUrl;
     if (parsed.data.selfieUrl.startsWith("data:image/")) {
@@ -758,15 +771,30 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
         const base64Data = parsed.data.selfieUrl.slice(commaIdx + 1);
         const mimeMatch = header.match(/data:(image\/[a-zA-Z+]+);base64/);
         const contentType = mimeMatch?.[1] ?? "image/jpeg";
-        const ext = contentType.split("/")[1]?.replace("jpeg", "jpg") ?? "jpg";
-        const imageBuffer = Buffer.from(base64Data, "base64");
+        const rawBuffer = Buffer.from(base64Data, "base64");
+        const capturedAt = parsed.data.capturedAt
+          ? new Date(parsed.data.capturedAt)
+          : new Date();
+        const timestampLine = fmtThaiShortDateTime(capturedAt);
+        const watermarked = await applyCheckInWatermark(rawBuffer, {
+          timestampLine,
+          addressLine,
+        }).catch((err) => {
+          app.log.warn({ err }, "selfie watermark failed — uploading raw image");
+          return rawBuffer;
+        });
+        const watermarkApplied = watermarked !== rawBuffer;
+        const uploadContentType = watermarkApplied ? "image/jpeg" : contentType;
+        const ext = watermarkApplied
+          ? "jpg"
+          : contentType.split("/")[1]?.replace("jpeg", "jpg") ?? "jpg";
         const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { slug: true } });
         if (tenant?.slug) {
           const stored = await uploadBufferToR2({
             tenantSlug: tenant.slug,
             objectKeyOrRef: `visits/${params.id}/selfie-${Date.now()}.${ext}`,
-            contentType,
-            data: imageBuffer
+            contentType: uploadContentType,
+            data: watermarked
           });
           selfieStorageRef = stored.objectRef;
         }
@@ -836,7 +864,11 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
           checkInLat: parsed.data.lat,
           checkInLng: parsed.data.lng,
           checkInDistanceM: distanceMeters,
-          checkInSelfie: selfieStorageRef
+          checkInSelfie: selfieStorageRef,
+          checkInRoad: geoParts?.road ?? null,
+          checkInSubdistrict: geoParts?.subdistrict ?? null,
+          checkInDistrict: geoParts?.district ?? null,
+          checkInProvince: geoParts?.province ?? null
         }
       });
 

@@ -805,6 +805,10 @@ model Visit {
   checkInLng       Float?
   checkInDistanceM Float?
   checkInSelfie    String?
+  checkInRoad        String?
+  checkInSubdistrict String?
+  checkInDistrict    String?
+  checkInProvince    String?
   checkOutAt       DateTime?
   checkOutLat      Float?
   checkOutLng      Float?
