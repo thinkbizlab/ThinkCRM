@@ -950,6 +950,18 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
             selfieHttpUrl = rawSelfie;
           }
 
+          // Build the same Thai address line the watermark uses. Falls back to
+          // formatting the stored Visit columns when geocode was successful,
+          // and to live re-geocoding only if those columns are null (e.g. a
+          // pre-migration visit row replayed through the same handler).
+          const storedAddressLine = formatThaiAddressLine({
+            road: checkedIn.checkInRoad ?? undefined,
+            subdistrict: checkedIn.checkInSubdistrict ?? undefined,
+            district: checkedIn.checkInDistrict ?? undefined,
+            province: checkedIn.checkInProvince ?? undefined,
+          });
+          const notifAddressLine = storedAddressLine ?? addressLine;
+
           const { sendLinePush, buildCheckInMessages } = await import("../../lib/line-notify.js");
           const msgs = buildCheckInMessages({
             appName: branding?.appName || "CRM",
@@ -960,6 +972,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
             objective: checkedIn.objective ?? null,
             lat: checkedIn.checkInLat ?? parsed.data.lat,
             lng: checkedIn.checkInLng ?? parsed.data.lng,
+            addressLine: notifAddressLine,
             selfieUrl: selfieHttpUrl
           });
 
@@ -989,7 +1002,8 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
               { title: "Visit ID",    value: checkedIn.visitNo ?? "—" },
               { title: "Sales Rep",   value: rep.fullName || "—" },
               { title: "Customer",    value: visitWithCustomer?.customer?.name || "—" },
-              { title: "Check-In",    value: formatThaiDateTime(checkInAt) },
+              { title: "Check-In",    value: fmtThaiShortDateTime(checkInAt) },
+              ...(notifAddressLine ? [{ title: "Address", value: notifAddressLine }] : []),
               { title: "Objective",   value: checkedIn.objective?.trim() || "—" },
               { title: "Location",    value: `[Open in Maps](${googleMapsLink(checkedIn.checkInLat ?? parsed.data.lat, checkedIn.checkInLng ?? parsed.data.lng)})` }
             ];
@@ -1024,7 +1038,8 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
                 { label: "Visit ID",  value: checkedIn.visitNo ?? "—" },
                 { label: "Sales Rep", value: rep.fullName || "—" },
                 { label: "Customer",  value: visitWithCustomer?.customer?.name || "—" },
-                { label: "Check-In",  value: formatThaiDateTime(checkInAt) },
+                { label: "Check-In",  value: fmtThaiShortDateTime(checkInAt) },
+                ...(notifAddressLine ? [{ label: "Address", value: notifAddressLine }] : []),
                 { label: "Objective", value: checkedIn.objective?.trim() || "—" },
                 { label: "Location",  value: googleMapsLink(checkedIn.checkInLat ?? parsed.data.lat, checkedIn.checkInLng ?? parsed.data.lng) }
               ];

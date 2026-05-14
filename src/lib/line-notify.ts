@@ -48,7 +48,7 @@ export async function sendLinePush(
   return { ok: false, status: res.status, message: errMsg };
 }
 
-import { fmtThaiDateTime } from "./format.js";
+import { fmtThaiDateTime, fmtThaiShortDateTime } from "./format.js";
 
 // Re-export so existing callers (visits/routes.ts) keep working.
 export const formatThaiDateTime = fmtThaiDateTime;
@@ -77,25 +77,33 @@ export function buildCheckInMessages(opts: {
   objective: string | null;
   lat: number;
   lng: number;
+  /** Reverse-geocoded "ถนน… แขวง/ตำบล… เขต/อำเภอ…". Omitted when null. */
+  addressLine: string | null;
   selfieUrl: string | null;
 }): LineMessage[] {
-  const dt = formatThaiDateTime(opts.checkInAt);
+  const dt = fmtThaiShortDateTime(opts.checkInAt);
   const mapUrl = googleMapsLink(opts.lat, opts.lng);
   const objective = opts.objective?.trim() || "—";
 
-  const text =
-    `📍 Check-In Notification\n` +
-    `${"─".repeat(28)}\n` +
-    `🔖 Visit ID   : ${opts.visitNo}\n` +
-    `👤 Sales Rep  : ${opts.repName}\n` +
-    `🏢 Customer   : ${opts.customerName}\n` +
-    `🕐 Check-In   : ${dt}\n` +
-    `📝 Objective  : ${objective}\n` +
-    `📌 Location   : ${mapUrl}\n` +
-    `${"─".repeat(28)}\n` +
-    `[${opts.appName}]`;
+  const lines = [
+    `📍 Check-In Notification`,
+    "─".repeat(28),
+    `🔖 Visit ID   : ${opts.visitNo}`,
+    `👤 Sales Rep  : ${opts.repName}`,
+    `🏢 Customer   : ${opts.customerName}`,
+    `🕐 Check-In   : ${dt}`,
+  ];
+  if (opts.addressLine) {
+    lines.push(`📍 Address    : ${opts.addressLine}`);
+  }
+  lines.push(
+    `📝 Objective  : ${objective}`,
+    `📌 Location   : ${mapUrl}`,
+    "─".repeat(28),
+    `[${opts.appName}]`,
+  );
 
-  const msgs: LineMessage[] = [{ type: "text", text }];
+  const msgs: LineMessage[] = [{ type: "text", text: lines.join("\n") }];
 
   if (opts.selfieUrl) {
     msgs.push({
