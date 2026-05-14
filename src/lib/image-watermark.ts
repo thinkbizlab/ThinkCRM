@@ -1,4 +1,4 @@
-import sharp from "sharp";
+import type sharpDefault from "sharp";
 import { SARABUN_REGULAR_BASE64 } from "./sarabun-font.js";
 
 // Font is inlined as a base64 constant (see scripts/embed-sarabun.mjs) so the
@@ -6,6 +6,25 @@ import { SARABUN_REGULAR_BASE64 } from "./sarabun-font.js";
 // the function. librsvg (used by sharp's SVG composite) honors data-URL fonts
 // declared via @font-face.
 const FONT_DATA_URL = `data:font/ttf;base64,${SARABUN_REGULAR_BASE64}`;
+
+// `sharp` pulls in ~16 MB of native libvips bindings. We deliberately lazy-load
+// it on first call so cold starts for non-checkin requests (the 95% case) don't
+// pay the import cost. With Fluid Compute's instance reuse the import is
+// effectively one-time per warm instance.
+type SharpFactory = typeof sharpDefault;
+let sharpPromise: Promise<SharpFactory> | undefined;
+function loadSharp(): Promise<SharpFactory> {
+  if (!sharpPromise) {
+    // Node's CJS interop wraps the dynamic-import namespace as
+    // `{ default: sharp, ...staticMethods }`, but TS under NodeNext narrows
+    // `typeof import("sharp")` to just the callable. Reach for `.default` at
+    // runtime; cast through `unknown` to keep the type-check happy.
+    sharpPromise = import("sharp").then(
+      (m) => (m as unknown as { default: SharpFactory }).default,
+    );
+  }
+  return sharpPromise;
+}
 
 function escapeXml(s: string): string {
   return s
@@ -32,6 +51,7 @@ export async function applyCheckInWatermark(
   input: Buffer,
   opts: WatermarkOptions,
 ): Promise<Buffer> {
+  const sharp = await loadSharp();
   const base = sharp(input).rotate();
   const meta = await base.metadata();
   const width = meta.width ?? 0;
