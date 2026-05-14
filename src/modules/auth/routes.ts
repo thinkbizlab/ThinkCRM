@@ -326,14 +326,39 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         loginShowGoogle: true,
         loginShowMicrosoft: true,
         loginShowPasskey: true,
-        loginHeroLayout: "BACKGROUND"
+        loginHeroLayout: "BACKGROUND",
+        oauthMs365Available: false,
+        oauthGoogleAvailable: false
       });
     }
     const b = tenant.branding;
+    // Run the credentials lookup in parallel with the (async) R2 logo URL
+    // signing — none of these depend on each other so there's no reason to
+    // serialise them. Folds the previously-separate /auth/oauth/providers
+    // round trip into this response, so the login page only chains two
+    // fetches (resolve-domain → branding-with-oauth) instead of three.
+    const [creds, logoUrl, faviconUrl, loginHeroImageUrl] = await Promise.all([
+      prisma.tenantIntegrationCredential.findMany({
+        where: {
+          tenantId: tenant.id,
+          platform: { in: [IntegrationPlatform.MS365, IntegrationPlatform.GOOGLE] },
+          status: SourceStatus.ENABLED,
+        },
+        select: { platform: true, clientIdRef: true, clientSecretRef: true },
+      }),
+      resolveBrandingUrl(b?.logoUrl, tenant.slug),
+      resolveBrandingUrl(b?.faviconUrl, tenant.slug),
+      resolveBrandingUrl(b?.loginHeroImageUrl, tenant.slug),
+    ]);
+    const hasCreds = (platform: IntegrationPlatform) => {
+      const row = creds.find((c) => c.platform === platform);
+      const decrypted = row ? decryptCredential(row) : null;
+      return Boolean(decrypted?.clientIdRef && decrypted?.clientSecretRef);
+    };
     return reply.send({
       appName:               b?.appName               ?? tenant.name,
-      logoUrl:               await resolveBrandingUrl(b?.logoUrl, tenant.slug),
-      faviconUrl:            await resolveBrandingUrl(b?.faviconUrl, tenant.slug),
+      logoUrl,
+      faviconUrl,
       primaryColor:          b?.primaryColor          ?? "#2563eb",
       secondaryColor:        b?.secondaryColor        ?? "#0f172a",
       accentGradientEnabled: b?.accentGradientEnabled ?? false,
@@ -343,7 +368,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       themeMode:             b?.themeMode             ?? "LIGHT",
       loginTaglineHeadline:  b?.loginTaglineHeadline  ?? null,
       loginTaglineSubtext:   b?.loginTaglineSubtext   ?? null,
-      loginHeroImageUrl:     await resolveBrandingUrl(b?.loginHeroImageUrl, tenant.slug),
+      loginHeroImageUrl,
       loginWelcomeMessage:   b?.loginWelcomeMessage   ?? null,
       loginFooterText:       b?.loginFooterText       ?? null,
       loginTermsUrl:         b?.loginTermsUrl         ?? null,
@@ -353,7 +378,9 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       loginShowGoogle:       b?.loginShowGoogle       ?? true,
       loginShowMicrosoft:    b?.loginShowMicrosoft    ?? true,
       loginShowPasskey:      b?.loginShowPasskey      ?? true,
-      loginHeroLayout:       b?.loginHeroLayout       ?? "BACKGROUND"
+      loginHeroLayout:       b?.loginHeroLayout       ?? "BACKGROUND",
+      oauthMs365Available:   hasCreds(IntegrationPlatform.MS365),
+      oauthGoogleAvailable:  hasCreds(IntegrationPlatform.GOOGLE)
     });
   });
 

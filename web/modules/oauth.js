@@ -18,7 +18,7 @@ import { qs } from "./dom.js";
 // shown via Settings → Branding (loginShowGoogle / loginShowMicrosoft /
 // loginShowPasskey / loginShowSignup flags). The branding fetch sets
 // data-loginHiddenByAdmin on the relevant buttons before this runs.
-export async function loadOAuthProviderButtons({ getTenantSlug } = {}) {
+export async function loadOAuthProviderButtons({ getTenantSlug, providers } = {}) {
   const panel    = qs("#oauth-providers");
   const loading  = qs("#oauth-loading");
   const btnsWrap = qs("#oauth-btns");
@@ -42,6 +42,14 @@ export async function loadOAuthProviderButtons({ getTenantSlug } = {}) {
     // so the login page collapses to just username/password.
     panel.hidden = !ms365Allowed && !googleAllowed && !passkeyAllowed;
   };
+
+  // Fast path: caller already has provider availability flags (typically from
+  // the /auth/branding/public response, which folds them in). This is the
+  // login-page critical path — saves one chained network round-trip.
+  if (providers && typeof providers === "object") {
+    finish(providers);
+    return;
+  }
 
   try {
     const slug = getTenantSlug?.();

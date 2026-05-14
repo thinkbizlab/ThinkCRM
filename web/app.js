@@ -1396,7 +1396,16 @@ async function fetchLoginBranding(slug) {
   try {
     const res = await fetch(`/api/v1/auth/branding/public?slug=${encodeURIComponent(slug)}`);
     if (!res.ok) return;
-    applyLoginBranding(await res.json());
+    const data = await res.json();
+    applyLoginBranding(data);
+    // /branding/public folds in the OAuth-credentials check, so we don't need
+    // a separate /auth/oauth/providers round-trip on the login critical path.
+    loadOAuthProviderButtons({
+      providers: {
+        ms365:  data.oauthMs365Available  === true,
+        google: data.oauthGoogleAvailable === true
+      }
+    });
   } catch { /* ignore — branding is cosmetic */ }
 }
 
@@ -1406,42 +1415,49 @@ function revealLoginBrandingDefault() {
   qs("#login-app-name")?.classList.remove("branding-pending");
 }
 
-// Auto-resolve workspace from custom domain on login page
+// Auto-resolve workspace from custom domain on login page.
+// fetchLoginBranding() wires OAuth buttons inline from the branding response,
+// so we only need a fallback loadOAuthProviderButtons() call for the
+// no-slug-resolved path (shared domain, user hasn't typed a workspace yet) —
+// that hides the loading skeleton without paying for a /providers fetch.
 (async () => {
-  const getSlug = () => loginForm.querySelector('[name="tenantSlug"]')?.value?.trim();
   const hostname = window.location.hostname;
+  let resolved = false;
   if (hostname === "localhost" || hostname === "127.0.0.1") {
     const slugInput = loginForm.querySelector('[name="tenantSlug"]');
-    if (slugInput?.value) await fetchLoginBranding(slugInput.value);
-    revealLoginBrandingDefault();
-    loadOAuthProviderButtons({ getTenantSlug: getSlug });
-    return;
-  }
-  try {
-    const response = await fetch(`/api/v1/auth/resolve-domain?host=${encodeURIComponent(hostname)}`);
-    if (response.ok) {
-      const data = await response.json();
-      if (data.tenantSlug) {
-        const slugInput = loginForm.querySelector('[name="tenantSlug"]');
-        slugInput.value = data.tenantSlug;
-        slugInput.readOnly = true;
-        const workspaceRow = qs("#login-workspace-row");
-        if (workspaceRow) workspaceRow.hidden = true;
-        await fetchLoginBranding(data.tenantSlug);
-      }
+    if (slugInput?.value) {
+      await fetchLoginBranding(slugInput.value);
+      resolved = true;
     }
-  } catch {
-    // Shared domain — fall through to the default (no prefill).
+  } else {
+    try {
+      const response = await fetch(`/api/v1/auth/resolve-domain?host=${encodeURIComponent(hostname)}`);
+      if (response.ok) {
+        const data = await response.json();
+        if (data.tenantSlug) {
+          const slugInput = loginForm.querySelector('[name="tenantSlug"]');
+          slugInput.value = data.tenantSlug;
+          slugInput.readOnly = true;
+          const workspaceRow = qs("#login-workspace-row");
+          if (workspaceRow) workspaceRow.hidden = true;
+          await fetchLoginBranding(data.tenantSlug);
+          resolved = true;
+        }
+      }
+    } catch {
+      // Shared domain — fall through to the default (no prefill).
+    }
   }
-  // Make sure the wordmark is visible even if branding didn't load.
   revealLoginBrandingDefault();
-  // Always load OAuth buttons after resolve-domain settles — whether or not
-  // we matched a tenant. Passing getSlug so the API can resolve tenant-level
-  // creds once a slug is known, and fall back to platform env otherwise.
-  loadOAuthProviderButtons({ getTenantSlug: getSlug });
+  if (!resolved) {
+    // Hide the OAuth skeleton with everything off until the user types a slug.
+    loadOAuthProviderButtons({ providers: { ms365: false, google: false } });
+  }
 })();
 
 // Re-apply login branding whenever the workspace slug changes (debounced).
+// fetchLoginBranding() also updates OAuth buttons from the inline flags, so
+// no separate /providers call here.
 (function () {
   const slugInput = loginForm.querySelector('[name="tenantSlug"]');
   if (!slugInput) return;
@@ -1449,11 +1465,7 @@ function revealLoginBrandingDefault() {
   slugInput.addEventListener("input", () => {
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
-      const slug = slugInput.value.trim();
-      fetchLoginBranding(slug);
-      loadOAuthProviderButtons({
-      getTenantSlug: () => loginForm.querySelector('[name="tenantSlug"]')?.value?.trim()
-    });
+      fetchLoginBranding(slugInput.value.trim());
     }, 500);
   });
 })();
