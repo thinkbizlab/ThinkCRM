@@ -623,6 +623,12 @@ function applyVisitSubjectMode(...args) {
     .catch(handleLazyModuleError);
 }
 
+function applyVisitMode(...args) {
+  void ensureVisitsModule()
+    .then((module) => module.applyVisitMode(...args))
+    .catch(handleLazyModuleError);
+}
+
 function showEventDetail(...args) {
   void ensureVisitsModule()
     .then((module) => module.showEventDetail(...args))
@@ -12712,7 +12718,7 @@ function initCustomerAutocomplete(inputEl, listEl, hiddenEl, onSelect) {
     if (!matches.length) {
       const modal = inputEl.closest("#visit-create-modal");
       const isUnplanned = modal
-        ? modal.querySelector('input[name="visitType"]:checked')?.value === "UNPLANNED"
+        ? modal.querySelector('input[name="visitType"]')?.value === "UNPLANNED"
         : false;
       if (!isUnplanned) { closeList(); return; }
       listEl.innerHTML = `<button type="button" class="ac-item ac-item--new-prospect" id="ac-new-prospect-btn">
@@ -12887,11 +12893,10 @@ qs("#visit-create-modal")?.addEventListener("click", (e) => {
 });
 
 qs("#visit-create-modal")?.addEventListener("change", (e) => {
-  if (e.target.matches('[name="visitType"]')) {
-    syncVisitPlannedAtRequired(qs("#visit-create-modal"));
-  }
-  if (e.target.matches('[name="visitSubject"]')) {
-    applyVisitSubjectMode(qs("#visit-create-modal"), e.target.value);
+  // The visit-create modal now uses a single 3-way `visitMode` radio that
+  // drives the hidden visitSubject + visitType inputs via applyVisitMode().
+  if (e.target.matches('[name="visitMode"]')) {
+    applyVisitMode(qs("#visit-create-modal"), e.target.value);
   }
 });
 

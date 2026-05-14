@@ -379,11 +379,14 @@ export function openVisitCreateModal(arg) {
   if (input) input.value = customer?.name ?? "";
   if (hiddenId) hiddenId.value = customer?.id ?? "";
   if (list) list.hidden = true;
-  const subjectCustomer = modal.querySelector('[name="visitSubject"][value="CUSTOMER"]');
-  if (subjectCustomer) subjectCustomer.checked = true;
+  // Reset the 3-way visit-mode toggle to "Planned" (the most common case).
+  // applyVisitMode writes the hidden visitSubject + visitType inputs and
+  // sets the customer-picker / planned-at UI to match.
+  const plannedModeRadio = modal.querySelector('[name="visitMode"][value="PLANNED_CUSTOMER"]');
+  if (plannedModeRadio) plannedModeRadio.checked = true;
   const prospectNameField = modal.querySelector("#visit-prospect-name");
   if (prospectNameField) prospectNameField.value = "";
-  applyVisitSubjectMode(modal, "CUSTOMER");
+  applyVisitMode(modal, "PLANNED_CUSTOMER");
   const dealLabel = modal.querySelector("#visit-deal-label");
   const dealSelect = modal.querySelector("#visit-deal-select");
   if (dealLabel) dealLabel.hidden = true;
@@ -405,9 +408,8 @@ export function openVisitCreateModal(arg) {
   if (siteLng) siteLng.value = "";
   if (locPreview) locPreview.hidden = true;
   if (pickBtn) pickBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> Pick on Map`;
-  const plannedRadio = modal.querySelector('[name="visitType"][value="PLANNED"]');
-  if (plannedRadio) plannedRadio.checked = true;
-  syncVisitPlannedAtRequired(modal);
+  // Planned-at required state is already set by the applyVisitMode call above,
+  // since visitMode=PLANNED_CUSTOMER implies visitType=PLANNED → required.
   modal.querySelector("#visit-form")?.reset && false;
   modal.hidden = false;
   const form = modal.querySelector("#visit-form");
@@ -516,9 +518,13 @@ export function closeVisitEditModal() {
 }
 
 export function syncVisitPlannedAtRequired(modal) {
-  const visitType = modal.querySelector('[name="visitType"]:checked')?.value;
+  // visitType lives on a hidden input now (driven by the visitMode 3-way
+  // radio via applyVisitMode), so we read .value directly — `:checked` doesn't
+  // apply to hidden inputs.
+  const visitType = modal.querySelector('[name="visitType"]')?.value;
   const plannedAtInput = modal.querySelector("#visit-planned-at");
   const label = modal.querySelector("#visit-planned-at-label");
+  if (!plannedAtInput || !label) return;
   if (visitType === "PLANNED") {
     plannedAtInput.required = true;
     if (!label.querySelector(".req-star")) {
@@ -534,18 +540,15 @@ export function syncVisitPlannedAtRequired(modal) {
   }
 }
 
-// "Unidentified site" mode forces UNPLANNED + hides the customer picker so a rep
-// who just parked outside an unknown construction site can capture the visit
-// without first guessing the customer name.
+// Toggle the customer-picker / prospect-fields / deal-label visibility based
+// on whether this is a known-customer or unidentified-site visit. Called by
+// applyVisitMode after the mode-change writes the hidden visitSubject input.
 export function applyVisitSubjectMode(modal, mode) {
   const customerLabel = modal.querySelector("#visit-customer-label");
   const customerHidden = modal.querySelector("#visit-customer-id");
   const customerInput = modal.querySelector("#visit-customer-input");
   const prospectFields = modal.querySelector("#visit-prospect-fields");
   const dealLabel = modal.querySelector("#visit-deal-label");
-  const visitTypeLabel = modal.querySelector("#visit-type-label");
-  const visitTypePlanned = modal.querySelector('[name="visitType"][value="PLANNED"]');
-  const visitTypeUnplanned = modal.querySelector('[name="visitType"][value="UNPLANNED"]');
 
   if (mode === "UNIDENTIFIED") {
     if (customerLabel) customerLabel.hidden = true;
@@ -556,17 +559,28 @@ export function applyVisitSubjectMode(modal, mode) {
     if (customerInput) customerInput.required = false;
     if (prospectFields) prospectFields.hidden = false;
     if (dealLabel) dealLabel.hidden = true; // can't attach a deal w/o a customer
-    // Force UNPLANNED — an unidentified site can't have been pre-planned.
-    if (visitTypeUnplanned) visitTypeUnplanned.checked = true;
-    if (visitTypePlanned) visitTypePlanned.disabled = true;
-    if (visitTypeLabel) visitTypeLabel.hidden = true;
   } else {
     if (customerLabel) customerLabel.hidden = false;
     if (customerHidden) customerHidden.required = true;
     if (prospectFields) prospectFields.hidden = true;
-    if (visitTypePlanned) visitTypePlanned.disabled = false;
-    if (visitTypeLabel) visitTypeLabel.hidden = false;
   }
+}
+
+// Single 3-way picker on the visit-create modal — drives the (visitSubject,
+// visitType) pair that the submit handler reads from hidden inputs, and
+// reapplies the customer-picker / planned-at UI mode. The three modes:
+//
+//   PLANNED_CUSTOMER    → scheduled call on a known customer
+//   DROPIN_CUSTOMER     → walk-in at a known customer (no required plannedAt)
+//   DROPIN_UNIDENTIFIED → walk-in at an unknown site (creates a Prospect)
+export function applyVisitMode(modal, mode) {
+  const subject = mode === "DROPIN_UNIDENTIFIED" ? "UNIDENTIFIED" : "CUSTOMER";
+  const visitType = mode === "PLANNED_CUSTOMER" ? "PLANNED" : "UNPLANNED";
+  const subjectInput = modal.querySelector('[name="visitSubject"]');
+  const visitTypeInput = modal.querySelector('[name="visitType"]');
+  if (subjectInput) subjectInput.value = subject;
+  if (visitTypeInput) visitTypeInput.value = visitType;
+  applyVisitSubjectMode(modal, subject);
   syncVisitPlannedAtRequired(modal);
 }
 
