@@ -3517,6 +3517,14 @@ function renderDeals(kanban, dealsRoot = views.deals, options = {}) {
         const all = [...list.querySelectorAll('input[type="checkbox"]')];
         state.dealsFilter.repIds = (checked.length === all.length) ? [] : checked.map(c => c.value);
         rdeals(kanban);
+        // rdeals() innerHTML-replaces the whole deals view, so the dropdown
+        // panel we're currently inside gets destroyed and rebuilt closed.
+        // Re-open the freshly-rendered panel so the user can keep ticking
+        // checkboxes without having to reopen the menu after every click.
+        const newPanel = qs("#deals-rep-panel");
+        const newBtn   = qs("#deals-rep-btn");
+        if (newPanel) newPanel.hidden = false;
+        if (newBtn)   newBtn.classList.add("open");
       });
     }
 
