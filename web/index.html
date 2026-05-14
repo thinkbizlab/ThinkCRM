@@ -556,27 +556,32 @@
         </header>
         <form id="visit-form" class="visit-modal-form">
           <div class="visit-modal-fields">
-            <label class="form-label visit-type-label">Subject
-              <div class="visit-type-toggle">
+            <!--
+              Single 3-way visit-mode picker. We keep visitSubject + visitType
+              as hidden inputs so the existing submit handler reads the same
+              field names from FormData; the radio's only job is to drive the
+              hidden values + show/hide the customer picker.
+
+              visitMode → (visitSubject, visitType):
+                PLANNED_CUSTOMER     → (CUSTOMER,     PLANNED)
+                DROPIN_CUSTOMER      → (CUSTOMER,     UNPLANNED)
+                DROPIN_UNIDENTIFIED  → (UNIDENTIFIED, UNPLANNED)
+            -->
+            <input type="hidden" name="visitSubject" value="CUSTOMER" />
+            <input type="hidden" name="visitType" value="PLANNED" />
+            <label class="form-label visit-type-label">Visit type
+              <div class="visit-type-toggle visit-mode-toggle">
                 <label class="visit-type-option">
-                  <input type="radio" name="visitSubject" value="CUSTOMER" checked />
+                  <input type="radio" name="visitMode" value="PLANNED_CUSTOMER" checked />
                   <span>Planned</span>
                 </label>
                 <label class="visit-type-option">
-                  <input type="radio" name="visitSubject" value="UNIDENTIFIED" />
-                  <span>Unplanned</span>
-                </label>
-              </div>
-            </label>
-            <label class="form-label visit-type-label" id="visit-type-label">Visit type
-              <div class="visit-type-toggle">
-                <label class="visit-type-option">
-                  <input type="radio" name="visitType" value="PLANNED" checked />
-                  <span>Planned</span>
+                  <input type="radio" name="visitMode" value="DROPIN_CUSTOMER" />
+                  <span>Drop-in · Known customer</span>
                 </label>
                 <label class="visit-type-option">
-                  <input type="radio" name="visitType" value="UNPLANNED" />
-                  <span>Unplanned</span>
+                  <input type="radio" name="visitMode" value="DROPIN_UNIDENTIFIED" />
+                  <span>Drop-in · New site</span>
                 </label>
               </div>
             </label>
