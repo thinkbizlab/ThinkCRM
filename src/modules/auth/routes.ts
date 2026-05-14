@@ -287,11 +287,18 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
   }
 
   // Public endpoint — no auth required. Used by login page before authentication.
+  // Edge-cached for 5 min: response depends only on the ?slug= query, which is
+  // fully part of the URL, so the CDN can safely share it across visitors.
+  // Branding edits propagate within ~5 min — fine for a login screen.
   app.get("/auth/branding/public", async (request, reply) => {
     const slug = (request.query as { slug?: string }).slug?.trim().toLowerCase();
     if (!slug) {
       throw app.httpErrors.badRequest("slug query parameter is required.");
     }
+    reply.header(
+      "cache-control",
+      "public, s-maxage=300, stale-while-revalidate=3600",
+    );
     const tenant = await prisma.tenant.findUnique({
       where: { slug },
       select: { id: true, name: true, slug: true, branding: true }
@@ -1080,8 +1087,16 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       throw app.httpErrors.badRequest("host query parameter is required.");
     }
     const resolved = await resolveHostTenantSlug(host);
+    // Edge-cache both the hit and the miss: response depends only on ?host=,
+    // and the unknown-host case (shared domain) is the most common path —
+    // caching it stops every fresh visitor from waking the function. 5-min
+    // TTL is DNS-grade; new tenant domains propagate within minutes.
+    reply.header(
+      "cache-control",
+      "public, s-maxage=300, stale-while-revalidate=3600",
+    );
     if (!resolved) {
-      throw app.httpErrors.notFound("No tenant found for this host.");
+      return reply.code(404).send({ error: "No tenant found for this host." });
     }
     return reply.send(resolved);
   });
