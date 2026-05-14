@@ -5,15 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#7c3aed" />
     <title>ThinkCRM</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <!-- Async-load Google Fonts so it doesn't block first paint. The CSS
-         declares font-display: swap, so text renders in the system font
-         immediately and re-rasterises once the font arrives.
-         Montserrat for Latin + Noto Sans Thai for ไทย — the body/UI stack
-         used on workselected.com. -->
-    <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700&family=Noto+Sans+Thai:wght@300;400;500;600;700&display=swap" onload="this.rel='stylesheet'" />
-    <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700&family=Noto+Sans+Thai:wght@300;400;500;600;700&display=swap" /></noscript>
+    <!-- Self-hosted Montserrat + Noto Sans Thai (see scripts/fetch-google-fonts.mjs).
+         Skips DNS + TLS to fonts.googleapis.com / fonts.gstatic.com on cold loads,
+         shares the same `immutable` cache lifetime as our other static assets,
+         and keeps font-display: swap so first paint isn't blocked. -->
+    <link rel="stylesheet" href="/fonts/google.css" />
     <link rel="icon" type="image/svg+xml" href="/default-brand.svg" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="stylesheet" href="/styles.css?v=20260426a-perf" />

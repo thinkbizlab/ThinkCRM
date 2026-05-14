@@ -18,6 +18,7 @@ import { createHash } from "node:crypto";
 import { readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { transform as esbuildTransform } from "esbuild";
 import { transform as lightningcssTransform } from "lightningcss";
 
 const WEB_DIR = fileURLToPath(new URL("../web/", import.meta.url));
@@ -38,6 +39,50 @@ async function minifyStyles() {
   const savedPct = (((source.length - code.length) / source.length) * 100).toFixed(1);
   await writeFile(STYLES_CSS, code);
   console.log(`minified styles.css: ${source.length} → ${code.length} bytes (-${savedPct}%)`);
+}
+
+async function minifyJs(path, label) {
+  const source = await readFile(path, "utf8");
+  const { code, warnings } = await esbuildTransform(source, {
+    loader: "js",
+    minify: true,
+    target: "es2022",
+    // Keep function/class names for readable Sentry stack traces. The size hit
+    // is single-digit-KB across the whole bundle.
+    keepNames: true,
+    // ESM source — preserve `import.meta` and dynamic imports verbatim.
+    format: "esm",
+  });
+  for (const w of warnings) console.warn(`[esbuild ${label}] ${w.text}`);
+  const before = Buffer.byteLength(source);
+  const after = Buffer.byteLength(code);
+  const savedPct = (((before - after) / before) * 100).toFixed(1);
+  await writeFile(path, code);
+  return { before, after, savedPct };
+}
+
+async function minifyAllJs() {
+  const moduleFiles = (await readdir(MODULES_DIR))
+    .filter((f) => f.endsWith(".js"))
+    .sort();
+
+  let totalBefore = 0;
+  let totalAfter = 0;
+  const appStats = await minifyJs(APP_JS, "app.js");
+  totalBefore += appStats.before;
+  totalAfter += appStats.after;
+  console.log(`minified app.js: ${appStats.before} → ${appStats.after} bytes (-${appStats.savedPct}%)`);
+
+  for (const f of moduleFiles) {
+    const stats = await minifyJs(join(MODULES_DIR, f), `modules/${f}`);
+    totalBefore += stats.before;
+    totalAfter += stats.after;
+  }
+  const totalSavedPct = (((totalBefore - totalAfter) / totalBefore) * 100).toFixed(1);
+  console.log(
+    `minified ${moduleFiles.length + 1} JS files total: ` +
+      `${totalBefore} → ${totalAfter} bytes (-${totalSavedPct}%)`,
+  );
 }
 
 async function hashAssets() {
@@ -69,5 +114,6 @@ async function rewriteIndexHtml(buildId) {
 }
 
 await minifyStyles();
+await minifyAllJs();
 const buildId = await hashAssets();
 await rewriteIndexHtml(buildId);
