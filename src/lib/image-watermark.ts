@@ -1,18 +1,11 @@
-import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 import sharp from "sharp";
+import { SARABUN_REGULAR_BASE64 } from "./sarabun-font.js";
 
-const FONT_URL = new URL("../../assets/fonts/Sarabun-Regular.ttf", import.meta.url);
-
-let fontDataUrlPromise: Promise<string> | null = null;
-function loadFontDataUrl(): Promise<string> {
-  if (!fontDataUrlPromise) {
-    fontDataUrlPromise = readFile(fileURLToPath(FONT_URL)).then(
-      (buf) => `data:font/ttf;base64,${buf.toString("base64")}`,
-    );
-  }
-  return fontDataUrlPromise;
-}
+// Font is inlined as a base64 constant (see scripts/embed-sarabun.mjs) so the
+// watermark module doesn't depend on Vercel bundling assets/fonts/ alongside
+// the function. librsvg (used by sharp's SVG composite) honors data-URL fonts
+// declared via @font-face.
+const FONT_DATA_URL = `data:font/ttf;base64,${SARABUN_REGULAR_BASE64}`;
 
 function escapeXml(s: string): string {
   return s
@@ -47,7 +40,6 @@ export async function applyCheckInWatermark(
     return base.jpeg({ quality: 85, mozjpeg: true }).toBuffer();
   }
 
-  const fontDataUrl = await loadFontDataUrl();
   const fontSize = Math.max(20, Math.round(width * 0.028));
   const lineHeight = Math.round(fontSize * 1.35);
   const padding = fontSize;
@@ -76,7 +68,7 @@ export async function applyCheckInWatermark(
     <style type="text/css">
       @font-face {
         font-family: "Sarabun";
-        src: url("${fontDataUrl}") format("truetype");
+        src: url("${FONT_DATA_URL}") format("truetype");
         font-weight: 400;
         font-style: normal;
       }
