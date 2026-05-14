@@ -1,6 +1,4 @@
 import sensible from "@fastify/sensible";
-import swagger from "@fastify/swagger";
-import swaggerUi from "@fastify/swagger-ui";
 import jwt from "@fastify/jwt";
 import fastifyStatic from "@fastify/static";
 import multipart from "@fastify/multipart";
@@ -294,6 +292,10 @@ export async function buildApp() {
   });
 
   if (config.NODE_ENV !== "production") {
+    // Lazy-imported so production cold starts don't pay the ~MB of swagger
+    // plugin code for endpoints (/docs, /openapi.json) that aren't exposed.
+    const { default: swagger } = await import("@fastify/swagger");
+    const { default: swaggerUi } = await import("@fastify/swagger-ui");
     await app.register(swagger, {
       openapi: {
         info: {

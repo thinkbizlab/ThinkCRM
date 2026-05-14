@@ -266,4 +266,62 @@ export const cronRoutes: FastifyPluginAsync = async (app) => {
       webAuthnChallenges: { purged: purgedChallenges.count },
     };
   });
+
+  // ── Login Edge-Cache Warmer ──────────────────────────────────────────────
+  // The login page chains /auth/resolve-domain → /auth/branding/public on
+  // every cold-cache visit. Both endpoints are edge-cached with s-maxage=300,
+  // so this cron pings them through the public URL every 5 minutes for every
+  // active tenant — keeping the edge cache populated so fresh incognito
+  // visitors never wait on a cold function. Each cron tick costs ~1 extra
+  // function invocation per active tenant per endpoint (well within plan
+  // limits at our scale).
+  app.get("/cron/warm-login-cache", async (request) => {
+    verifyCronSecret(request);
+    if (!config.APP_URL) {
+      return { warmed: 0, skipped: "APP_URL not configured" };
+    }
+    const base = config.APP_URL.replace(/\/$/, "");
+
+    // Active tenants only — skip deactivated / cancelled accounts.
+    const tenants = await prisma.tenant.findMany({
+      where: { isActive: true },
+      select: {
+        slug: true,
+        customDomain: { select: { domain: true, status: true } },
+      },
+      take: 200, // safety cap so the cron stays bounded as we grow
+    });
+
+    const warmOne = async (url: string) => {
+      try {
+        const res = await fetch(url, {
+          // Don't read the body — we only care about populating the edge.
+          headers: { "x-warm-login-cache": "1" },
+          signal: AbortSignal.timeout(8000),
+        });
+        return { url, status: res.status };
+      } catch (err) {
+        return { url, status: 0, error: (err as Error).message };
+      }
+    };
+
+    const urls: string[] = [];
+    for (const t of tenants) {
+      urls.push(`${base}/api/v1/auth/branding/public?slug=${encodeURIComponent(t.slug)}`);
+      if (t.customDomain?.status === "VERIFIED") {
+        urls.push(`${base}/api/v1/auth/resolve-domain?host=${encodeURIComponent(t.customDomain.domain)}`);
+      }
+    }
+
+    // Fire all warming fetches in parallel; the wall-clock cost is one
+    // round-trip even with hundreds of URLs.
+    const results = await Promise.all(urls.map(warmOne));
+    const ok = results.filter((r) => r.status >= 200 && r.status < 400).length;
+    return {
+      tenants: tenants.length,
+      urls: urls.length,
+      ok,
+      failed: urls.length - ok,
+    };
+  });
 };
