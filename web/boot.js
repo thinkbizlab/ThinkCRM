@@ -1,11 +1,36 @@
 (function () {
-  if (
+  var hasToken =
     localStorage.getItem("thinkcrm_token") ||
     // OAuth callback — token not yet in storage, but we don't want the login
     // screen to flash while the code-exchange happens.
-    /[?&]oauth_code=/.test(location.search)
-  ) {
+    /[?&]oauth_code=/.test(location.search);
+
+  if (hasToken) {
     document.documentElement.classList.add("has-token");
+
+    // Speculatively preload the most-likely landing modules so the first
+    // navigation after auth feels instant instead of waiting on a 24–72 KB
+    // dynamic import. Only fires for authenticated users so logged-out
+    // visitors don't pay the bandwidth. Pulls the version param off the
+    // styles.css <link> stamped by scripts/build-web-assets.mjs so the
+    // preloads share the same immutable cache key as the real imports.
+    try {
+      var stylesLink = document.querySelector(
+        'link[rel="stylesheet"][href*="/styles.css"]'
+      );
+      var ver = stylesLink
+        ? new URL(stylesLink.href, location.origin).searchParams.get("v")
+        : null;
+      var suffix = ver ? "?v=" + ver : "";
+      ["/modules/dashboard.js", "/modules/visits.js"].forEach(function (path) {
+        var preload = document.createElement("link");
+        preload.rel = "modulepreload";
+        preload.href = path + suffix;
+        document.head.appendChild(preload);
+      });
+    } catch (_) {
+      // Speculative perf hint — never block boot on failure.
+    }
   }
 
   // Before-first-paint branding hydration. We cache the last-seen tenant
