@@ -989,9 +989,16 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
   // Tenant resolution: explicit ?tenantSlug= wins, else fall back to the
   // request hostname (so tenants on a verified custom domain or claimed
   // subdomain see their OAuth buttons before typing anything).
-  app.get("/auth/oauth/providers", async (request) => {
+  //
+  // Perf: edge-cached for 5 minutes when an explicit slug is in the query
+  // string (so two consecutive tenant logins share a cache hit). The response
+  // is deterministic per tenant + only changes when an admin toggles the
+  // integration in Settings, so a short TTL is plenty. Host-derived lookups
+  // skip the cache to avoid leaking one tenant's answer onto another's domain.
+  app.get("/auth/oauth/providers", async (request, reply) => {
     const { tenantSlug } = request.query as { tenantSlug?: string };
-    let slug = tenantSlug?.trim();
+    const explicitSlug = tenantSlug?.trim();
+    let slug = explicitSlug;
     if (!slug) {
       const hostHeader = (request.headers["x-forwarded-host"] as string)
         ?? (request.headers.host as string)
@@ -1002,12 +1009,38 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         if (resolved) slug = resolved.tenantSlug;
       }
     }
+    if (explicitSlug) {
+      // Cacheable: URL fully identifies the answer.
+      reply.header(
+        "cache-control",
+        "public, s-maxage=300, stale-while-revalidate=3600",
+      );
+    }
     if (!slug) return { ms365: false, google: false };
-    const [ms365, google] = await Promise.all([
-      resolveMs365OAuthCreds(slug),
-      resolveGoogleOAuthCreds(slug)
-    ]);
-    return { ms365: Boolean(ms365), google: Boolean(google) };
+
+    // One tenant lookup + one credentials lookup (down from four queries).
+    const tenant = await prisma.tenant.findUnique({
+      where: { slug },
+      select: { id: true },
+    });
+    if (!tenant) return { ms365: false, google: false };
+    const creds = await prisma.tenantIntegrationCredential.findMany({
+      where: {
+        tenantId: tenant.id,
+        platform: { in: [IntegrationPlatform.MS365, IntegrationPlatform.GOOGLE] },
+        status: SourceStatus.ENABLED,
+      },
+      select: { platform: true, clientIdRef: true, clientSecretRef: true },
+    });
+    const hasCreds = (platform: IntegrationPlatform) => {
+      const row = creds.find((c) => c.platform === platform);
+      const decrypted = row ? decryptCredential(row) : null;
+      return Boolean(decrypted?.clientIdRef && decrypted?.clientSecretRef);
+    };
+    return {
+      ms365: hasCreds(IntegrationPlatform.MS365),
+      google: hasCreds(IntegrationPlatform.GOOGLE),
+    };
   });
 
   // Resolve a request hostname to a tenant slug, if it belongs to a subdomain
