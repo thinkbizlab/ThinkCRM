@@ -78,8 +78,8 @@ html.has-token #auth-screen { display: none !important; }
   --stage-3: oklch(58% 0.16 150);   /* green  — won        */
   --stage-4: oklch(57% 0.22 27);    /* red    — lost       */
 
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
-               "Inter", "Helvetica Neue", "Segoe UI", "Kanit", Arial,
+  font-family: "Montserrat", "Noto Sans Thai", -apple-system, BlinkMacSystemFont,
+               "SF Pro Text", "Inter", "Helvetica Neue", "Segoe UI", Arial,
                "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
   font-feature-settings: "cv11", "ss01", "ss03";
   -webkit-font-smoothing: antialiased;
@@ -196,7 +196,7 @@ body {
 .branding-pending { visibility: hidden; }
 
 .login-wordmark {
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 4rem;
   font-weight: 700;
   line-height: 1;
@@ -214,7 +214,7 @@ body {
 }
 
 .login-tagline span {
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-weight: 300;
   font-size: 1.4rem;
   color: oklch(72% 0.01 260);
@@ -272,7 +272,7 @@ body {
   border: none;
   background: transparent;
   color: var(--text);
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 0.875rem;
   font-weight: 600;
   width: 100%;
@@ -579,7 +579,7 @@ body {
   background: transparent;
   display: grid;
   place-items: center;
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 0.85rem;
   font-weight: 700;
   letter-spacing: 0.02em;
@@ -595,7 +595,7 @@ body {
 }
 
 .brand-name {
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 1rem;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -626,7 +626,7 @@ body {
   border: none;
   border-radius: var(--r);
   color: var(--muted-color);
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 0.8375rem;
   font-weight: 500;
   cursor: pointer;
@@ -748,7 +748,7 @@ body {
   border: 1px solid var(--border);
   border-radius: var(--r);
   color: var(--muted-color);
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 0.8rem;
   font-weight: 500;
   cursor: pointer;
@@ -769,7 +769,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 1px 5px;
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 0.7rem;
   font-weight: 600;
   color: var(--muted-color);
@@ -1314,7 +1314,7 @@ body {
 
 .section-title {
   margin: 0 0 var(--sp-3);
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 1.05rem;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -1368,7 +1368,7 @@ body {
 
 /* ── BUTTONS ──────────────────────────────────────────────── */
 
-button { font-family: 'Kanit', sans-serif; cursor: pointer; }
+button { font-family: 'Montserrat', 'Noto Sans Thai', sans-serif; cursor: pointer; }
 
 button:not(.nav-btn):not(.topnav-search-btn):not(.topnav-icon-btn):not(.topnav-logout-btn):not(.topnav-user):not(.login-submit):not(.sp-close-btn):not(.sp-text-btn):not(.sp-view-all-btn):not(.spi):not(.master-page-btn):not(.user-dropdown-item):not(.cal-filter-apply):not(.cal-filter-reset):not(.cal-autocomplete-clear):not(.cal-autocomplete-item):not(.ms-dropdown-btn):not(.ms-select-all):not(.ms-clear):not(.vp-chip):not(.vn-lang-btn):not(.section-info-btn):not(.modal-close-btn):not(.deal-detail-btn):not(.deal-menu-btn):not(.lr-confirm-btn):not(.intg-info-btn):not(.oauth-btn):not(.profile-avatar-btn):not(.team-ch-toggle-btn):not(.cron-run-now-btn):not(.cron-save-btn):not(.cron-load-more-btn):not(.cron-history-toggle):not(.cron-help-btn):not(.notif-channel-help-btn):not(.teams-app-pkg-btn):not(.notif-teams-dm-test-btn):not(.teams-push-all-btn):not(.onboarding-wizard-dismiss):not(.ob-step-action):not(.ob-hero-close):not(.ob-later-btn):not(.demo-generate-btn):not(.demo-delete-btn):not(.btn-danger):not(.btn-danger-outline):not(.passkey-register-btn):not(.passkey-delete-btn):not(.passkey-admin-btn):not(.settings-nav-item):not(.settings-sidenav-collapser):not(.segmented-item):not(.sa-tab):not(.login-password-toggle):not(.prospects-tab):not(.prospect-badge-btn):not(.prospect-open-btn):not(.ac-item):not(.btn-pick-map):not(.btn-icon-xs):not(.notif-action-btn) {
   background: var(--accent);
@@ -2074,7 +2074,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 }
 
 .kpi strong {
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 2.2rem;
   font-weight: 700;
   line-height: 1;
@@ -2141,7 +2141,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 
 .rep-hub-title {
   margin: 0 0 var(--sp-1);
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 1.55rem;
   font-weight: 700;
   letter-spacing: 0.01em;
@@ -2188,7 +2188,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   border-radius: var(--r);
   background: transparent;
   color: var(--muted-color);
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 0.875rem;
   font-weight: 600;
   cursor: pointer;
@@ -2265,7 +2265,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--r);
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 0.8rem;
   color: var(--text);
   outline: none;
@@ -2282,7 +2282,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   border: none;
   border-radius: var(--r);
   padding: 5px var(--sp-3);
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 0.8rem;
   font-weight: 600;
   cursor: pointer;
@@ -2484,7 +2484,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 }
 
 .lb-rank {
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 1.25rem;
   font-weight: 700;
   color: var(--muted-color);
@@ -2544,7 +2544,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 .leaderboard-score { text-align: right; flex-shrink: 0; }
 .leaderboard-score strong {
   display: block;
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 1.25rem;
   font-weight: 700;
   color: var(--accent);
@@ -2665,7 +2665,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 }
 
 .lb-info-formula {
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 0.88rem;
   font-weight: 600;
   background: oklch(60% 0.18 258 / 0.07);
@@ -2697,7 +2697,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   justify-content: center;
   background: oklch(60% 0.18 258 / 0.1);
   color: var(--accent);
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-weight: 700;
   font-size: 0.78rem;
   border-radius: var(--r);
@@ -2754,7 +2754,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 
 .deals-title {
   margin: 0;
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 1.6rem;
   font-weight: 700;
   letter-spacing: 0.01em;
@@ -2803,7 +2803,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   border: 1.5px solid var(--border);
   border-radius: var(--r-md);
   padding: var(--sp-2) var(--sp-3) var(--sp-2) 32px;
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 0.875rem;
   color: var(--text);
   outline: none;
@@ -3098,14 +3098,14 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   align-items: center;
   gap: var(--sp-2);
   font-size: 1rem;
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-weight: 700;
   color: var(--accent-dim);
   letter-spacing: -0.01em;
 }
 
 .deal-currency-icon {
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 0.95rem;
   font-weight: 700;
   flex-shrink: 0;
@@ -3302,7 +3302,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 
 .visits-title {
   margin: 0;
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 1.5rem;
   font-weight: 700;
   letter-spacing: 0.01em;
@@ -3862,7 +3862,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 .cust-code-btn {
   color: var(--accent) !important;
   font-weight: 600;
-  font-family: 'Kanit', monospace !important;
+  font-family: 'Montserrat', 'Noto Sans Thai', monospace !important;
   letter-spacing: 0.02em;
 }
 
@@ -4513,7 +4513,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   color: #fff;
   font-size: 1.2rem;
   font-weight: 700;
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   flex-shrink: 0;
   box-shadow: 0 4px 12px oklch(60% 0.18 258 / 0.28);
 }
@@ -4536,7 +4536,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 }
 
 .c360-code {
-  font-family: 'Kanit', monospace;
+  font-family: 'Montserrat', 'Noto Sans Thai', monospace;
   font-size: 0.8rem;
   font-weight: 600;
   color: var(--accent);
@@ -4621,7 +4621,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 .c360-kpi-value {
   font-size: 1.5rem;
   font-weight: 700;
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   color: var(--accent);
   margin: 0;
   line-height: 1.1;
@@ -4801,7 +4801,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 
 .c360-deal-value {
   font-weight: 700;
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 0.95rem;
   color: var(--text);
 }
@@ -6850,7 +6850,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 
 .modal-head h3 {
   margin: 0;
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 1.2rem;
   font-weight: 700;
   letter-spacing: 0.02em;
@@ -6922,7 +6922,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   background: var(--surface);
   border: 1.5px solid var(--border);
   border-radius: var(--r);
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 0.9rem;
   color: var(--text);
   line-height: 1.6;
@@ -6954,7 +6954,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   border: none;
   border-radius: var(--r);
   padding: var(--sp-2) var(--sp-4);
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 0.875rem;
   font-weight: 600;
   cursor: pointer;
@@ -7092,7 +7092,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 
 .cal-nav-title {
   margin: 0;
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 1.35rem;
   font-weight: 700;
   letter-spacing: 0.01em;
@@ -7533,7 +7533,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   align-items: center;
   gap: var(--sp-3);
   padding: var(--sp-4) var(--sp-5);
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 1.1rem;
   font-weight: 700;
   color: var(--text);
@@ -7542,7 +7542,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 }
 
 .cal-day-count {
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 0.75rem;
   font-weight: 600;
   color: var(--muted-color);
@@ -7644,7 +7644,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 }
 
 .cal-mini-title {
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 0.9rem;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -8000,7 +8000,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   border: none;
   outline: none;
   background: transparent;
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 1.1rem;
   font-weight: 400;
   color: var(--text);
@@ -8021,7 +8021,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   border: 1px solid var(--border);
   border-radius: 5px;
   padding: 3px 8px;
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 0.68rem;
   font-weight: 600;
   color: var(--muted-color);
@@ -8065,7 +8065,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   background: transparent;
   width: 100%;
   text-align: left;
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   outline: none;
   box-sizing: border-box;
   margin-bottom: 1px;
@@ -8222,7 +8222,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   border-bottom-width: 2px;
   border-radius: 4px;
   padding: 1px 5px;
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 0.65rem;
   font-weight: 700;
   color: var(--text-2);
@@ -8286,7 +8286,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   margin-bottom: var(--sp-4);
 }
 .popup-title {
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-weight: 600;
   font-size: 1rem;
   margin: 0 0 var(--sp-3);
@@ -8353,7 +8353,7 @@ label input[type="checkbox"] { width: auto; accent-color: var(--accent); }
   background: var(--brand);
   color: #fff;
   display: flex; align-items: center; justify-content: center;
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 0.75rem; font-weight: 700;
   flex-shrink: 0;
 }
@@ -9278,7 +9278,7 @@ button.cust-badge-contact:hover { opacity: 0.7; }
   gap: var(--sp-3);
 }
 .mt-page-title {
-  font-family: 'Kanit', sans-serif;
+  font-family: 'Montserrat', 'Noto Sans Thai', sans-serif;
   font-size: 1.5rem;
   font-weight: 700;
   color: var(--text);
@@ -9686,6 +9686,10 @@ button.cust-badge-contact:hover { opacity: 0.7; }
   display: flex;
   gap: var(--sp-2);
   flex-wrap: wrap;
+}
+.mt-checkin-camera-actions > button {
+  flex: 1 1 0;
+  min-width: 0;
 }
 .mt-checkin-footer {
   display: flex;
