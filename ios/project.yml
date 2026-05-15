@@ -1,0 +1,70 @@
+name: WorkCRM
+options:
+  bundleIdPrefix: com.workstationoffice
+  deploymentTarget:
+    iOS: "17.0"
+  developmentLanguage: en
+  createIntermediateGroups: true
+
+settings:
+  base:
+    DEVELOPMENT_TEAM: 8G83Q2867K
+    SWIFT_VERSION: "5.10"
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    GENERATE_INFOPLIST_FILE: YES
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: NO
+    OTHER_SWIFT_FLAGS: "-strict-concurrency=complete"
+
+configs:
+  Debug: debug
+  Release: release
+
+targets:
+  WorkCRM:
+    type: application
+    platform: iOS
+    sources:
+      - path: WorkCRM
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.workstationoffice.workcrm
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait"
+        INFOPLIST_KEY_NSCameraUsageDescription: "WorkCRM uses the camera to capture a check-in selfie when you arrive at a customer site."
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "WorkCRM uses the microphone to record voice notes during check-out."
+        INFOPLIST_KEY_NSLocationWhenInUseUsageDescription: "WorkCRM records your GPS location at visit check-in and check-out so managers can verify on-site visits."
+        INFOPLIST_KEY_UIBackgroundModes: "remote-notification fetch processing"
+        INFOPLIST_KEY_BGTaskSchedulerPermittedIdentifiers: "com.workstationoffice.workcrm.sync"
+        INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.business"
+        WorkCRMAPIBaseURL: "$(WORK_CRM_API_BASE_URL)"
+        INFOPLIST_KEY_WorkCRMAPIBaseURL: "$(WORK_CRM_API_BASE_URL)"
+      configs:
+        Debug:
+          xcconfig: Configs/Debug.xcconfig
+        Release:
+          xcconfig: Configs/Release.xcconfig
+    entitlements:
+      path: WorkCRM/WorkCRM.entitlements
+      properties:
+        aps-environment: production
+    dependencies: []
+
+  WorkCRMTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: WorkCRMTests
+    dependencies:
+      - target: WorkCRM
+
+schemes:
+  WorkCRM:
+    build:
+      targets:
+        WorkCRM: all
+        WorkCRMTests: [test]
+    test:
+      targets:
+        - WorkCRMTests

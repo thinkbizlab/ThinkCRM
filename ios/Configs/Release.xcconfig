@@ -1,0 +1,4 @@
+// Release — production app.thinkbizcrm.com. The `$()` interpolation is the
+// canonical Xcode trick for getting two slashes after `https:` into an
+// xcconfig (xcconfig parser treats `//` as a comment).
+WORK_CRM_API_BASE_URL = https:/$()/app.thinkbizcrm.com/api/v1
