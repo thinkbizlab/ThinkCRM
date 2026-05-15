@@ -106,15 +106,108 @@ public struct CheckOutRequest: Codable, Sendable {
 
 public struct Deal: Codable, Identifiable, Sendable, Equatable {
     public let id: String
-    public let dealNo: String?
+    public let dealNo: String
     public let dealName: String
     public let stageId: String
-    public let status: String           // OPEN | WON | LOST
-    public let estimatedAmount: Double?
-    public let closedDate: Date?
-    public let nextContactDate: Date?
-    public let progress: Int?
-    public let customerId: String?
+    public let status: String              // OPEN | WON | LOST
+    public let estimatedValue: Double
+    public let followUpAt: Date
+    public let closedAt: Date?
+    public let customerId: String
+    public let ownerId: String?
+    public let lostNote: String?
+}
+
+public struct DealStage: Codable, Identifiable, Sendable, Equatable {
+    public let id: String
+    public let stageName: String
+    public let stageOrder: Int
+    public let isClosedWon: Bool
+    public let isClosedLost: Bool
+    public let isDefault: Bool?
+}
+
+public struct DealUpdateRequest: Codable, Sendable {
+    public let estimatedValue: Double?
+    public let followUpAt: String?         // ISO-8601
+    public let closedAt: String?           // ISO-8601 or empty to clear
+    public let stageId: String?
+}
+
+public struct DealProgressUpdateRequest: Codable, Sendable {
+    public let note: String
+}
+
+// MARK: - Dashboard / KPI
+
+public struct DashboardOverview: Codable, Sendable {
+    public let period: Period
+    public let kpis: KpiSummary
+    public let targetVsActual: [TargetVsActual]
+    public let teamPerformance: [TeamPerformanceRow]?
+
+    public struct Period: Codable, Sendable {
+        public let month: String
+        public let dateFrom: Date
+        public let dateTo: Date
+    }
+}
+
+public struct KpiSummary: Codable, Sendable {
+    public let activeDeals: Int
+    public let pipelineValue: Double
+    public let wonValue: Double
+    public let lostValue: Double
+    public let visitCompletionRate: Double
+    public let dealsCreatedInPeriod: Int
+    public let visitsPlannedInPeriod: Int
+    public let usersInScope: Int
+}
+
+public struct TargetVsActual: Codable, Sendable, Identifiable {
+    public let userId: String
+    public let userName: String
+    public let avatarUrl: String?
+    public let teamId: String?
+    public let teamName: String
+    public let month: String
+    public let target: Triple
+    public let actual: Triple
+    public let progress: Triple
+    public var id: String { userId }
+
+    public struct Triple: Codable, Sendable {
+        public let visits: Double
+        public let newDealValue: Double
+        public let revenue: Double
+    }
+}
+
+public struct TeamPerformanceRow: Codable, Sendable, Identifiable {
+    public let teamId: String
+    public let teamName: String
+    public let memberCount: Int
+    public let activeDeals: Int
+    public let pipelineValue: Double
+    public let wonValue: Double
+    public let lostValue: Double
+    public let checkedOutVisits: Int
+    public let plannedVisits: Int
+    public let visitCompletionRate: Double
+    public var id: String { teamId }
+}
+
+public struct DealProgressUpdate: Codable, Identifiable, Sendable, Equatable {
+    public let id: String
+    public let dealId: String
+    public let note: String
+    public let createdAt: Date
+    public let createdBy: ProgressAuthor?
+
+    public struct ProgressAuthor: Codable, Sendable, Equatable {
+        public let id: String
+        public let fullName: String?
+    }
 }
 
 // MARK: - Master data

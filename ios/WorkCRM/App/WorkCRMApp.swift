@@ -82,9 +82,10 @@ private struct MoreView: View {
                     }
                 }
             }
-            NavigationLink("Customers") { CustomerListView() }
-            NavigationLink("Items")     { ItemListView() }
-            NavigationLink("Team KPI")  { TeamKpiView() }
+            NavigationLink("Customers")    { CustomerListView() }
+            NavigationLink("Items")        { ItemListView() }
+            NavigationLink("Team KPI")     { TeamKpiView() }
+            NavigationLink("Sync Status")  { SyncStatusView() }
             Section {
                 Button("Sign out", role: .destructive) { auth.signOut() }
             }

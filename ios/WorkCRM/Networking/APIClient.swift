@@ -81,6 +81,14 @@ public actor APIClient {
         let _: EmptyBody = try await perform(method: "POST", path: path, query: [], body: body, decode: EmptyBody.self, allowEmptyBody: true)
     }
 
+    public func patch<Body: Encodable, Response: Decodable>(_ path: String, body: Body, as: Response.Type = Response.self) async throws -> Response {
+        try await perform(method: "PATCH", path: path, query: [], body: body, decode: Response.self)
+    }
+
+    public func delete(_ path: String) async throws {
+        let _: EmptyBody = try await perform(method: "DELETE", path: path, query: [], body: Optional<EmptyBody>.none, decode: EmptyBody.self, allowEmptyBody: true)
+    }
+
     // MARK: - Core
 
     private func perform<Body: Encodable, Response: Decodable>(
