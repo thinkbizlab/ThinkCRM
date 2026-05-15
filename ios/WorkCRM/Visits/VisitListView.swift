@@ -1,78 +1,137 @@
 import SwiftUI
 
-/// Smoke-test screen for Phase 2: login → see today's visits paginated. The
-/// check-in / check-out / detail flows are stubbed for now and land in
-/// follow-up commits.
+/// Today's visit list — paginated, pull-to-refresh, with a per-row "Pending
+/// sync" chip when the offline queue is holding actions for that visit and a
+/// global footer when there's at least one pending action anywhere.
 public struct VisitListView: View {
-    @StateObject private var model = VisitListViewModel()
+    @StateObject private var model     = VisitListViewModel()
+    @StateObject private var pending   = PendingActionStore.shared
+    @StateObject private var reach     = Reachability.shared
 
     public init() {}
 
     public var body: some View {
-        ZStack {
+        ZStack(alignment: .bottom) {
             Theme.Color.backgroundPrimary.ignoresSafeArea()
 
-            if model.isLoading && model.visits.isEmpty {
-                ProgressView().tint(Theme.Color.accent)
-            } else if let error = model.errorMessage, model.visits.isEmpty {
-                VStack(spacing: Theme.Spacing.md) {
-                    Text(error)
-                        .font(Theme.Font.body())
-                        .foregroundStyle(Theme.Color.textSecondary)
-                    Button(t(.commonRetry)) { Task { await model.refresh() } }
-                        .buttonStyle(SecondaryButtonStyle())
-                        .frame(maxWidth: 240)
-                }
-                .padding(Theme.Spacing.xl)
-            } else if model.visits.isEmpty {
-                Text(t(.visitsEmpty))
-                    .font(Theme.Font.body())
-                    .foregroundStyle(Theme.Color.textSecondary)
-            } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: Theme.Spacing.md) {
-                        Eyebrow(t(.visitsTitle))
-                            .padding(.horizontal, Theme.Spacing.lg)
-                            .padding(.top, Theme.Spacing.lg)
+            content
 
-                        ForEach(model.visits) { visit in
-                            VisitRow(visit: visit)
-                                .padding(.horizontal, Theme.Spacing.lg)
-                                .task {
-                                    if visit.id == model.visits.last?.id {
-                                        await model.loadMoreIfNeeded()
-                                    }
-                                }
-                        }
-
-                        if model.isLoading {
-                            ProgressView()
-                                .tint(Theme.Color.accent)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, Theme.Spacing.md)
-                        }
-                    }
-                    .padding(.bottom, Theme.Spacing.xl)
-                }
-                .refreshable { await model.refresh() }
+            if pending.pendingCount > 0 || !reach.isOnline {
+                pendingFooter
+                    .padding(.horizontal, Theme.Spacing.lg)
+                    .padding(.bottom, Theme.Spacing.md)
             }
         }
         .task { await model.refresh() }
     }
+
+    @ViewBuilder
+    private var content: some View {
+        if model.isLoading && model.visits.isEmpty {
+            ProgressView().tint(Theme.Color.accent)
+        } else if let error = model.errorMessage, model.visits.isEmpty {
+            VStack(spacing: Theme.Spacing.md) {
+                Text(error)
+                    .font(Theme.Font.body())
+                    .foregroundStyle(Theme.Color.textSecondary)
+                Button(t(.commonRetry)) { Task { await model.refresh() } }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .frame(maxWidth: 240)
+            }
+            .padding(Theme.Spacing.xl)
+        } else if model.visits.isEmpty {
+            Text(t(.visitsEmpty))
+                .font(Theme.Font.body())
+                .foregroundStyle(Theme.Color.textSecondary)
+        } else {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: Theme.Spacing.md) {
+                    Eyebrow(t(.visitsTitle))
+                        .padding(.horizontal, Theme.Spacing.lg)
+                        .padding(.top, Theme.Spacing.lg)
+
+                    ForEach(model.visits) { visit in
+                        NavigationLink(value: visit) {
+                            VisitRow(
+                                visit: visit,
+                                hasPending: pending.actionsForVisit(visit.id).isEmpty == false
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.horizontal, Theme.Spacing.lg)
+                        .task {
+                            if visit.id == model.visits.last?.id {
+                                await model.loadMoreIfNeeded()
+                            }
+                        }
+                    }
+
+                    if model.isLoading {
+                        ProgressView()
+                            .tint(Theme.Color.accent)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, Theme.Spacing.md)
+                    }
+                }
+                .padding(.bottom, Theme.Spacing.xxl)   // breathing room above the footer
+            }
+            .refreshable { await model.refresh() }
+            .navigationDestination(for: Visit.self) { v in
+                VisitDetailView(visit: v)
+            }
+        }
+    }
+
+    private var pendingFooter: some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            Image(systemName: reach.isOnline ? "arrow.triangle.2.circlepath" : "wifi.slash")
+                .foregroundStyle(reach.isOnline ? Theme.Color.accent : Theme.Color.danger)
+            if reach.isOnline {
+                Text("Pending: \(pending.pendingCount) · Syncing…")
+                    .font(Theme.Font.caption().weight(.semibold))
+                    .foregroundStyle(Theme.Color.textPrimary)
+            } else {
+                Text("\(t(.visitOffline)) · \(pending.pendingCount) pending")
+                    .font(Theme.Font.caption().weight(.semibold))
+                    .foregroundStyle(Theme.Color.textPrimary)
+            }
+            Spacer()
+        }
+        .padding(Theme.Spacing.md)
+        .background(
+            RoundedRectangle(cornerRadius: Theme.Radius.card)
+                .fill(Theme.Color.backgroundElevated)
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.Radius.card)
+                        .strokeBorder(Theme.Color.surfaceBorder, lineWidth: 0.5)
+                )
+        )
+    }
+}
+
+extension Visit: Hashable {
+    // Hash on id only — the structural Equatable conformance synthesised
+    // for the struct keeps `==` consistent, and id uniquely identifies a
+    // visit across screens.
+    public func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 
 // MARK: - Row
 
 private struct VisitRow: View {
     let visit: Visit
+    let hasPending: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            HStack {
+            HStack(spacing: Theme.Spacing.sm) {
                 if let no = visit.visitNo {
                     Eyebrow(no)
                 }
                 Spacer()
+                if hasPending {
+                    pendingChip
+                }
                 statusChip
             }
             Text(visit.customer?.name ?? "—")
@@ -91,6 +150,19 @@ private struct VisitRow: View {
             }
         }
         .card()
+    }
+
+    private var pendingChip: some View {
+        Text(t(.visitPendingSync).uppercased())
+            .font(Theme.Font.eyebrow())
+            .tracking(0.8)
+            .foregroundStyle(Theme.Color.accent)
+            .padding(.horizontal, Theme.Spacing.sm)
+            .padding(.vertical, 4)
+            .background(
+                Capsule()
+                    .strokeBorder(Theme.Color.accent.opacity(0.4), lineWidth: 1)
+            )
     }
 
     private var statusChip: some View {

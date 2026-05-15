@@ -6,7 +6,20 @@ import UIKit
 public final class AppDelegate: NSObject, UIApplicationDelegate {
     public func application(_ application: UIApplication,
                             didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        // Must be registered before app finishes launching — the OS
+        // calls our handler synchronously at wake time, so the handler must
+        // already be installed.
+        BackgroundSync.register()
+        // Bootstraps Reachability so its NWPathMonitor starts publishing
+        // before any view subscribes.
+        _ = Reachability.shared
+        // Try to drain any queue rows left over from a previous launch.
+        Task { await SyncEngine.shared.drain() }
         return true
+    }
+
+    public func applicationDidEnterBackground(_ application: UIApplication) {
+        BackgroundSync.schedule()
     }
 
     public func application(_ application: UIApplication,
