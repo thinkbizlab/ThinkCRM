@@ -2162,8 +2162,29 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
   app.get("/teams", async (request) => {
     requireAuth(request);
     const tenantId = requireTenantId(request);
+    const requesterRole = request.requestContext.role;
+
+    // Authorization scope: ADMIN sees every team in the tenant. Everyone else
+    // is restricted to teams that contain at least one user they're already
+    // allowed to see (via the hierarchy + delegation rules baked into
+    // listVisibleUserIds). This means:
+    //   DIRECTOR / MANAGER → teams across their entire report tree
+    //   SUPERVISOR         → their own team (themselves + direct reports)
+    //   REP                → their own team
+    //   SALES_ADMIN /
+    //   ASSISTANT_MANAGER  → teams of whichever principals they're delegated for
+    // Empty teams (no users yet) are invisible to non-admins — admins use the
+    // Roles & Permissions page to manage those.
+    const baseWhere: Prisma.TeamWhereInput = { tenantId };
+    if (requesterRole !== UserRole.ADMIN) {
+      const visibleUserIds = [...(await listVisibleUserIds(request))];
+      baseWhere.users = visibleUserIds.length
+        ? { some: { id: { in: visibleUserIds } } }
+        : { some: { id: { in: ["__none__"] } } }; // never matches → empty result
+    }
+
     const teams = await prisma.team.findMany({
-      where: { tenantId },
+      where: baseWhere,
       orderBy: [{ teamName: "asc" }],
       include: {
         director: {
