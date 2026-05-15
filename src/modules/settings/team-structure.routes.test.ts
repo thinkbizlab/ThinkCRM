@@ -57,7 +57,13 @@ describe("team structure and notification channel routes", () => {
     });
     createdTenantIds.push(tenant.id);
 
-    const [admin, manager, rep, supervisor] = await Promise.all([
+    // Admin + Manager first so we know their IDs before wiring the rep's
+    // managerUserId. The team scope test expects the manager to "see" the
+    // rep — which now relies on the proper report-tree hierarchy that the
+    // /teams endpoint authorisation uses (listVisibleUserIds). Without
+    // managerUserId set the manager would correctly see nobody and no
+    // teams. The supervisor isn't otherwise wired up; leave them detached.
+    const [admin, manager] = await Promise.all([
       prisma.user.create({
         data: {
           tenantId: tenant.id,
@@ -75,13 +81,17 @@ describe("team structure and notification channel routes", () => {
           role: UserRole.MANAGER,
           passwordHash: hashPassword("Password123!")
         }
-      }),
+      })
+    ]);
+
+    const [rep, supervisor] = await Promise.all([
       prisma.user.create({
         data: {
           tenantId: tenant.id,
           email: `rep-${suffix}@example.com`,
           fullName: "Rep User",
           role: UserRole.REP,
+          managerUserId: manager.id,
           passwordHash: hashPassword("Password123!")
         }
       }),
