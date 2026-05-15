@@ -3543,6 +3543,17 @@ function renderDeals(kanban, dealsRoot = views.deals, options = {}) {
         const newBtn   = qs("#deals-rep-btn");
         if (newPanel) newPanel.hidden = false;
         if (newBtn)   newBtn.classList.add("open");
+        // msDropdown treats "selected is empty" as "no filter active" and
+        // renders ALL boxes as checked — visually fighting the user's just-
+        // clicked Clear. Force them back to unchecked so Clear is sticky and
+        // the user can pick exactly the reps they want. The kanban still
+        // shows all deals (repIds=[] means "no filter").
+        if (checked.length === 0) {
+          const newList = qs("#deals-rep-list");
+          if (newList) {
+            newList.querySelectorAll('input[type="checkbox"]').forEach((cb) => { cb.checked = false; });
+          }
+        }
       });
     }
 
