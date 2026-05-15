@@ -1156,9 +1156,25 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
         const emailChannels = allChannels.filter(c => c.channelType === ChannelType.EMAIL);
 
         if (lineChannels.length > 0 || teamsChannels.length > 0 || emailChannels.length > 0) {
+          // Pull the check-in address parts persisted on the visit row so the
+          // check-out notification can render the same "ถนน… แขวง… เขต…" line
+          // the check-in notification did. The reverse-geocode only runs at
+          // check-in time; on check-out we just read what was stored.
           const visitWithCustomer = await prisma.visit.findUnique({
             where: { id: updated.id },
-            select: { customer: { select: { name: true } } }
+            select: {
+              customer: { select: { name: true } },
+              checkInRoad: true,
+              checkInSubdistrict: true,
+              checkInDistrict: true,
+              checkInProvince: true
+            }
+          });
+          const checkOutAddressLine = formatThaiAddressLine({
+            road: visitWithCustomer?.checkInRoad ?? undefined,
+            subdistrict: visitWithCustomer?.checkInSubdistrict ?? undefined,
+            district: visitWithCustomer?.checkInDistrict ?? undefined,
+            province: visitWithCustomer?.checkInProvince ?? undefined
           });
           const { sendLinePush, buildCheckOutMessages } = await import("../../lib/line-notify.js");
           const msgs = buildCheckOutMessages({
@@ -1170,7 +1186,8 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
             checkOutAt: updated.checkOutAt ?? new Date(),
             result: updated.result,
             lat: updated.checkOutLat ?? parsed.data.lat,
-            lng: updated.checkOutLng ?? parsed.data.lng
+            lng: updated.checkOutLng ?? parsed.data.lng,
+            addressLine: checkOutAddressLine
           });
           if (lineChannels.length > 0) {
             if (lineCredential?.status !== SourceStatus.ENABLED) {
@@ -1202,6 +1219,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
               { title: "Check-Out",   value: formatThaiDateTime(checkOutAt) },
               { title: "Duration",    value: duration },
               { title: "Result",      value: updated.result?.trim() || "—" },
+              ...(checkOutAddressLine ? [{ title: "Address", value: checkOutAddressLine }] : []),
               { title: "Location",    value: `[Open in Maps](${googleMapsLink(updated.checkOutLat ?? parsed.data.lat, updated.checkOutLng ?? parsed.data.lng)})` }
             ];
             const sends = await Promise.allSettled(
@@ -1239,6 +1257,7 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
                 { label: "Check-Out", value: formatThaiDateTime(checkOutAt) },
                 { label: "Duration",  value: duration },
                 { label: "Result",    value: updated.result?.trim() || "—" },
+                ...(checkOutAddressLine ? [{ label: "Address", value: checkOutAddressLine }] : []),
                 { label: "Location",  value: googleMapsLink(updated.checkOutLat ?? parsed.data.lat, updated.checkOutLng ?? parsed.data.lng) }
               ];
               const sends = await Promise.allSettled(

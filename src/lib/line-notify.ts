@@ -127,24 +127,33 @@ export function buildCheckOutMessages(opts: {
   result: string | null;
   lat: number;
   lng: number;
+  /** Reverse-geocoded "ถนน… แขวง/ตำบล… เขต/อำเภอ…". Comes from the visit row
+   *  (persisted at check-in). Omitted when null. */
+  addressLine: string | null;
 }): LineMessage[] {
   const dt = formatThaiDateTime(opts.checkOutAt);
   const duration = opts.checkInAt ? formatDuration(opts.checkInAt, opts.checkOutAt) : "—";
   const mapUrl = googleMapsLink(opts.lat, opts.lng);
   const result = opts.result?.trim() || "—";
 
-  const text =
-    `✅ Check-Out Notification\n` +
-    `${"─".repeat(28)}\n` +
-    `🔖 Visit ID   : ${opts.visitNo}\n` +
-    `👤 Sales Rep   : ${opts.repName}\n` +
-    `🏢 Customer    : ${opts.customerName}\n` +
-    `🕐 Check-Out   : ${dt}\n` +
-    `⏱  Duration    : ${duration}\n` +
-    `📋 Result      : ${result}\n` +
-    `📌 Location    : ${mapUrl}\n` +
-    `${"─".repeat(28)}\n` +
-    `[${opts.appName}]`;
+  const lines = [
+    `✅ Check-Out Notification`,
+    "─".repeat(28),
+    `🔖 Visit ID   : ${opts.visitNo}`,
+    `👤 Sales Rep   : ${opts.repName}`,
+    `🏢 Customer    : ${opts.customerName}`,
+    `🕐 Check-Out   : ${dt}`,
+    `⏱  Duration    : ${duration}`,
+    `📋 Result      : ${result}`,
+  ];
+  if (opts.addressLine) {
+    lines.push(`📍 Address    : ${opts.addressLine}`);
+  }
+  lines.push(
+    `📌 Location   : ${mapUrl}`,
+    "─".repeat(28),
+    `[${opts.appName}]`,
+  );
 
-  return [{ type: "text", text }];
+  return [{ type: "text", text: lines.join("\n") }];
 }
