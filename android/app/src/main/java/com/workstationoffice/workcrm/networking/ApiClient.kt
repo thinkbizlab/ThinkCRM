@@ -76,10 +76,15 @@ object ApiClient {
             return@Interceptor response
         }
 
-        // Single-flight refresh. We use runBlocking inside the interceptor —
-        // OkHttp runs interceptors on a thread pool, so this isn't blocking
-        // the main thread.
-        val refreshed = runBlocking { tryRefresh() }
+        // Single-flight refresh. The backend's refresh-token rotation has
+        // replay detection — re-submitting the same refresh token twice
+        // revokes ALL sessions for the user. So if 12 requests fire in
+        // parallel and all 401, we must guarantee only one of them actually
+        // calls /auth/refresh. We pass the stale access token in so the
+        // mutex's late arrivals can detect "someone else already rotated"
+        // and skip the refresh.
+        val staleAccessToken = original.header("Authorization")?.removePrefix("Bearer ")
+        val refreshed = runBlocking { tryRefresh(staleAccessToken) }
         if (!refreshed) {
             return@Interceptor response
         }
@@ -93,8 +98,11 @@ object ApiClient {
         chain.proceed(retried)
     }
 
-    private suspend fun tryRefresh(): Boolean = refreshMutex.withLock {
-        val session = TokenStore.load() ?: return false
+    private suspend fun tryRefresh(staleAccessToken: String?): Boolean = refreshMutex.withLock {
+        val current = TokenStore.load() ?: return false
+        // Another caller already rotated us — skip the refresh and let
+        // the interceptor retry the original request with the new token.
+        if (staleAccessToken != null && current.accessToken != staleAccessToken) return true
         return try {
             // Build a fresh Retrofit client without our refresh interceptor
             // to avoid infinite recursion. Reuse the same JSON converter.
@@ -108,9 +116,9 @@ object ApiClient {
                 .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
                 .build()
                 .create(WorkCrmApi::class.java)
-            val refreshed = rawApi.refresh(RefreshRequest(session.refreshToken))
+            val refreshed = rawApi.refresh(RefreshRequest(current.refreshToken))
             TokenStore.save(
-                session.copy(
+                current.copy(
                     accessToken  = refreshed.accessToken,
                     refreshToken = refreshed.refreshToken
                 )

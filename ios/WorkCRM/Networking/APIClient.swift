@@ -113,10 +113,15 @@ public actor APIClient {
             throw APIError.http(status: -1, body: nil)
         }
 
-        if http.statusCode == 401, attempt == 0, TokenStore.shared.load() != nil {
+        if http.statusCode == 401, attempt == 0, let stale = TokenStore.shared.load() {
             // Single-flight refresh: if another caller already kicked off a
             // refresh, await theirs instead of starting a competing one.
-            try await refreshIfNeeded()
+            // Pass the access token that this request used so the refresh
+            // task can detect "someone else already rotated" and skip — the
+            // backend's refresh-token rotation has replay detection that
+            // revokes ALL sessions if the same refresh token is submitted
+            // twice.
+            try await refreshIfNeeded(staleAccessToken: stale.accessToken)
             return try await perform(method: method, path: path, query: query, body: body, decode: decode, allowEmptyBody: allowEmptyBody, attempt: 1)
         }
 
@@ -161,24 +166,31 @@ public actor APIClient {
 
     // MARK: - Refresh
 
-    private func refreshIfNeeded() async throws {
+    private func refreshIfNeeded(staleAccessToken: String) async throws {
         if let existing = refreshTask {
             // Already in flight — piggy-back.
             return try await existing.value
         }
         let task: Task<Void, Error> = Task { [weak self] in
             guard let self else { return }
-            try await self.runRefresh()
+            try await self.runRefresh(staleAccessToken: staleAccessToken)
         }
         refreshTask = task
         defer { refreshTask = nil }
         try await task.value
     }
 
-    private func runRefresh() async throws {
+    private func runRefresh(staleAccessToken: String) async throws {
         guard let session = TokenStore.shared.load() else {
             throw APIError.notAuthenticated
         }
+        // Another caller already rotated us — skip the refresh and let the
+        // caller retry the original request with the new token already in
+        // the store. Critical: re-submitting the same refresh token would
+        // trigger the backend's replay-detection and revoke every session
+        // for this user.
+        if session.accessToken != staleAccessToken { return }
+
         let request = RefreshRequest(refreshToken: session.refreshToken)
         let url = baseURL.appendingPathComponent("auth/refresh")
         var req = URLRequest(url: url)
