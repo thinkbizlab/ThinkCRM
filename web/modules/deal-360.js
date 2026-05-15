@@ -19,7 +19,8 @@ let deps = {
   openVisitDetail: () => {},
   openCheckInModal: () => {},
   openCheckOutModal: () => {},
-  openVisitCreateModal: () => {}
+  openVisitCreateModal: () => {},
+  openDealEditModal: () => {}
 };
 
 export function setDeal360Deps(d) {
@@ -358,13 +359,17 @@ export function renderDeal360() {
               </div>
             </div>
           </div>
-          ${c?.id ? `
           <div class="c360-header-actions">
+            <button class="c360-action ghost" id="d360-quick-update" type="button">
+              <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+              Quick Update
+            </button>
+            ${c?.id ? `
             <button class="c360-action ghost" id="d360-plan-visit">
               <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
               Plan Visit
-            </button>
-          </div>` : ""}
+            </button>` : ""}
+          </div>
         </div>
 
         <div class="c360-kpi-strip">
@@ -435,6 +440,10 @@ export function renderDeal360() {
       customer: { id: c.id, name: c.name },
       deal: { id: deal.id, dealName: deal.dealName, status: deal.status, stage: deal.stage }
     });
+  });
+
+  views.deals.querySelector("#d360-quick-update")?.addEventListener("click", () => {
+    deps.openDealEditModal(deal);
   });
 
   views.deals.querySelectorAll(".c360-tab-btn").forEach((btn) => {

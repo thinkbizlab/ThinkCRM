@@ -629,7 +629,7 @@
       <div class="modal-panel card">
         <header class="modal-head">
           <div>
-            <h3 id="deal-edit-modal-title">Edit Deal</h3>
+            <h3 id="deal-edit-modal-title">Quick Update</h3>
             <p class="muted small" id="deal-edit-modal-subtitle"></p>
           </div>
           <button type="button" class="ghost" data-deal-edit-close aria-label="Close">&#x2715;</button>
@@ -637,15 +637,19 @@
         <form id="deal-edit-form" class="visit-modal-form">
           <input type="hidden" id="deal-edit-id" />
           <div class="visit-modal-fields">
-            <label class="form-label">Deal Value
+            <label class="form-label">Est. Amount
               <input class="form-input" name="estimatedValue" type="number" id="deal-edit-value" min="0" step="0.01" placeholder="0.00" />
             </label>
-            <label class="form-label">Follow-up Date
+            <label class="form-label">Next Contact Date
               <input class="form-input" name="followUpAt" type="datetime-local" id="deal-edit-followup" required />
             </label>
-            <label class="form-label">Expected Close Date
+            <label class="form-label">Closed Date
               <input class="form-input" name="closedAt" type="date" id="deal-edit-close" />
               <span class="form-hint">Leave blank to keep current.</span>
+            </label>
+            <label class="form-label">Update Progress
+              <textarea class="form-input" id="deal-edit-progress" rows="3" maxlength="2000" placeholder="What changed since last touch? (optional)" style="resize:vertical;width:100%;box-sizing:border-box"></textarea>
+              <span class="form-hint">If you fill this in, it's posted as a progress update on the deal timeline.</span>
             </label>
           </div>
           <div class="visit-modal-footer">

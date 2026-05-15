@@ -470,7 +470,8 @@ async function ensureDeal360Module() {
       openVisitDetail,
       openCheckInModal,
       openCheckOutModal,
-      openVisitCreateModal
+      openVisitCreateModal,
+      openDealEditModal
     });
     deal360ModuleInitialized = true;
   }
@@ -3680,20 +3681,21 @@ function renderDeals(kanban, dealsRoot = views.deals, options = {}) {
     });
   });
 
+  // Open the full Quick Update modal (Est. Amount / Next Contact Date /
+  // Closed Date / Update Progress) when the user clicks the "···" on a
+  // deal card. The previous flow only `prompt()`-ed for the estimated
+  // value, which is why follow-up + close-date changes weren't reachable
+  // from the card or the Deal 360 page.
   dealsRoot.querySelectorAll(".deal-value").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const estimatedValue = prompt("New estimated value", btn.dataset.value || "0");
-      if (!estimatedValue) return;
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.id;
+      if (!id) return;
       try {
-        await api(`/deals/${btn.dataset.id}`, {
-          method: "PATCH",
-          body: { estimatedValue: Number(estimatedValue) }
-        });
-        setStatus("Deal updated.");
-        await loadDeals();
-        await loadDashboard();
-      } catch (error) {
-        setStatus(error.message, true);
+        const deal = await api(`/deals/${id}`);
+        openDealEditModal(deal);
+      } catch (err) {
+        setStatus(err.message, true);
       }
     });
   });
@@ -4654,6 +4656,10 @@ function openDealEditModal(deal) {
   } else {
     qs("#deal-edit-close").value = "";
   }
+  // Always blank the progress note — it's a one-shot post per modal open,
+  // not a value attached to the deal record itself.
+  const progressEl = qs("#deal-edit-progress");
+  if (progressEl) progressEl.value = "";
   modal.hidden = false;
 }
 
@@ -4674,16 +4680,29 @@ function closeDealEditModal() {
     const estimatedValue = qs("#deal-edit-value").value;
     const followUpAt = qs("#deal-edit-followup").value;
     const closedAtRaw = qs("#deal-edit-close").value;
+    const progressNote = (qs("#deal-edit-progress")?.value || "").trim();
     const body = {};
     if (estimatedValue !== "") body.estimatedValue = parseFloat(estimatedValue);
     if (followUpAt) body.followUpAt = new Date(followUpAt).toISOString();
     if (closedAtRaw) body.closedAt = new Date(closedAtRaw + "T23:59:59").toISOString();
-    if (!Object.keys(body).length) { closeDealEditModal(); return; }
+    // Bail only if there's literally nothing to do — neither field changes
+    // nor a progress note to post.
+    if (!Object.keys(body).length && !progressNote) { closeDealEditModal(); return; }
     const submitBtn = qs("#deal-edit-submit");
     submitBtn.disabled = true;
     submitBtn.textContent = "Saving…";
     try {
-      await api(`/deals/${id}`, { method: "PATCH", body });
+      // Run the deal patch and the progress-update post sequentially so a
+      // server-side validation error on one is surfaced clearly instead of
+      // racing the other half through. The progress-update endpoint also
+      // accepts an optional `followUpAt`, but here we keep responsibilities
+      // separate: PATCH handles the value/date changes; POST handles the note.
+      if (Object.keys(body).length) {
+        await api(`/deals/${id}`, { method: "PATCH", body });
+      }
+      if (progressNote) {
+        await api(`/deals/${id}/progress-updates`, { method: "POST", body: { note: progressNote } });
+      }
       closeDealEditModal();
       setStatus("Deal updated.");
       await loadDeals();
