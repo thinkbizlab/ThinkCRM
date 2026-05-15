@@ -3311,7 +3311,7 @@ function renderDealCard(deal, kanban) {
       ${closedBanner}
       <div class="deal-card-head">
         <span class="deal-no">${deal.dealNo}</span>
-        <button class="deal-menu-btn deal-value" data-id="${deal.id}" data-value="${deal.estimatedValue}" title="Edit value">···</button>
+        <button class="deal-menu-btn deal-detail-open" data-id="${deal.id}" data-no="${escHtml(deal.dealNo)}" title="Open Deal 360">···</button>
       </div>
       <div class="deal-name">${escHtml(deal.dealName)}</div>
       <div class="deal-info">
@@ -3333,7 +3333,7 @@ function renderDealCard(deal, kanban) {
       <div class="deal-card-actions">
         <select class="deal-stage-select" data-id="${deal.id}">${stageOptions}</select>
         <button class="deal-stage-save" data-id="${deal.id}">Move</button>
-        <button type="button" class="deal-detail-btn ghost" data-id="${deal.id}" data-no="${escHtml(deal.dealNo)}" title="Open Deal 360">${icon('eye')}</button>
+        <button type="button" class="deal-detail-btn ghost deal-quick-update" data-id="${deal.id}" data-no="${escHtml(deal.dealNo)}" title="Quick update">${icon('pen')}</button>
       </div>
       ${stageProgressPct !== null ? `<div class="deal-stage-progress"><span style="width:${stageProgressPct}%"></span></div>` : ""}
     </div>
@@ -3681,12 +3681,20 @@ function renderDeals(kanban, dealsRoot = views.deals, options = {}) {
     });
   });
 
-  // Open the full Quick Update modal (Est. Amount / Next Contact Date /
-  // Closed Date / Update Progress) when the user clicks the "···" on a
-  // deal card. The previous flow only `prompt()`-ed for the estimated
-  // value, which is why follow-up + close-date changes weren't reachable
-  // from the card or the Deal 360 page.
-  dealsRoot.querySelectorAll(".deal-value").forEach((btn) => {
+  // Header "···" button → open the full Deal 360 detail view. (The role of
+  // this button and the pencil icon below was swapped per user feedback;
+  // historically "···" was a value-only prompt() and the eye icon opened
+  // Deal 360.)
+  dealsRoot.querySelectorAll(".deal-detail-open").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openDeal360(btn.dataset.id, btn.dataset.no);
+    });
+  });
+
+  // Pencil icon (was the eye icon) → open the Quick Update modal with the
+  // 4 fields (Est. Amount / Next Contact / Closed / Update Progress).
+  dealsRoot.querySelectorAll(".deal-quick-update").forEach((btn) => {
     btn.addEventListener("click", async (e) => {
       e.stopPropagation();
       const id = btn.dataset.id;
@@ -3697,13 +3705,6 @@ function renderDeals(kanban, dealsRoot = views.deals, options = {}) {
       } catch (err) {
         setStatus(err.message, true);
       }
-    });
-  });
-
-  dealsRoot.querySelectorAll(".deal-detail-btn").forEach((btn) => {
-    btn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      openDeal360(btn.dataset.id, btn.dataset.no);
     });
   });
 }
