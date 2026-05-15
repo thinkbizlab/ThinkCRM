@@ -345,7 +345,15 @@ export async function startScheduler(): Promise<void> {
         where: { expiresAt: { lt: now } },
       });
 
-      console.log(`[scheduler] data-retention: audit deleted=${deleted.count} anonymized=${anonymized.count}, tokens purged=${purgedTokens.count}, challenges purged=${purgedChallenges.count}`);
+      // Mobile idempotency log — the offline-sync queue's exponential backoff
+      // peaks at 1h between retries, so anything older than 24h can't possibly
+      // be replayed.
+      const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      const purgedClientRequests = await prisma.clientRequestLog.deleteMany({
+        where: { createdAt: { lt: oneDayAgo } },
+      });
+
+      console.log(`[scheduler] data-retention: audit deleted=${deleted.count} anonymized=${anonymized.count}, tokens purged=${purgedTokens.count}, challenges purged=${purgedChallenges.count}, client-requests purged=${purgedClientRequests.count}`);
     } catch (err) {
       console.error("[scheduler] data-retention job error", err);
     }

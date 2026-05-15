@@ -84,6 +84,7 @@ model Tenant {
   competencyTemplates         CompetencyTemplate[]
   announcements               Announcement[]
   announcementAcks            AnnouncementAck[]
+  clientRequestLogs           ClientRequestLog[]
 }
 
 model User {
@@ -1395,6 +1396,27 @@ model OAuthState {
   expiresAt  DateTime
 
   @@index([expiresAt])
+}
+
+// Idempotency log for mobile clients. When the offline-sync queue replays a
+// request (e.g. after a flaky LTE timeout that lost the response), the route
+// looks up (tenantId, clientRequestId) and returns the cached response instead
+// of mutating state again. Pruned by the data-retention cron after 24h — the
+// offline queue's exponential backoff peaks at 1h, so 24h is comfortably above
+// the longest possible retry window.
+model ClientRequestLog {
+  tenantId        String
+  clientRequestId String
+  userId          String
+  route           String
+  responseStatus  Int
+  responseBody    Json
+  createdAt       DateTime @default(now())
+
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@id([tenantId, clientRequestId])
+  @@index([createdAt])
 }
 
 /// Short-lived one-time exchange code that wraps a signed JWT.

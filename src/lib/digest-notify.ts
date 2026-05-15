@@ -14,7 +14,7 @@ import { prisma } from "./prisma.js";
 import { decryptCredential } from "./secrets.js";
 import { smtpPort } from "./smtp-port.js";
 import { fmtThaiDate, fmtThaiMonthYear, fmtBaht } from "./format.js";
-import { sendApnsToUser } from "./apns-notify.js";
+import { sendPushToUser } from "./push-notify.js";
 
 // ── Date helpers ─────────────────────────────────────────────────────────────
 
@@ -471,14 +471,14 @@ async function runDigestForTenant(opts: {
         const prefs = (mgr.notifPrefs as Record<string, boolean> | null) ?? {};
         if (prefs["weeklyDigest"] === false) continue;
         try {
-          await sendApnsToUser({
+          await sendPushToUser({
             userId: mgr.id,
             title: `📊 สรุปทีม ${team.teamName} — ${appName}`,
             body: teamMsg,
             data: { type: "weekly_digest_team", tenantId, teamId: team.id }
           });
         } catch (err) {
-          console.error(`[digest] APNs team push error user=${mgr.id}:`, err);
+          console.error(`[digest] mobile push team error user=${mgr.id}:`, err);
         }
       }
     }
@@ -499,14 +499,14 @@ async function runDigestForTenant(opts: {
       await deliverToTeamChannels({ tenantId, teamId: team.id, message: repMsg, appName });
 
       try {
-        await sendApnsToUser({
+        await sendPushToUser({
           userId: rep.id,
           title: `📊 สรุปประจำสัปดาห์ — ${appName}`,
           body: repMsg,
           data: { type: "weekly_digest_rep", tenantId }
         });
       } catch (err) {
-        console.error(`[digest] APNs rep push error user=${rep.id}:`, err);
+        console.error(`[digest] mobile push rep error user=${rep.id}:`, err);
       }
     }
   }
