@@ -86,6 +86,7 @@ public struct VisitListView: View {
         HStack(spacing: Theme.Spacing.sm) {
             Image(systemName: reach.isOnline ? "arrow.triangle.2.circlepath" : "wifi.slash")
                 .foregroundStyle(reach.isOnline ? Theme.Color.accent : Theme.Color.danger)
+                .accessibilityHidden(true)
             if reach.isOnline {
                 Text("Pending: \(pending.pendingCount) · Syncing…")
                     .font(Theme.Font.caption().weight(.semibold))
@@ -106,6 +107,10 @@ public struct VisitListView: View {
                         .strokeBorder(Theme.Color.surfaceBorder, lineWidth: 0.5)
                 )
         )
+        // Politely announce count + connectivity changes so a rep with
+        // VoiceOver hears the queue draining without re-navigating.
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.updatesFrequently)
     }
 }
 
@@ -142,6 +147,7 @@ private struct VisitRow: View {
                     .font(Theme.Font.body())
                     .foregroundStyle(Theme.Color.textSecondary)
                     .lineLimit(2)
+                    .thaiAwareLineSpacing()
             }
             if let plannedAt = visit.plannedAt {
                 Text(plannedAt.formatted(date: .abbreviated, time: .shortened))
@@ -150,6 +156,25 @@ private struct VisitRow: View {
             }
         }
         .card()
+        // VoiceOver: announce the whole row as one element with a button trait.
+        // Without this, swiping reads each Text in turn (5+ stops), which is
+        // exhausting on a 30-visit list.
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityHint("Opens visit detail")
+    }
+
+    private var accessibilityLabel: String {
+        var parts: [String] = []
+        if let no = visit.visitNo { parts.append(no) }
+        parts.append(visit.customer?.name ?? "no customer")
+        parts.append("status \(visit.status.replacingOccurrences(of: "_", with: " ").lowercased())")
+        if hasPending { parts.append("pending sync") }
+        if let plannedAt = visit.plannedAt {
+            parts.append(plannedAt.formatted(date: .abbreviated, time: .shortened))
+        }
+        return parts.joined(separator: ", ")
     }
 
     private var pendingChip: some View {

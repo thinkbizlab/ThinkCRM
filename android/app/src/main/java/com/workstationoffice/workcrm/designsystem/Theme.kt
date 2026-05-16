@@ -9,7 +9,9 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -46,12 +48,52 @@ private val WorkCRMColors: ColorScheme = darkColorScheme(
     outline       = Tokens.surfaceBorder
 )
 
+// Thai consonants stack two vowel + tone marks; the default 1.2× line-height
+// multiplier (~1.2 of fontSize) is tight on multi-line bodies and clips the
+// upper marks on smaller devices. We bump bodies to ~1.5× and centre the
+// trimmed strut so neither the top nor bottom mark is cropped. `FontFamily.SansSerif`
+// resolves to Roboto for Latin and Noto Sans Thai for Thai automatically via
+// the system's TextLayout fallback chain.
 private val WorkCRMTypography = Typography(
-    displayMedium = TextStyle(fontSize = 32.sp, fontWeight = FontWeight.Bold,     letterSpacing = 0.sp),
-    titleLarge    = TextStyle(fontSize = 22.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.sp),
-    bodyLarge     = TextStyle(fontSize = 16.sp, fontWeight = FontWeight.Normal,   letterSpacing = 0.sp),
-    bodyMedium    = TextStyle(fontSize = 14.sp, fontWeight = FontWeight.Normal,   letterSpacing = 0.sp),
-    labelSmall    = TextStyle(fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.2.sp)
+    displayMedium = TextStyle(
+        fontFamily   = FontFamily.SansSerif,
+        fontSize     = 32.sp,
+        lineHeight   = 40.sp,
+        fontWeight   = FontWeight.Bold,
+        letterSpacing = 0.sp,
+        lineHeightStyle = LineHeightStyle(alignment = LineHeightStyle.Alignment.Center, trim = LineHeightStyle.Trim.None)
+    ),
+    titleLarge = TextStyle(
+        fontFamily   = FontFamily.SansSerif,
+        fontSize     = 22.sp,
+        lineHeight   = 32.sp,
+        fontWeight   = FontWeight.SemiBold,
+        letterSpacing = 0.sp,
+        lineHeightStyle = LineHeightStyle(alignment = LineHeightStyle.Alignment.Center, trim = LineHeightStyle.Trim.None)
+    ),
+    bodyLarge = TextStyle(
+        fontFamily   = FontFamily.SansSerif,
+        fontSize     = 16.sp,
+        lineHeight   = 24.sp,    // 1.5× — comfortable for Thai bodies
+        fontWeight   = FontWeight.Normal,
+        letterSpacing = 0.sp,
+        lineHeightStyle = LineHeightStyle(alignment = LineHeightStyle.Alignment.Center, trim = LineHeightStyle.Trim.None)
+    ),
+    bodyMedium = TextStyle(
+        fontFamily   = FontFamily.SansSerif,
+        fontSize     = 14.sp,
+        lineHeight   = 22.sp,
+        fontWeight   = FontWeight.Normal,
+        letterSpacing = 0.sp,
+        lineHeightStyle = LineHeightStyle(alignment = LineHeightStyle.Alignment.Center, trim = LineHeightStyle.Trim.None)
+    ),
+    labelSmall = TextStyle(
+        fontFamily   = FontFamily.SansSerif,
+        fontSize     = 11.sp,
+        lineHeight   = 18.sp,
+        fontWeight   = FontWeight.SemiBold,
+        letterSpacing = 1.2.sp
+    )
 )
 
 private val WorkCRMShapes = Shapes(

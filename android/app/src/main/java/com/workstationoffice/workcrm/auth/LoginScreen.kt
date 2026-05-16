@@ -1,10 +1,13 @@
 package com.workstationoffice.workcrm.auth
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -22,6 +25,13 @@ fun LoginScreen(viewModel: AuthViewModel) {
     var tenantSlug by remember { mutableStateOf(DEFAULT_TENANT) }
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    val keyboard = LocalSoftwareKeyboardController.current
+
+    fun submit() {
+        if (state.isSubmitting || email.isBlank() || password.isBlank() || tenantSlug.isBlank()) return
+        keyboard?.hide()
+        viewModel.signIn(tenantSlug, email, password)
+    }
 
     Column(
         modifier = Modifier.fillMaxSize().padding(32.dp),
@@ -40,6 +50,7 @@ fun LoginScreen(viewModel: AuthViewModel) {
             onValueChange = { tenantSlug = it },
             label = { Text(t(L10n.LoginTenantSlug)) },
             singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
             modifier = Modifier.fillMaxWidth()
         )
 
@@ -48,17 +59,20 @@ fun LoginScreen(viewModel: AuthViewModel) {
             onValueChange = { email = it },
             label = { Text(t(L10n.LoginEmail)) },
             singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next),
             modifier = Modifier.fillMaxWidth()
         )
 
+        // KeyboardType.Password marks the field as a password to AutofillService
+        // and the Google Password Manager, which surfaces saved credentials.
         OutlinedTextField(
             value = password,
             onValueChange = { password = it },
             label = { Text(t(L10n.LoginPassword)) },
             singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { submit() }),
             modifier = Modifier.fillMaxWidth()
         )
 
@@ -69,7 +83,7 @@ fun LoginScreen(viewModel: AuthViewModel) {
         PrimaryButton(
             text = t(L10n.LoginCta),
             enabled = !state.isSubmitting && email.isNotBlank() && password.isNotBlank() && tenantSlug.isNotBlank(),
-            onClick = { viewModel.signIn(tenantSlug, email, password) }
+            onClick = { submit() }
         )
     }
 }

@@ -88,10 +88,13 @@ private struct DealCard: View {
                     Image(systemName: "ellipsis")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(Theme.Color.textSecondary)
-                        .padding(6)
+                        // 44×44 hit area meets the Human Interface Guidelines
+                        // minimum even though the glyph is small.
+                        .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Quick Update")
             }
             Text(deal.dealName)
                 .font(Theme.Font.body().weight(.semibold))

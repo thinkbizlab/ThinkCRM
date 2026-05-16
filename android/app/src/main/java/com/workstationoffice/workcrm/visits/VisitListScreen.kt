@@ -10,6 +10,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -127,11 +131,24 @@ fun VisitListScreen(onOpenVisit: (String) -> Unit) {
 
 @androidx.compose.runtime.Composable
 private fun VisitRow(visit: Visit, onTap: () -> Unit) {
+    val label = buildString {
+        visit.visitNo?.let { append(it); append(", ") }
+        append(visit.customer?.name ?: "no customer")
+        append(", status ")
+        append(visit.status.replace('_', ' ').lowercase())
+        visit.plannedAt?.let { append(", planned ").append(it) }
+    }
     Box(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))) {
         Surface(
             color = Tokens.backgroundElevated,
             onClick = onTap,
-            modifier = Modifier.fillMaxWidth()
+            // mergeDescendants flattens the child Text composables for TalkBack
+            // so swiping the list reads one announcement per row instead of
+            // bouncing through 4+ child elements per card.
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp)
+                .semantics(mergeDescendants = true) { contentDescription = label }
         ) {
             Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -171,8 +188,14 @@ private fun StatusChip(status: String) {
 @androidx.compose.runtime.Composable
 private fun PendingFooter(pendingCount: Int, online: Boolean) {
     Box(
-        modifier = Modifier.fillMaxWidth().padding(20.dp).clip(RoundedCornerShape(12.dp))
+        // liveRegion = Polite makes TalkBack announce changes to the footer
+        // (count drops, online flip) without interrupting the user's current
+        // focus — so a rep who just queued an offline check-in hears the
+        // confirmation when sync completes.
+        modifier = Modifier
+            .fillMaxWidth().padding(20.dp).clip(RoundedCornerShape(12.dp))
             .background(Tokens.backgroundElevated).padding(16.dp)
+            .semantics { liveRegion = LiveRegionMode.Polite }
     ) {
         Text(
             text = if (online)

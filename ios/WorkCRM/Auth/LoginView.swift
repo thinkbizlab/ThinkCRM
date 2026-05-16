@@ -21,8 +21,8 @@ public struct LoginView: View {
                 }
 
                 VStack(spacing: Theme.Spacing.md) {
-                    field(t(.loginTenantSlug), text: $tenantSlug, autocapitalize: false)
-                    field(t(.loginEmail), text: $email, autocapitalize: false, keyboard: .emailAddress)
+                    field(t(.loginTenantSlug), text: $tenantSlug, autocapitalize: false, contentType: .organizationName)
+                    field(t(.loginEmail),      text: $email,      autocapitalize: false, keyboard: .emailAddress, contentType: .username)
                     secureField(t(.loginPassword), text: $password)
                 }
 
@@ -57,29 +57,37 @@ public struct LoginView: View {
     }
 
     @ViewBuilder
-    private func field(_ placeholder: String, text: Binding<String>, autocapitalize: Bool, keyboard: UIKeyboardType = .default) -> some View {
+    private func field(_ placeholder: String, text: Binding<String>, autocapitalize: Bool, keyboard: UIKeyboardType = .default, contentType: UITextContentType? = nil) -> some View {
         TextField(placeholder, text: text)
             .keyboardType(keyboard)
             .textInputAutocapitalization(autocapitalize ? .sentences : .never)
             .autocorrectionDisabled(true)
+            .textContentType(contentType)
             .padding(Theme.Spacing.md)
+            .frame(minHeight: 48)             // tap-target floor
             .background(
                 RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous)
                     .strokeBorder(Theme.Color.surfaceBorder, lineWidth: 1)
             )
             .foregroundStyle(Theme.Color.textPrimary)
             .accentColor(Theme.Color.accent)
+            .accessibilityLabel(placeholder)
     }
 
     @ViewBuilder
     private func secureField(_ placeholder: String, text: Binding<String>) -> some View {
         SecureField(placeholder, text: text)
+            // iOS Password autofill needs `.password` content type to suggest
+            // saved credentials and trigger Keychain integration.
+            .textContentType(.password)
             .padding(Theme.Spacing.md)
+            .frame(minHeight: 48)
             .background(
                 RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous)
                     .strokeBorder(Theme.Color.surfaceBorder, lineWidth: 1)
             )
             .foregroundStyle(Theme.Color.textPrimary)
             .accentColor(Theme.Color.accent)
+            .accessibilityLabel(placeholder)
     }
 }

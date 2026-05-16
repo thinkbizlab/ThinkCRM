@@ -66,6 +66,7 @@ struct DealDetailView: View {
                         Text(entry.note)
                             .font(Theme.Font.body())
                             .foregroundStyle(Theme.Color.textPrimary)
+                            .thaiAwareLineSpacing()
                         HStack {
                             Text(entry.createdBy?.fullName ?? "—")
                             Spacer()

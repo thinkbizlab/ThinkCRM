@@ -18,6 +18,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 
 @Composable
@@ -49,13 +51,17 @@ fun SecondaryButton(text: String, enabled: Boolean = true, onClick: () -> Unit) 
     }
 }
 
-/** UPPERCASE collection-style header that mirrors workselected.com's eyebrow. */
+/** UPPERCASE collection-style header that mirrors workselected.com's eyebrow.
+ *  Announced as a heading to TalkBack so section landmarks work even though
+ *  Material 3's labelSmall isn't styled like a Material heading. `.uppercase()`
+ *  is a no-op on Thai script (no case), which is intentional. */
 @Composable
 fun Eyebrow(text: String) {
     Text(
-        text       = text.uppercase(),
-        color      = Tokens.textSecondary,
-        style      = androidx.compose.material3.MaterialTheme.typography.labelSmall
+        text     = text.uppercase(),
+        color    = Tokens.textSecondary,
+        style    = androidx.compose.material3.MaterialTheme.typography.labelSmall,
+        modifier = Modifier.semantics { heading() }
     )
 }
 

@@ -36,6 +36,7 @@ public struct VisitDetailView: View {
                             Text(objective)
                                 .font(Theme.Font.body())
                                 .foregroundStyle(Theme.Color.textPrimary)
+                                .thaiAwareLineSpacing()
                         }.card()
                     }
 
@@ -47,6 +48,7 @@ public struct VisitDetailView: View {
                             Text(result)
                                 .font(Theme.Font.body())
                                 .foregroundStyle(Theme.Color.textPrimary)
+                                .thaiAwareLineSpacing()
                         }.card()
                     }
                 }

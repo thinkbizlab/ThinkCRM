@@ -22,13 +22,17 @@ public enum Theme {
     }
 
     public enum Font {
-        /// Workselected uses bold, uppercase, slightly-tracked sans-serif for
-        /// section headers — replicated here with system SF Pro.
-        public static func display() -> SwiftUI.Font { .system(size: 32, weight: .bold, design: .default) }
-        public static func title()   -> SwiftUI.Font { .system(size: 22, weight: .semibold) }
-        public static func body()    -> SwiftUI.Font { .system(size: 16, weight: .regular) }
-        public static func caption() -> SwiftUI.Font { .system(size: 13, weight: .regular) }
-        public static func eyebrow() -> SwiftUI.Font { .system(size: 11, weight: .semibold) }
+        /// SF Pro has full Thai glyph coverage; using the Dynamic-Type-aware
+        /// `.system(_:)` overload (vs. fixed `size:`) lets the OS scale every
+        /// label when the user changes Settings → Display & Brightness → Text
+        /// Size. We keep the same visual *bucket* defaults — `.largeTitle`
+        /// ≈ 34pt, `.title2` ≈ 22pt, `.body` = 17pt, `.footnote` = 13pt —
+        /// which match the previous hard-coded sizes within ~2pt.
+        public static func display() -> SwiftUI.Font { .system(.largeTitle, design: .default).weight(.bold) }
+        public static func title()   -> SwiftUI.Font { .system(.title2,     design: .default).weight(.semibold) }
+        public static func body()    -> SwiftUI.Font { .system(.body) }
+        public static func caption() -> SwiftUI.Font { .system(.footnote) }
+        public static func eyebrow() -> SwiftUI.Font { .system(.caption2,   design: .default).weight(.semibold) }
     }
 
     public enum Spacing {
@@ -139,9 +143,27 @@ public struct Eyebrow: View {
     let text: String
     public init(_ text: String) { self.text = text }
     public var body: some View {
+        // .uppercased() is a no-op on Thai script (no case), and `tracking`
+        // doesn't visibly separate Thai diacritic clusters — both are
+        // intentional. The header is announced as a header to VoiceOver so
+        // section landmarks work even without visible styling cues.
         Text(text.uppercased())
             .font(Theme.Font.eyebrow())
             .tracking(1.2)
             .foregroundStyle(Theme.Color.textSecondary)
+            .accessibilityAddTraits(.isHeader)
+    }
+}
+
+// MARK: - Thai-aware line spacing
+
+public extension View {
+    /// Thai characters can stack two vowel + tone marks above the consonant
+    /// baseline. SwiftUI's default line spacing for `.system` Body is fine
+    /// for Latin but visually tight when those marks appear. Use this on
+    /// any multi-line `Text` that may contain Thai (objectives, results,
+    /// progress notes).
+    func thaiAwareLineSpacing() -> some View {
+        self.lineSpacing(4)
     }
 }
