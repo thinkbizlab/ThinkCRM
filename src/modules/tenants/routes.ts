@@ -1100,7 +1100,7 @@ Use a believable mix of Thai company / contact / item names. Respond with ONLY t
             billingAddressId,
             shippingAddressId: billingAddressId,
             validTo,
-            status: deal.status === "WON" ? "ACCEPTED" : "SENT",
+            status: deal.status === "WON" ? "APPROVED" : "SENT",
             subtotal,
             vatRate,
             vatAmount,
