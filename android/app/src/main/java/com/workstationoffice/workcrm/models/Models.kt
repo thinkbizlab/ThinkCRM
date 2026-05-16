@@ -37,6 +37,30 @@ data class DeviceRegistrationRequest(
     val deviceName: String? = null
 )
 
+// MARK: MS365 mobile OAuth (PKCE)
+
+@Serializable
+data class OAuthBeginRequest(
+    val tenantSlug: String,
+    val codeChallenge: String,    // base64url(SHA256(verifier))
+    val redirectUri: String
+)
+
+@Serializable
+data class OAuthBeginResponse(
+    val authorizationUrl: String,
+    val state: String
+)
+
+@Serializable
+data class OAuthCompleteRequest(
+    val tenantSlug: String,
+    val code: String,
+    val state: String,
+    val codeVerifier: String,
+    val redirectUri: String
+)
+
 @Serializable
 data class User(
     val id: String,

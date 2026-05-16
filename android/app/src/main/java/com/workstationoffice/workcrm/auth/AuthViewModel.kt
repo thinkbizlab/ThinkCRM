@@ -1,8 +1,10 @@
 package com.workstationoffice.workcrm.auth
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.workstationoffice.workcrm.models.LoginRequest
+import com.workstationoffice.workcrm.models.LoginResponse
 import com.workstationoffice.workcrm.networking.ApiClient
 import com.workstationoffice.workcrm.networking.AuthSession
 import com.workstationoffice.workcrm.networking.TokenStore
@@ -39,20 +41,44 @@ class AuthViewModel : ViewModel() {
                         password   = password
                     )
                 )
-                val session = AuthSession(
-                    accessToken  = response.accessToken,
-                    refreshToken = response.refreshToken,
-                    user         = response.user
-                )
-                TokenStore.save(session)
-                _state.update { it.copy(session = session, isSubmitting = false) }
-                // Best-effort FCM device-token registration. Failures are
-                // non-fatal — the next launch re-tries.
-                DeviceRegistrar.registerIfPossible()
+                finishSignIn(response)
             } catch (e: Exception) {
                 _state.update { it.copy(isSubmitting = false, errorMessage = humanise(e)) }
             }
         }
+    }
+
+    /// MS365 OAuth sign-in. Same finish path as password sign-in — the helper
+    /// returns a [LoginResponse] with the same shape, so APNs/FCM registration
+    /// and TokenStore.save fire identically.
+    fun signInWithMicrosoft(context: Context, tenantSlug: String) {
+        _state.update { it.copy(isSubmitting = true, errorMessage = null) }
+        viewModelScope.launch {
+            try {
+                val response = MicrosoftOAuth.signIn(context.applicationContext, tenantSlug.trim())
+                finishSignIn(response)
+            } catch (e: Exception) {
+                if (e === MicrosoftOAuthException.UserCancelled) {
+                    // Silent — user dismissed the Custom Tab, no error to flash.
+                    _state.update { it.copy(isSubmitting = false) }
+                } else {
+                    _state.update { it.copy(isSubmitting = false, errorMessage = humanise(e)) }
+                }
+            }
+        }
+    }
+
+    private suspend fun finishSignIn(response: LoginResponse) {
+        val session = AuthSession(
+            accessToken  = response.accessToken,
+            refreshToken = response.refreshToken,
+            user         = response.user
+        )
+        TokenStore.save(session)
+        _state.update { it.copy(session = session, isSubmitting = false) }
+        // Best-effort FCM device-token registration. Failures are non-fatal —
+        // the next launch retries.
+        DeviceRegistrar.registerIfPossible()
     }
 
     fun signOut() {

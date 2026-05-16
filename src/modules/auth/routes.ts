@@ -563,6 +563,147 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     }
   });
 
+  // ── MS365 OAuth (Mobile, PKCE) ───────────────────────────────────────────────
+  //
+  // Two-step flow the iOS + Android apps use instead of the redirect-based web
+  // flow above. PKCE replaces the per-redirect cookie session: the mobile client
+  // generates a code_verifier, sends its SHA-256 (the code_challenge) up to MS,
+  // and proves possession by sending the original verifier on the complete call.
+  //
+  // The backend still keeps the tenant's client_secret server-side (confidential
+  // client) — using PKCE on top is purely additional defence against
+  // authorization-code interception by a malicious app holding the same URL scheme.
+  //
+  // Mobile redirect URI is hardcoded to `workcrm://oauth/callback`. The tenant's
+  // Azure AD app registration must list it under "Mobile and desktop applications"
+  // redirect URIs.
+
+  const ALLOWED_MOBILE_REDIRECT_URIS = new Set([
+    "workcrm://oauth/callback"
+  ]);
+
+  const ms365MobileBeginSchema = z.object({
+    tenantSlug: z.string().min(2).max(80),
+    // base64url-encoded SHA-256 of the client's code_verifier. 43 chars exactly
+    // for SHA-256 base64url (32 bytes → 43 chars without padding).
+    codeChallenge: z.string().regex(/^[A-Za-z0-9_-]{43}$/, "codeChallenge must be base64url-encoded SHA-256"),
+    redirectUri: z.string().url().optional()
+  });
+
+  app.post("/auth/oauth/ms365/mobile/begin", async (request) => {
+    const parsed = ms365MobileBeginSchema.safeParse(request.body);
+    if (!parsed.success) throw app.httpErrors.badRequest(zodMsg(parsed.error));
+    const { tenantSlug, codeChallenge, redirectUri } = parsed.data;
+
+    const finalRedirect = redirectUri ?? "workcrm://oauth/callback";
+    if (!ALLOWED_MOBILE_REDIRECT_URIS.has(finalRedirect)) {
+      throw app.httpErrors.badRequest("redirectUri not allowed.");
+    }
+
+    const creds = await resolveMs365OAuthCreds(tenantSlug);
+    if (!creds) throw app.httpErrors.notImplemented("MS365 OAuth is not configured for this workspace.");
+
+    const state = await createOAuthState(tenantSlug);
+    const params = new URLSearchParams({
+      client_id:             creds.clientId,
+      response_type:         "code",
+      redirect_uri:          finalRedirect,
+      scope:                 "openid email profile User.Read",
+      response_mode:         "query",
+      state,
+      code_challenge:        codeChallenge,
+      code_challenge_method: "S256"
+    });
+    const authorizationUrl = `https://login.microsoftonline.com/${creds.msTenantId}/oauth2/v2.0/authorize?${params}`;
+    return { authorizationUrl, state };
+  });
+
+  const ms365MobileCompleteSchema = z.object({
+    tenantSlug:   z.string().min(2).max(80),
+    code:         z.string().min(1).max(4096),
+    state:        z.string().min(1).max(200),
+    codeVerifier: z.string().regex(/^[A-Za-z0-9_-]{43,128}$/, "codeVerifier must be 43-128 url-safe chars"),
+    redirectUri:  z.string().url().optional()
+  });
+
+  app.post("/auth/oauth/ms365/mobile/complete", async (request) => {
+    const parsed = ms365MobileCompleteSchema.safeParse(request.body);
+    if (!parsed.success) throw app.httpErrors.badRequest(zodMsg(parsed.error));
+    const { tenantSlug, code, state, codeVerifier, redirectUri } = parsed.data;
+
+    const finalRedirect = redirectUri ?? "workcrm://oauth/callback";
+    if (!ALLOWED_MOBILE_REDIRECT_URIS.has(finalRedirect)) {
+      throw app.httpErrors.badRequest("redirectUri not allowed.");
+    }
+
+    // CSRF: state must match a row we issued, and the row must reference the
+    // same tenantSlug the client now claims. Consume single-use so a replayed
+    // code can't re-grant tokens.
+    const storedSlug = await consumeOAuthState(state);
+    if (!storedSlug || storedSlug !== tenantSlug) {
+      throw app.httpErrors.unauthorized("Invalid or expired state.");
+    }
+
+    const creds = await resolveMs365OAuthCreds(tenantSlug);
+    if (!creds) throw app.httpErrors.notImplemented("MS365 OAuth is not configured for this workspace.");
+
+    // Exchange the authorization code for an access token. With PKCE, Microsoft
+    // verifies that SHA-256(code_verifier) === the code_challenge we sent in /begin.
+    const tokenRes = await fetch(`https://login.microsoftonline.com/${creds.msTenantId}/oauth2/v2.0/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id:     creds.clientId,
+        client_secret: creds.clientSecret,
+        code,
+        redirect_uri:  finalRedirect,
+        grant_type:    "authorization_code",
+        code_verifier: codeVerifier
+      })
+    });
+    const tok = await tokenRes.json() as { access_token?: string; error_description?: string };
+    if (!tok.access_token) {
+      throw app.httpErrors.unauthorized(tok.error_description ?? "Token exchange failed.");
+    }
+
+    const meRes = await fetch("https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName,displayName", {
+      headers: { Authorization: `Bearer ${tok.access_token}` }
+    });
+    const me = await meRes.json() as { mail?: string; userPrincipalName?: string };
+    const email = (me.mail ?? me.userPrincipalName ?? "").toLowerCase();
+    if (!email) throw app.httpErrors.unauthorized("Could not read email from MS365 profile.");
+
+    const tenant = await prisma.tenant.findUnique({ where: { slug: tenantSlug }, select: { id: true, slug: true, name: true } });
+    if (!tenant) throw app.httpErrors.notFound("Workspace not found.");
+
+    const user = await prisma.user.findFirst({ where: { tenantId: tenant.id, email, isActive: true } });
+    if (!user) throw app.httpErrors.unauthorized(`No active account for ${email} in this workspace.`);
+
+    // Issue our own session — matches the password /auth/login response shape so
+    // the iOS + Android clients can decode it with the same LoginResponse Codable.
+    const accessToken = await app.jwt.sign({
+      userId: user.id, tenantId: tenant.id, role: user.role, email: user.email
+    }, { expiresIn: "1h" });
+    const refreshToken = await createRefreshToken(tenant.id, user.id);
+
+    await logAuditEvent(tenant.id, user.id, "LOGIN", { email: user.email, method: "ms365_mobile" }, request.ip);
+
+    return {
+      accessToken,
+      refreshToken,
+      tokenType: "Bearer",
+      user: {
+        id:         user.id,
+        tenantId:   tenant.id,
+        tenantSlug: tenant.slug,
+        role:       user.role,
+        email:      user.email,
+        fullName:   user.fullName,
+        avatarUrl:  resolveAvatarUrl(user.id, user.avatarUrl, tenant.id)
+      }
+    };
+  });
+
   // ── Google OAuth ─────────────────────────────────────────────────────────────
 
   app.get("/auth/oauth/google", async (request, reply) => {
