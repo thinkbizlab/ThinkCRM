@@ -690,13 +690,13 @@ async function ensureOnboardingWizardModule() {
   if (!onboardingWizardInitialized) {
     module.initOnboardingWizard({
       stepNav: {
-        teamCreated:      () => { navigateToSettingsPage("team-structure"); switchView("settings"); },
-        userInvited:      () => { navigateToSettingsPage("roles");          switchView("settings"); },
-        kpiTargetSet:     () => { navigateToSettingsPage("kpi-targets");    switchView("settings"); },
-        integrationSetup: () => { navigateToSettingsPage("integrations");   switchView("settings"); },
-        customerImported: () => { navigateToMasterPage("customers");        switchView("master"); },
-        dealCreated:      () => { navigateToView("deals");                  switchView("deals"); },
-        domainConfigured: () => { navigateToSettingsPage("custom-domain");  switchView("settings"); }
+        teamCreated:      async () => { navigateToSettingsPage("team-structure"); switchView("settings"); await loadSettings("team-structure"); },
+        userInvited:      async () => { navigateToSettingsPage("roles");          switchView("settings"); await loadSettings("roles"); },
+        kpiTargetSet:     async () => { navigateToSettingsPage("kpi-targets");    switchView("settings"); await loadSettings("kpi-targets"); },
+        integrationSetup: async () => { navigateToSettingsPage("integrations");   switchView("settings"); await loadSettings("integrations"); },
+        customerImported: async () => { navigateToMasterPage("customers");        switchView("master");   await loadMaster("customers"); },
+        dealCreated:      async () => { navigateToView("deals");                  switchView("deals");    await loadDeals(); },
+        domainConfigured: async () => { navigateToSettingsPage("custom-domain");  switchView("settings"); await loadSettings("custom-domain"); }
       }
     });
     onboardingWizardInitialized = true;
@@ -714,7 +714,7 @@ async function ensureDemoDataModule() {
       refreshHost: async () => {
         await Promise.all([loadMaster(), loadDeals(), loadVisits(), loadDashboard()]);
       },
-      gotoIntegrations: () => { navigateToSettingsPage("integrations"); switchView("settings"); },
+      gotoIntegrations: async () => { navigateToSettingsPage("integrations"); switchView("settings"); await loadSettings("integrations"); },
       refreshOnboarding: async () => {
         await loadOnboardingWizardLazy();
       }
@@ -8871,9 +8871,10 @@ function renderSettings() {
     form.querySelector('select[name="userId"]')?.focus();
   });
 
-  qs("#kpi-invite-rep-btn")?.addEventListener("click", () => {
+  qs("#kpi-invite-rep-btn")?.addEventListener("click", async () => {
     navigateToSettingsPage("roles");
     switchView("settings");
+    try { await loadSettings("roles"); } catch (error) { setStatus(error.message, true); }
   });
 
   qs("#kpi-template-btn")?.addEventListener("click", async () => {
