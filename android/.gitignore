@@ -1,0 +1,27 @@
+# Build artefacts
+build/
+.gradle/
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+
+# IDE
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Android-specific
+release/
+out/
+
+# Firebase config — each environment supplies its own.
+# Drop `google-services.json` into android/app/ from Firebase Console
+# before `./gradlew assembleDebug` will succeed.
+app/google-services.json
+
+# Signing
+*.jks
+*.keystore
+keystore.properties

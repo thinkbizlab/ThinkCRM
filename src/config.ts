@@ -74,6 +74,15 @@ const configSchema = z.object({
   APNS_KEY_PATH: z.preprocess(v => (v === "" ? undefined : v), z.string().optional()),
   // Set to "production" for App Store builds; defaults to "development" for TestFlight/dev.
   APNS_ENVIRONMENT: z.enum(["development", "production"]).default("development"),
+  // Optional: Firebase Cloud Messaging (FCM) for Android push notifications.
+  // Provision a Firebase project for the app, then download a service-account
+  // JSON from Firebase Console → Project Settings → Service accounts. Split it
+  // into the three values below (project_id, client_email, private_key).
+  FCM_PROJECT_ID: z.preprocess(v => (v === "" ? undefined : v), z.string().optional()),
+  FCM_CLIENT_EMAIL: z.preprocess(v => (v === "" ? undefined : v), z.string().optional()),
+  // PEM contents of the service-account private key. Vercel sometimes stores
+  // newlines as literal `\n` sequences — normalised at runtime in fcm-notify.
+  FCM_PRIVATE_KEY: z.preprocess(v => (v === "" ? undefined : v), z.string().optional()),
   // Optional: Vercel Cron secret — protects /api/v1/cron/* endpoints.
   // Auto-set by Vercel when you add cron jobs. Generate your own for non-Vercel deployments.
   CRON_SECRET: z.preprocess(v => (v === "" ? undefined : v), z.string().min(16).optional()),

@@ -248,6 +248,22 @@ export function renderDashboard(data) {
         </div>
       ` : ""}
 
+      <!-- ── Mobile Sync Health (ADMIN only) ──────────────────── -->
+      ${role === "ADMIN" ? `
+      <div class="dash-section" id="sync-discards-section" style="margin-top: var(--sp-4)">
+        <div class="section-title-row">
+          <h3 class="section-title" style="margin:0">${icon('warning')} Mobile Sync Health</h3>
+          <span class="muted small">Last 30 days</span>
+        </div>
+        <p class="muted small" style="margin-top: var(--sp-1); margin-bottom: var(--sp-2)">
+          Permanently-failed check-in / check-out actions reps discarded from
+          their device's offline queue. A burst of the same error class is the
+          first signal that something on the backend regressed for mobile.
+        </p>
+        <div id="sync-discards-body"><div class="muted">Loading…</div></div>
+      </div>
+      ` : ""}
+
       <!-- ── AI Lost Deals Insights ─────────────────────────── -->
       <div class="dash-section ai-insights-section" style="margin-top: var(--sp-4)">
         <div class="ai-insights-header">
@@ -277,6 +293,14 @@ export function renderDashboard(data) {
       </div>
     </div>
   `;
+
+  // ── Mobile Sync Health: fetch + render after the main paint so the
+  // dashboard's KPI strip never waits on this admin-only call. Tolerates
+  // 401/403 silently — non-admin users won't see this section either way,
+  // but the rendered DOM check is the only gate.
+  if (role === "ADMIN" && qs("#sync-discards-body")) {
+    loadSyncDiscardsSummary();
+  }
 
   qs("#dashboard-month-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -415,6 +439,69 @@ export function renderDashboard(data) {
       runBtn.innerHTML = `<svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"/></svg> Analyze`;
     }
   });
+}
+
+// ── Mobile Sync Health helpers ────────────────────────────────────────────
+
+async function loadSyncDiscardsSummary() {
+  const body = qs("#sync-discards-body");
+  if (!body) return;
+  try {
+    const data = await api("/sync/discards/summary");
+    body.innerHTML = renderSyncDiscardsSummary(data);
+  } catch (err) {
+    // Silent fallback — the widget is supplementary; one of many cards on
+    // the dashboard. Don't let it block or noisy-banner the main view.
+    body.innerHTML = `<div class="muted small" style="color:var(--danger)">${escHtml(err.message || "Failed to load sync health.")}</div>`;
+  }
+}
+
+function renderSyncDiscardsSummary(data) {
+  const total = Number(data?.total ?? 0);
+  if (total === 0) {
+    return `
+      <div style="display:flex;align-items:center;gap:var(--sp-2);color:var(--success,#4ADE80)">
+        ${icon('check')}
+        <span>All clear — no discarded actions in the last 30 days.</span>
+      </div>`;
+  }
+  const buckets = Array.isArray(data.buckets) ? data.buckets.slice(0, 8) : [];
+  const max = buckets.reduce((m, b) => Math.max(m, Number(b.count) || 0), 0) || 1;
+
+  const rows = buckets.map((b) => {
+    const pct = Math.round((Number(b.count) / max) * 100);
+    const kindLabel = b.kind === "visit_checkin" ? "Check-in" : "Check-out";
+    return `
+      <tr>
+        <td>${escHtml(b.errorClass || "(unknown)")}</td>
+        <td>${escHtml(kindLabel)}</td>
+        <td><span class="chip">${escHtml(b.platform)}</span></td>
+        <td class="num">${b.count}</td>
+        <td style="width:35%">
+          <div style="background:var(--bg-subtle);height:6px;border-radius:3px;overflow:hidden">
+            <div style="height:6px;width:${pct}%;background:var(--accent)"></div>
+          </div>
+        </td>
+      </tr>`;
+  }).join("");
+
+  return `
+    <div style="display:flex;align-items:center;gap:var(--sp-2);margin-bottom:var(--sp-2)">
+      <strong style="font-size:1.4rem">${total}</strong>
+      <span class="muted small">discarded events · ${buckets.length} distinct error class${buckets.length === 1 ? "" : "es"}</span>
+    </div>
+    <table class="data-table" style="width:100%">
+      <thead>
+        <tr>
+          <th>Error class</th>
+          <th>Kind</th>
+          <th>Platform</th>
+          <th class="num">Count</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
 }
 
 export async function loadDashboard(month = state.dashboardMonth) {

@@ -407,10 +407,28 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
 
   app.get("/payment-terms", async (request) => {
     const tenantId = requireTenantId(request);
-    return prisma.paymentTerm.findMany({
-      where: { tenantId },
-      orderBy: { createdAt: "desc" }
-    });
+    const { limit: limitRaw, offset: offsetRaw } = (request.query ?? {}) as {
+      limit?: string;
+      offset?: string;
+    };
+
+    // Opt-in pagination for mobile clients. When `limit` is present the
+    // response becomes `{ rows, total, limit, offset }`; without it the legacy
+    // bare-array shape is preserved so the web client doesn't have to migrate.
+    const paginated = limitRaw !== undefined;
+    const where = { tenantId } satisfies Prisma.PaymentTermWhereInput;
+    const orderBy = { createdAt: "desc" } as const;
+
+    if (paginated) {
+      const limit = Math.min(Math.max(parseInt(limitRaw ?? "50", 10) || 50, 1), 200);
+      const offset = Math.max(parseInt(offsetRaw ?? "0", 10) || 0, 0);
+      const [rows, total] = await Promise.all([
+        prisma.paymentTerm.findMany({ where, orderBy, take: limit, skip: offset }),
+        prisma.paymentTerm.count({ where })
+      ]);
+      return { rows, total, limit, offset };
+    }
+    return prisma.paymentTerm.findMany({ where, orderBy });
   });
 
   app.post("/payment-terms", async (request, reply) => {
@@ -1512,7 +1530,25 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
 
   app.get("/items", async (request) => {
     const tenantId = requireTenantId(request);
-    return prisma.item.findMany({ where: { tenantId }, orderBy: { createdAt: "desc" } });
+    const { limit: limitRaw, offset: offsetRaw } = (request.query ?? {}) as {
+      limit?: string;
+      offset?: string;
+    };
+
+    const paginated = limitRaw !== undefined;
+    const where = { tenantId } satisfies Prisma.ItemWhereInput;
+    const orderBy = { createdAt: "desc" } as const;
+
+    if (paginated) {
+      const limit = Math.min(Math.max(parseInt(limitRaw ?? "50", 10) || 50, 1), 200);
+      const offset = Math.max(parseInt(offsetRaw ?? "0", 10) || 0, 0);
+      const [rows, total] = await Promise.all([
+        prisma.item.findMany({ where, orderBy, take: limit, skip: offset }),
+        prisma.item.count({ where })
+      ]);
+      return { rows, total, limit, offset };
+    }
+    return prisma.item.findMany({ where, orderBy });
   });
 
   app.get("/items/:id", async (request) => {
@@ -1706,10 +1742,25 @@ export const masterDataRoutes: FastifyPluginAsync = async (app) => {
   // ── Customer Groups ─────────────────────────────────────────────────────
   app.get("/customer-groups", async (request) => {
     const tenantId = requireTenantId(request);
-    return prisma.customerGroup.findMany({
-      where: { tenantId },
-      orderBy: { name: "asc" }
-    });
+    const { limit: limitRaw, offset: offsetRaw } = (request.query ?? {}) as {
+      limit?: string;
+      offset?: string;
+    };
+
+    const paginated = limitRaw !== undefined;
+    const where = { tenantId } satisfies Prisma.CustomerGroupWhereInput;
+    const orderBy = { name: "asc" } as const;
+
+    if (paginated) {
+      const limit = Math.min(Math.max(parseInt(limitRaw ?? "50", 10) || 50, 1), 200);
+      const offset = Math.max(parseInt(offsetRaw ?? "0", 10) || 0, 0);
+      const [rows, total] = await Promise.all([
+        prisma.customerGroup.findMany({ where, orderBy, take: limit, skip: offset }),
+        prisma.customerGroup.count({ where })
+      ]);
+      return { rows, total, limit, offset };
+    }
+    return prisma.customerGroup.findMany({ where, orderBy });
   });
 
   app.post("/customer-groups", async (request, reply) => {
