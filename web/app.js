@@ -690,12 +690,12 @@ async function ensureOnboardingWizardModule() {
   if (!onboardingWizardInitialized) {
     module.initOnboardingWizard({
       stepNav: {
-        teamCreated:      () => { navigateToSettingsPage("teams");        switchView("settings"); },
-        userInvited:      () => { navigateToSettingsPage("users");        switchView("settings"); },
-        integrationSetup: () => { navigateToSettingsPage("integrations"); switchView("settings"); },
-        customerImported: () => { navigateToMasterPage("customers");      switchView("master"); },
-        dealCreated:      () => { navigateToView("deals");                switchView("deals"); },
-        domainConfigured: () => { navigateToSettingsPage("branding");     switchView("settings"); }
+        teamCreated:      () => { navigateToSettingsPage("team-structure"); switchView("settings"); },
+        userInvited:      () => { navigateToSettingsPage("roles");          switchView("settings"); },
+        integrationSetup: () => { navigateToSettingsPage("integrations");   switchView("settings"); },
+        customerImported: () => { navigateToMasterPage("customers");        switchView("master"); },
+        dealCreated:      () => { navigateToView("deals");                  switchView("deals"); },
+        domainConfigured: () => { navigateToSettingsPage("custom-domain");  switchView("settings"); }
       }
     });
     onboardingWizardInitialized = true;
