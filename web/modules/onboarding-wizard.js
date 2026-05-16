@@ -13,6 +13,7 @@ let stepNavHandlers = {};
 const STEP_ICONS = {
   teamCreated:      '<svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="3"/><line x1="12" y1="8" x2="12" y2="14"/><line x1="8" y1="18" x2="12" y2="14"/><line x1="16" y1="18" x2="12" y2="14"/><circle cx="8" cy="19" r="2"/><circle cx="16" cy="19" r="2"/></svg>',
   userInvited:      '<svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>',
+  kpiTargetSet:     '<svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>',
   integrationSetup: '<svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="6" height="6" rx="1"/><rect x="16" y="6" width="6" height="6" rx="1"/><rect x="9" y="13" width="6" height="6" rx="1"/><path d="M8 9h8M12 6v7"/></svg>',
   customerImported: '<svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>',
   dealCreated:      '<svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><polyline points="9 12 11 14 15 10"/></svg>',
@@ -22,6 +23,7 @@ const STEP_ICONS = {
 const STEP_DESCS = {
   teamCreated:      "Organize your sales regions and teams",
   userInvited:      "Add team members to start collaborating",
+  kpiTargetSet:     "Set monthly visit / deal / revenue targets per rep",
   integrationSetup: "Connect your tools and data sources",
   customerImported: "Bring in your customer database",
   dealCreated:      "Create your first sales opportunity",
@@ -59,6 +61,7 @@ export async function loadOnboardingWizard(forceOpen = false) {
     const steps = [
       { key: "teamCreated",      label: "Set up your team structure", done: !!s.teamCreated },
       { key: "userInvited",      label: "Invite your first sales rep", done: !!s.userInvited },
+      { key: "kpiTargetSet",     label: "Set KPI targets for your reps", done: !!s.kpiTargetSet },
       { key: "integrationSetup", label: "Configure integrations",      done: !!s.integrationSetup },
       { key: "customerImported", label: "Import your customers",       done: !!s.customerImported },
       { key: "dealCreated",      label: "Create your first deal",      done: !!s.dealCreated },

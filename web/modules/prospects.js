@@ -103,8 +103,23 @@ function renderProspects() {
     filter.search = e.target.value.trim();
     void loadProspects();
   }, 300));
-  root.querySelectorAll("[data-prospect-id]").forEach((btn) => {
-    btn.addEventListener("click", () => openProspectDetail(btn.dataset.prospectId));
+  root.querySelectorAll(".prospect-open-btn[data-prospect-id]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.prospectId;
+      if (!id || btn.disabled) return;
+      // Visible feedback while /prospects/:id is in flight — on federated
+      // tenants the round-trip can be slow enough that without this the
+      // Open button looks unresponsive after the first click.
+      btn.disabled = true;
+      const original = btn.textContent;
+      btn.textContent = "Opening…";
+      try {
+        await openProspectDetail(id);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    });
   });
 }
 
