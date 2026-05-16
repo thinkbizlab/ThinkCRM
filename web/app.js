@@ -692,6 +692,7 @@ async function ensureOnboardingWizardModule() {
       stepNav: {
         teamCreated:      () => { navigateToSettingsPage("team-structure"); switchView("settings"); },
         userInvited:      () => { navigateToSettingsPage("roles");          switchView("settings"); },
+        kpiTargetSet:     () => { navigateToSettingsPage("kpi-targets");    switchView("settings"); },
         integrationSetup: () => { navigateToSettingsPage("integrations");   switchView("settings"); },
         customerImported: () => { navigateToMasterPage("customers");        switchView("master"); },
         dealCreated:      () => { navigateToView("deals");                  switchView("deals"); },
@@ -5582,7 +5583,7 @@ function renderSettings() {
             </div>
             <button type="submit">Save KPI Target</button>
           </form>
-          ` : `<div class="empty-state compact"><div><strong>No active users</strong><p>Create users first.</p></div></div>`}
+          ` : `<div class="empty-state compact"><div><strong>No active sales reps yet</strong><p>You need at least one rep before you can set KPI targets.</p><button type="button" class="ghost small" id="kpi-invite-rep-btn">+ Invite Sales Rep</button></div></div>`}
         ` : `<div class="muted small" style="padding:var(--sp-2) 0">View only — Director or Manager access required to set targets.</div>`}
       </section>
 
@@ -5591,6 +5592,7 @@ function renderSettings() {
           <h3 class="section-title" style="margin:0">${icon('chart')} KPI Targets</h3>
           ${canEditKpi ? `
             <div class="inline-actions">
+              <button class="ghost small" id="kpi-add-btn" type="button" ${state.cache.salesReps.length ? "" : "disabled"} title="${state.cache.salesReps.length ? "Add a new KPI target" : "Invite a sales rep first"}">+ Add KPI Target</button>
               <button class="ghost small" id="kpi-template-btn" type="button">⬇ Download Template</button>
               <button class="ghost small" id="kpi-import-btn" type="button">Import KPI Targets</button>
               <button class="ghost small" id="kpi-import-history-btn" type="button">Import History</button>
@@ -8861,6 +8863,18 @@ function renderSettings() {
       }
     });
   }
+
+  qs("#kpi-add-btn")?.addEventListener("click", () => {
+    const form = qs("#kpi-form");
+    if (!form) return;
+    form.scrollIntoView({ behavior: "smooth", block: "start" });
+    form.querySelector('select[name="userId"]')?.focus();
+  });
+
+  qs("#kpi-invite-rep-btn")?.addEventListener("click", () => {
+    navigateToSettingsPage("roles");
+    switchView("settings");
+  });
 
   qs("#kpi-template-btn")?.addEventListener("click", async () => {
     const reps = Array.isArray(state.cache.salesReps) ? state.cache.salesReps : [];

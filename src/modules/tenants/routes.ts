@@ -619,19 +619,21 @@ export const tenantRoutes: FastifyPluginAsync = async (app) => {
     requireRoleAtLeast(request, UserRole.ADMIN);
     assertTenantPathAccess(request, tenantId);
 
-    const [userCount, customerCount, dealCount, teamCount, integrationCount, domainCount] = await Promise.all([
+    const [userCount, customerCount, dealCount, teamCount, integrationCount, domainCount, kpiTargetCount] = await Promise.all([
       prisma.user.count({ where: { tenantId } }),
       prisma.customer.count({ where: { tenantId } }),
       prisma.deal.count({ where: { tenantId } }),
       prisma.team.count({ where: { tenantId } }),
       prisma.tenantIntegrationCredential.count({ where: { tenantId } }),
-      prisma.tenantCustomDomain.count({ where: { tenantId } })
+      prisma.tenantCustomDomain.count({ where: { tenantId } }),
+      prisma.salesKpiTarget.count({ where: { tenantId } })
     ]);
 
     return {
       steps: {
         teamCreated:      teamCount > 0,
         userInvited:      userCount > 1,     // more than just the admin
+        kpiTargetSet:     kpiTargetCount > 0,
         integrationSetup: integrationCount > 0,
         customerImported: customerCount > 0,
         dealCreated:      dealCount > 0,
