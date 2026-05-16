@@ -40,6 +40,14 @@ export function renderDemoDataBanner() {
   container.hidden = false;
 
   if (demoDataStatus?.hasDemo) {
+    const c = demoDataStatus.counts;
+    const summary = [
+      `${c.customers || 0} customers`,
+      `${c.deals || 0} deals`,
+      `${c.visits || 0} visits`,
+      `${c.items || 0} items`,
+      `${c.quotations || 0} quotations`
+    ].join(", ");
     container.innerHTML = `
       <div class="demo-banner demo-banner--active">
         <div class="demo-banner-icon">
@@ -47,7 +55,7 @@ export function renderDemoDataBanner() {
         </div>
         <div class="demo-banner-body">
           <strong>Demo data is active</strong>
-          <span class="muted">${demoDataStatus.counts.customers} customers, ${demoDataStatus.counts.deals} deals, ${demoDataStatus.counts.visits} visits</span>
+          <span class="muted">${summary}</span>
         </div>
         <button type="button" class="btn-danger-outline demo-delete-btn" id="demo-data-delete-btn">Delete Demo Data</button>
       </div>`;
@@ -99,12 +107,24 @@ export function renderDemoDataBanner() {
     const countsEl = qs("#demo-delete-counts");
     if (countsEl && demoDataStatus?.counts) {
       const c = demoDataStatus.counts;
-      countsEl.innerHTML = `
-        <li>${c.customers} customer${c.customers !== 1 ? "s" : ""}</li>
-        <li>${c.deals} deal${c.deals !== 1 ? "s" : ""}</li>
-        <li>${c.visits} visit${c.visits !== 1 ? "s" : ""}</li>
-        <li>${c.teams} team${c.teams !== 1 ? "s" : ""}</li>
-        <li>${c.users} user${c.users !== 1 ? "s" : ""}</li>`;
+      // Hide line items with zero so older tenants (pre-rich-demo) still get a clean list.
+      const rows = [
+        [c.customers, "customer", "customers"],
+        [c.customerGroups, "customer group", "customer groups"],
+        [c.deals, "deal", "deals"],
+        [c.quotations, "quotation", "quotations"],
+        [c.items, "item", "items"],
+        [c.visits, "visit", "visits"],
+        [c.prospects, "prospect", "prospects"],
+        [c.kpiTargets, "KPI target", "KPI targets"],
+        [c.announcements, "announcement", "announcements"],
+        [c.teams, "team", "teams"],
+        [c.users, "user", "users"]
+      ];
+      countsEl.innerHTML = rows
+        .filter(([n]) => (n ?? 0) > 0)
+        .map(([n, sing, plur]) => `<li>${n} ${n === 1 ? sing : plur}</li>`)
+        .join("");
     }
     qs("#demo-delete-modal").hidden = false;
   });

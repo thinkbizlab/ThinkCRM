@@ -407,6 +407,7 @@ model CustomerGroup {
   name         String
   description  String?
   isActive     Boolean    @default(true)
+  isDemo       Boolean    @default(false)
   customFields Json?
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
@@ -560,6 +561,7 @@ model Item {
   externalRef  String?
   unitPrice    Float
   isActive     Boolean         @default(true)
+  isDemo       Boolean         @default(false)
   customFields Json?
   createdAt    DateTime        @default(now())
   updatedAt    DateTime        @updatedAt
@@ -752,6 +754,7 @@ model Prospect {
   createdById      String
   updatedById      String?
   archivedAt       DateTime?
+  isDemo           Boolean         @default(false)
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
   tenant           Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -1508,6 +1511,7 @@ model Announcement {
   // whose role is in this list will see (and need to acknowledge) it.
   roles           UserRole[]        @default([])
   createdById     String?
+  isDemo          Boolean           @default(false)
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
   tenant          Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)

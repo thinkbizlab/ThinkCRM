@@ -650,12 +650,32 @@ export const tenantRoutes: FastifyPluginAsync = async (app) => {
     requireRoleAtLeast(request, UserRole.ADMIN);
     assertTenantPathAccess(request, tenantId);
 
-    const [demoCustomers, demoDeals, demoVisits, demoTeams, demoUsers, globalKeyUsage, tenantHasOwnKey] = await Promise.all([
+    const [
+      demoCustomers, demoDeals, demoVisits, demoTeams, demoUsers,
+      demoCustomerGroups, demoItems, demoProspects, demoAnnouncements,
+      demoKpiTargets, demoQuotations,
+      globalKeyUsage, tenantHasOwnKey
+    ] = await Promise.all([
       prisma.customer.count({ where: { tenantId, isDemo: true } }),
       prisma.deal.count({ where: { tenantId, isDemo: true } }),
       prisma.visit.count({ where: { tenantId, isDemo: true } }),
       prisma.team.count({ where: { tenantId, isDemo: true } }),
       prisma.user.count({ where: { tenantId, isDemo: true } }),
+      prisma.customerGroup.count({ where: { tenantId, isDemo: true } }),
+      prisma.item.count({ where: { tenantId, isDemo: true } }),
+      prisma.prospect.count({ where: { tenantId, isDemo: true } }),
+      prisma.announcement.count({ where: { tenantId, isDemo: true } }),
+      // KPI targets and quotations don't have isDemo themselves — they inherit
+      // via user.isDemo / customer.isDemo respectively.
+      prisma.salesKpiTarget.count({ where: { tenantId } }).then(async (total) => {
+        if (total === 0) return 0;
+        const demoUserIds = (await prisma.user.findMany({
+          where: { tenantId, isDemo: true }, select: { id: true }
+        })).map(u => u.id);
+        if (!demoUserIds.length) return 0;
+        return prisma.salesKpiTarget.count({ where: { tenantId, userId: { in: demoUserIds } } });
+      }),
+      prisma.quotation.count({ where: { tenantId, customer: { isDemo: true } } }),
       prisma.auditLog.count({ where: { tenantId, action: "DEMO_DATA_GENERATE_GLOBAL_KEY" } }),
       prisma.tenantIntegrationCredential.count({
         where: { tenantId, platform: IntegrationPlatform.ANTHROPIC, status: "ENABLED", apiKeyRef: { not: null } }
@@ -665,8 +685,23 @@ export const tenantRoutes: FastifyPluginAsync = async (app) => {
     const GLOBAL_KEY_LIMIT = 3;
 
     return {
-      hasDemo: demoCustomers + demoDeals + demoVisits + demoTeams + demoUsers > 0,
-      counts: { customers: demoCustomers, deals: demoDeals, visits: demoVisits, teams: demoTeams, users: demoUsers },
+      hasDemo: (
+        demoCustomers + demoDeals + demoVisits + demoTeams + demoUsers
+        + demoCustomerGroups + demoItems + demoProspects + demoAnnouncements
+      ) > 0,
+      counts: {
+        customers: demoCustomers,
+        deals: demoDeals,
+        visits: demoVisits,
+        teams: demoTeams,
+        users: demoUsers,
+        customerGroups: demoCustomerGroups,
+        items: demoItems,
+        prospects: demoProspects,
+        announcements: demoAnnouncements,
+        kpiTargets: demoKpiTargets,
+        quotations: demoQuotations
+      },
       globalKeyUsage,
       globalKeyLimit: GLOBAL_KEY_LIMIT,
       globalKeyRemaining: Math.max(0, GLOBAL_KEY_LIMIT - globalKeyUsage),
@@ -728,65 +763,55 @@ export const tenantRoutes: FastifyPluginAsync = async (app) => {
 
     const apiKey = resolved.key;
 
-    // Ask AI to generate realistic demo data based on the industry
+    // Hybrid generation: the AI generates only names/labels (Thai-flavoured),
+    // every numeric/structural/date field is code-driven. This keeps the AI's
+    // output JSON small and reliable, and lets us populate every entity type
+    // a CRM admin would expect to see in a populated tenant.
     const client = new Anthropic({ apiKey });
     const aiResponse = await client.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 4096,
+      max_tokens: 6000,
       messages: [{
         role: "user",
-        content: `You are a CRM data generator. Generate realistic demo data for a sales CRM based on this context:
-- Industry/product: ${industry}
-- Number of teams: ${teamCount}
-- Number of sales reps: ${repCount}
+        content: `You are generating realistic demo content for a Thai-language sales CRM.
 
-Generate JSON with this exact structure:
+Industry/product: ${industry}
+Number of teams: ${teamCount}
+Number of sales reps: ${repCount}
+
+Generate JSON with this EXACT shape. Only fill in names and labels — do NOT generate numbers, dates, or status fields.
+
 {
   "teams": [{ "teamName": "..." }],
-  "reps": [{ "fullName": "...", "email": "...", "teamIndex": 0 }],
+  "reps": [{ "fullName": "Thai full name", "email": "firstname.l@demo.thinkcrm.com", "teamIndex": 0 }],
+  "customerGroups": [{ "name": "...", "description": "..." }],
   "customers": [
     {
       "name": "...",
-      "customerCode": "...",
-      "contacts": [{ "name": "...", "position": "...", "tel": "...", "email": "..." }]
+      "groupIndex": 0,
+      "contacts": [{ "name": "...", "position": "..." }],
+      "addresses": [
+        { "line1": "...", "subDistrict": "...", "district": "...", "province": "...", "postalCode": "10330" }
+      ]
     }
   ],
-  "deals": [
-    {
-      "dealName": "...",
-      "customerIndex": 0,
-      "repIndex": 0,
-      "estimatedValue": 50000,
-      "stageOrder": 1,
-      "daysUntilFollowUp": 7
-    }
-  ],
-  "visits": [
-    {
-      "customerIndex": 0,
-      "repIndex": 0,
-      "daysFromNow": -3,
-      "objective": "...",
-      "visitType": "PLANNED",
-      "status": "CHECKED_OUT",
-      "result": "..."
-    }
-  ]
+  "items": [{ "name": "..." }],
+  "deals": [{ "dealName": "...", "customerIndex": 0, "repIndex": 0 }],
+  "prospects": [{ "displayName": "...", "siteAddress": "..." }],
+  "announcements": [{ "title": "...", "body": "..." }]
 }
 
-Rules:
-- Generate ${teamCount} teams with names fitting the "${industry}" industry
-- Generate ${repCount} reps with Thai names (mix of male/female), assign them to teams using teamIndex (0-based)
-- Generate 8-15 customers relevant to the industry, with realistic Thai company names and 1-2 contacts each
-- Customer codes should be like "C001", "C002", etc.
-- Generate 10-20 deals across different stages (stageOrder: 1=Opportunity, 2=Quotation, 3=Won, 4=Lost)
-- Generate 15-25 visits with a mix of statuses (PLANNED for future, CHECKED_OUT for past with results)
-- Use realistic Thai baht values for deals (10,000 - 5,000,000)
-- Rep emails should be firstname.l@demo.thinkcrm.com format
-- For visits with daysFromNow < 0 (past), status should be "CHECKED_OUT" with a result
-- For visits with daysFromNow >= 0 (future), status should be "PLANNED" with no result
+Counts:
+- teams: exactly ${teamCount} (names fitting "${industry}", in Thai)
+- reps: exactly ${repCount} (Thai full names; emails like somchai.p@demo.thinkcrm.com; spread across teams via teamIndex 0..${teamCount - 1})
+- customerGroups: exactly 3 (e.g. "ลูกค้าพรีเมียม"/"Premium", "ลูกค้าทั่วไป"/"Standard", "ตัวแทนจำหน่าย"/"Distributor")
+- customers: exactly 12, each with 1–2 contacts and exactly 1 Thai address (line1 non-empty)
+- items: exactly 10 (product or service names fitting the industry)
+- deals: exactly 15 (dealName format like "{customerName} – {product or service}")
+- prospects: exactly 4 (unidentified sites a rep drove past — construction sites, new shops, etc.)
+- announcements: exactly 2 (e.g. welcome message, policy update)
 
-Respond ONLY with valid JSON, no markdown or explanation.`
+Use a believable mix of Thai company / contact / item names. Respond with ONLY the JSON object, no markdown.`
       }]
     });
 
@@ -796,44 +821,89 @@ Respond ONLY with valid JSON, no markdown or explanation.`
       throw app.httpErrors.internalServerError("AI failed to generate valid demo data. Please try again.");
     }
 
-    let demoData: {
-      teams: Array<{ teamName: string }>;
-      reps: Array<{ fullName: string; email: string; teamIndex: number }>;
-      customers: Array<{ name: string; customerCode: string; contacts: Array<{ name: string; position: string; tel?: string; email?: string }> }>;
-      deals: Array<{ dealName: string; customerIndex: number; repIndex: number; estimatedValue: number; stageOrder: number; daysUntilFollowUp: number }>;
-      visits: Array<{ customerIndex: number; repIndex: number; daysFromNow: number; objective?: string; visitType: string; status: string; result?: string }>;
+    type DemoPayload = {
+      teams: { teamName: string }[];
+      reps: { fullName: string; email: string; teamIndex: number }[];
+      customerGroups: { name: string; description?: string }[];
+      customers: {
+        name: string;
+        groupIndex?: number;
+        contacts: { name: string; position: string }[];
+        addresses: { line1: string; subDistrict?: string; district?: string; province?: string; postalCode?: string }[];
+      }[];
+      items: { name: string }[];
+      deals: { dealName: string; customerIndex: number; repIndex: number }[];
+      prospects: { displayName: string; siteAddress?: string }[];
+      announcements: { title: string; body: string }[];
     };
 
+    let demoData: DemoPayload;
     try {
       demoData = JSON.parse(jsonMatch[0]);
     } catch {
       throw app.httpErrors.internalServerError("AI returned malformed JSON. Please try again.");
     }
 
-    // Insert everything in a transaction
+    // ── Code-driven structural helpers ─────────────────────────────────────
+    const rand = (min: number, max: number) => Math.floor(Math.random() * (max - min + 1)) + min;
+    const pick = <T,>(arr: T[]): T => arr[rand(0, arr.length - 1)]!;
+    // Rough Bangkok bounding box — close enough for demo lat/lng.
+    const bkkLat = () => 13.65 + Math.random() * 0.20;
+    const bkkLng = () => 100.45 + Math.random() * 0.20;
+    const monthKey = (offsetMonths: number) => {
+      const d = new Date();
+      d.setMonth(d.getMonth() + offsetMonths);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    };
+    const PROGRESS_NOTES = [
+      "Initial call — customer interested, requested proposal.",
+      "Sent quotation, awaiting feedback.",
+      "Customer requested follow-up next week.",
+      "Negotiating final terms.",
+      "Approval pending from customer's procurement team.",
+      "On-site demo completed; positive reception.",
+      "Sent revised quote with updated discount."
+    ];
+    const VISIT_OBJECTIVES = ["Demo product", "Follow-up call", "Negotiate terms", "Annual review", "New product intro"];
+    const VISIT_RESULTS = ["Productive meeting, agreed on next steps", "Customer requested more info", "Closed on quotation", "Will revisit next quarter"];
+    const COVISIT_NOTES = ["Rep handled objections well.", "Strong product knowledge.", "Could improve closing technique.", "Good rapport with the customer."];
+
+    // Insert everything in a transaction — atomic, so partial failures roll back.
     const result = await prisma.$transaction(async (tx) => {
-      // 1. Ensure a default payment term exists for this tenant (used by Quotations).
-      const existingTerm = await tx.paymentTerm.findFirst({ where: { tenantId } });
-      if (!existingTerm) {
-        await tx.paymentTerm.create({
+      // a) Ensure a NET30 payment term (needed by Quotation).
+      let paymentTerm = await tx.paymentTerm.findFirst({ where: { tenantId } });
+      if (!paymentTerm) {
+        paymentTerm = await tx.paymentTerm.create({
           data: { tenantId, code: "NET30", name: "Net 30", dueDays: 30 }
         });
       }
 
-      // 2. Create teams
-      const createdTeams: Array<{ id: string; teamName: string }> = [];
+      // b) Deal stages must already be seeded for the tenant.
+      const stages = await tx.dealStage.findMany({
+        where: { tenantId },
+        orderBy: { stageOrder: "asc" }
+      });
+      if (stages.length === 0) {
+        throw new Error("No deal stages configured");
+      }
+      const wonStage = stages.find(s => s.isClosedWon) ?? stages[stages.length - 1]!;
+      const lostStage = stages.find(s => s.isClosedLost) ?? stages[stages.length - 1]!;
+      const openStages = stages.filter(s => !s.isClosedWon && !s.isClosedLost);
+      const fallbackOpen = openStages.length ? openStages : [stages[0]!];
+
+      // c) Teams
+      const createdTeams: { id: string; teamName: string }[] = [];
       for (const t of demoData.teams) {
-        const team = await tx.team.create({
+        createdTeams.push(await tx.team.create({
           data: { tenantId, teamName: t.teamName, isDemo: true }
-        });
-        createdTeams.push(team);
+        }));
       }
 
-      // 3. Create rep users
-      const createdReps: Array<{ id: string; fullName: string }> = [];
+      // d) Reps
+      const createdReps: { id: string; fullName: string }[] = [];
       for (const r of demoData.reps) {
-        const teamIdx = Math.min(r.teamIndex, createdTeams.length - 1);
-        const rep = await tx.user.create({
+        const teamIdx = Math.min(Math.max(r.teamIndex ?? 0, 0), createdTeams.length - 1);
+        createdReps.push(await tx.user.create({
           data: {
             tenantId,
             email: r.email,
@@ -844,121 +914,335 @@ Respond ONLY with valid JSON, no markdown or explanation.`
             isDemo: true,
             teamId: createdTeams[teamIdx]?.id ?? null
           }
-        });
-        createdReps.push(rep);
+        }));
       }
 
-      // 4. Create customers
+      // e) KPI targets — current month + previous month for every rep.
+      let kpiCount = 0;
+      for (const rep of createdReps) {
+        for (const offset of [-1, 0]) {
+          await tx.salesKpiTarget.create({
+            data: {
+              tenantId,
+              userId: rep.id,
+              targetMonth: monthKey(offset),
+              visitTargetCount: rand(20, 40),
+              newDealValueTarget: rand(300_000, 1_000_000),
+              revenueTarget: rand(500_000, 2_000_000)
+            }
+          });
+          kpiCount++;
+        }
+      }
+
+      // f) Customer groups
+      const createdGroups: { id: string }[] = [];
+      for (let i = 0; i < demoData.customerGroups.length; i++) {
+        const g = demoData.customerGroups[i]!;
+        createdGroups.push(await tx.customerGroup.create({
+          data: {
+            tenantId,
+            code: `DEMO-CG-${String(i + 1).padStart(2, "0")}`,
+            name: g.name,
+            description: g.description ?? null,
+            isDemo: true
+          }
+        }));
+      }
+
+      // g) Customers + addresses + contacts
       const existingCustomerCount = await tx.customer.count({ where: { tenantId } });
-      const createdCustomers: Array<{ id: string; name: string }> = [];
+      const createdCustomers: { id: string; name: string; addressIds: string[] }[] = [];
       for (let i = 0; i < demoData.customers.length; i++) {
         const c = demoData.customers[i]!;
         const code = `DEMO-${String(existingCustomerCount + i + 1).padStart(4, "0")}`;
+        const groupId = (c.groupIndex != null && createdGroups[c.groupIndex])
+          ? createdGroups[c.groupIndex]!.id
+          : (createdGroups.length ? pick(createdGroups).id : null);
         const customer = await tx.customer.create({
           data: {
             tenantId,
             customerCode: code,
             name: c.name,
+            customerGroupId: groupId,
+            siteLat: bkkLat(),
+            siteLng: bkkLng(),
             isDemo: true
           }
         });
         for (const contact of (c.contacts ?? [])) {
           await tx.customerContact.create({
-            data: {
-              customerId: customer.id,
-              name: contact.name,
-              position: contact.position,
-              tel: contact.tel ?? null,
-              email: contact.email ?? null
-            }
+            data: { customerId: customer.id, name: contact.name, position: contact.position }
           });
         }
-        createdCustomers.push(customer);
+        const addressIds: string[] = [];
+        for (let aidx = 0; aidx < (c.addresses ?? []).length; aidx++) {
+          const a = c.addresses[aidx]!;
+          const addr = await tx.customerAddress.create({
+            data: {
+              customerId: customer.id,
+              addressLine1: a.line1 || `${c.name} HQ`,
+              subDistrict: a.subDistrict ?? null,
+              district: a.district ?? null,
+              province: a.province ?? "Bangkok",
+              postalCode: a.postalCode ?? null,
+              country: "Thailand",
+              latitude: bkkLat(),
+              longitude: bkkLng(),
+              isDefaultBilling: aidx === 0,
+              isDefaultShipping: aidx === 0
+            }
+          });
+          addressIds.push(addr.id);
+        }
+        createdCustomers.push({ id: customer.id, name: customer.name, addressIds });
       }
 
-      // 5. Get deal stages
-      const stages = await tx.dealStage.findMany({
-        where: { tenantId },
-        orderBy: { stageOrder: "asc" }
-      });
-      if (stages.length === 0) {
-        throw new Error("No deal stages configured");
+      // h) Items
+      const createdItems: { id: string; itemCode: string; unitPrice: number }[] = [];
+      for (let i = 0; i < demoData.items.length; i++) {
+        const it = demoData.items[i]!;
+        const unitPrice = rand(5_000, 250_000);
+        createdItems.push(await tx.item.create({
+          data: {
+            tenantId,
+            itemCode: `DEMO-ITM-${String(i + 1).padStart(3, "0")}`,
+            name: it.name,
+            unitPrice,
+            isDemo: true
+          }
+        }));
       }
 
-      // 6. Create deals
+      // i) Deals — code chooses stage / value / dates. Roughly 50% open, 30% won, 20% lost.
       const existingDealCount = await tx.deal.count({ where: { tenantId } });
-      const createdDeals: Array<{ id: string }> = [];
+      type DemoDealRow = { id: string; customerId: string; status: "OPEN" | "WON" | "LOST" };
+      const createdDeals: DemoDealRow[] = [];
       for (let i = 0; i < demoData.deals.length; i++) {
         const d = demoData.deals[i]!;
-        const custIdx = Math.min(d.customerIndex, createdCustomers.length - 1);
-        const repIdx = Math.min(d.repIndex, createdReps.length - 1);
-        const rep = createdReps[repIdx];
-        const cust = createdCustomers[custIdx];
-        const stage = stages.find(s => s.stageOrder === d.stageOrder) ?? stages[0]!;
-        if (!rep || !cust) continue;
-        const dealNo = `D-${String(existingDealCount + i + 1).padStart(6, "0")}`;
+        const cust = createdCustomers[Math.min(Math.max(d.customerIndex ?? 0, 0), createdCustomers.length - 1)];
+        const rep = createdReps[Math.min(Math.max(d.repIndex ?? 0, 0), createdReps.length - 1)];
+        if (!cust || !rep) continue;
+        const roll = Math.random();
+        const stage = roll < 0.5 ? pick(fallbackOpen) : roll < 0.8 ? wonStage : lostStage;
+        const status: "OPEN" | "WON" | "LOST" = stage.isClosedWon ? "WON" : stage.isClosedLost ? "LOST" : "OPEN";
         const followUp = new Date();
-        followUp.setDate(followUp.getDate() + (d.daysUntilFollowUp ?? 7));
+        followUp.setDate(followUp.getDate() + rand(3, 21));
+        const closedAt = status === "OPEN" ? null : new Date(Date.now() - rand(1, 30) * 86_400_000);
 
         const deal = await tx.deal.create({
           data: {
             tenantId,
             ownerId: rep.id,
-            dealNo,
+            dealNo: `D-${String(existingDealCount + i + 1).padStart(6, "0")}`,
             dealName: d.dealName,
             customerId: cust.id,
             stageId: stage.id,
-            estimatedValue: d.estimatedValue,
+            estimatedValue: rand(50_000, 2_500_000),
             followUpAt: followUp,
-            status: stage.isClosedWon ? "WON" : stage.isClosedLost ? "LOST" : "OPEN",
-            closedAt: (stage.isClosedWon || stage.isClosedLost) ? new Date() : null,
+            status,
+            closedAt,
             isDemo: true
           }
         });
-        createdDeals.push(deal);
+        createdDeals.push({ id: deal.id, customerId: cust.id, status });
       }
 
-      // 7. Create visits
+      // j) Deal progress updates — 1-3 per OPEN deal.
+      let dealUpdateCount = 0;
+      for (const deal of createdDeals.filter(d => d.status === "OPEN")) {
+        const updates = rand(1, 3);
+        for (let u = 0; u < updates; u++) {
+          await tx.dealProgressUpdate.create({
+            data: {
+              dealId: deal.id,
+              createdById: pick(createdReps).id,
+              note: pick(PROGRESS_NOTES),
+              createdAt: new Date(Date.now() - rand(1, 30) * 86_400_000)
+            }
+          });
+          dealUpdateCount++;
+        }
+      }
+
+      // k) Quotations + line items — every WON deal, plus 50% of OPEN deals.
+      const existingQuoteCount = await tx.quotation.count({ where: { tenantId } });
+      let quoteIdx = 0;
+      let quoteItemCount = 0;
+      for (const deal of createdDeals) {
+        const needsQuote = deal.status === "WON" || (deal.status === "OPEN" && Math.random() < 0.5);
+        if (!needsQuote || !createdItems.length) continue;
+        const custInfo = createdCustomers.find(c => c.id === deal.customerId);
+        const billingAddressId = custInfo?.addressIds[0] ?? null;
+        const items = Array.from({ length: rand(2, 5) }, () => pick(createdItems));
+        let subtotal = 0;
+        const itemLines = items.map(it => {
+          const qty = rand(1, 5);
+          const discountPercent = pick([0, 0, 0, 5, 10]);
+          const netPricePerUnit = it.unitPrice * (1 - discountPercent / 100);
+          const totalPrice = netPricePerUnit * qty;
+          subtotal += totalPrice;
+          return { itemId: it.id, itemCode: it.itemCode, unitPrice: it.unitPrice, discountPercent, netPricePerUnit, quantity: qty, totalPrice };
+        });
+        const vatRate = 7;
+        const vatAmount = subtotal * (vatRate / 100);
+        const grandTotal = subtotal + vatAmount;
+        const validTo = new Date();
+        validTo.setDate(validTo.getDate() + 30);
+
+        const quote = await tx.quotation.create({
+          data: {
+            tenantId,
+            dealId: deal.id,
+            quotationNo: `DEMO-Q-${String(existingQuoteCount + quoteIdx + 1).padStart(5, "0")}`,
+            customerId: deal.customerId,
+            paymentTermId: paymentTerm.id,
+            billingAddressId,
+            shippingAddressId: billingAddressId,
+            validTo,
+            status: deal.status === "WON" ? "ACCEPTED" : "SENT",
+            subtotal,
+            vatRate,
+            vatAmount,
+            grandTotal
+          }
+        });
+        for (const ln of itemLines) {
+          await tx.quotationItem.create({ data: { quotationId: quote.id, ...ln } });
+          quoteItemCount++;
+        }
+        quoteIdx++;
+      }
+
+      // l) Visits — code-driven mix of past CHECKED_OUT and future PLANNED.
       const existingVisitCount = await tx.visit.count({ where: { tenantId } });
-      let visitIdx = 0;
-      for (const v of demoData.visits) {
-        const custIdx = Math.min(v.customerIndex, createdCustomers.length - 1);
-        const repIdx = Math.min(v.repIndex, createdReps.length - 1);
-        const rep = createdReps[repIdx];
-        const cust = createdCustomers[custIdx];
-        if (!rep || !cust) continue;
-        const visitNo = `V-${String(existingVisitCount + visitIdx + 1).padStart(6, "0")}`;
+      const VISIT_COUNT = Math.min(25, Math.max(15, createdCustomers.length * 2));
+      const visitIds: string[] = [];
+      let visitsIdx = 0;
+      for (let i = 0; i < VISIT_COUNT; i++) {
+        const cust = pick(createdCustomers);
+        const rep = pick(createdReps);
+        if (!cust || !rep) continue;
+        const daysFromNow = rand(-30, 14);
         const plannedAt = new Date();
-        plannedAt.setDate(plannedAt.getDate() + (v.daysFromNow ?? 0));
-
-        const isPast = (v.daysFromNow ?? 0) < 0;
-        const visitStatus = isPast ? "CHECKED_OUT" : "PLANNED";
-
-        await tx.visit.create({
+        plannedAt.setDate(plannedAt.getDate() + daysFromNow);
+        const isPast = daysFromNow < 0;
+        const visit = await tx.visit.create({
           data: {
             tenantId,
             repId: rep.id,
             customerId: cust.id,
-            visitNo,
-            visitType: v.visitType === "UNPLANNED" ? "UNPLANNED" : "PLANNED",
-            status: visitStatus,
+            visitNo: `V-${String(existingVisitCount + visitsIdx + 1).padStart(6, "0")}`,
+            visitType: Math.random() < 0.8 ? "PLANNED" : "UNPLANNED",
+            status: isPast ? "CHECKED_OUT" : "PLANNED",
             plannedAt,
-            objective: v.objective ?? null,
+            objective: pick(VISIT_OBJECTIVES),
             checkInAt: isPast ? new Date(plannedAt.getTime() + 5 * 60_000) : null,
+            checkInLat: isPast ? bkkLat() : null,
+            checkInLng: isPast ? bkkLng() : null,
             checkOutAt: isPast ? new Date(plannedAt.getTime() + 45 * 60_000) : null,
-            result: isPast ? (v.result ?? "Completed visit") : null,
+            result: isPast ? pick(VISIT_RESULTS) : null,
             isDemo: true
           }
         });
-        visitIdx++;
+        visitIds.push(visit.id);
+        visitsIdx++;
+      }
+
+      // m) Visit co-visitors — supervisor joins 30% of past visits.
+      let coVisitorCount = 0;
+      if (createdReps.length > 1 && visitIds.length) {
+        const pastVisits = await tx.visit.findMany({
+          where: { id: { in: visitIds }, status: "CHECKED_OUT" },
+          select: { id: true, repId: true, checkInAt: true }
+        });
+        for (const v of pastVisits) {
+          if (Math.random() > 0.3) continue;
+          const others = createdReps.filter(r => r.id !== v.repId);
+          if (!others.length) continue;
+          await tx.visitCoVisitor.create({
+            data: {
+              tenantId,
+              visitId: v.id,
+              coVisitorUserId: pick(others).id,
+              checkInAt: v.checkInAt,
+              checkInLat: bkkLat(),
+              checkInLng: bkkLng(),
+              evalScore: rand(3, 5),
+              evalNotes: pick(COVISIT_NOTES),
+              evalReleasedAt: new Date()
+            }
+          });
+          coVisitorCount++;
+        }
+      }
+
+      // n) Prospects + one photo each.
+      const createdProspects: { id: string }[] = [];
+      for (let i = 0; i < demoData.prospects.length; i++) {
+        const p = demoData.prospects[i]!;
+        const creator = pick(createdReps);
+        const prospect = await tx.prospect.create({
+          data: {
+            tenantId,
+            status: "UNIDENTIFIED",
+            displayName: p.displayName,
+            siteAddress: p.siteAddress ?? null,
+            siteLat: bkkLat(),
+            siteLng: bkkLng(),
+            createdById: creator.id,
+            createdAt: new Date(Date.now() - rand(1, 14) * 86_400_000),
+            isDemo: true
+          }
+        });
+        await tx.prospectPhoto.create({
+          data: {
+            prospectId: prospect.id,
+            tenantId,
+            // objectRef is required; use a demo placeholder so the frontend's
+            // image renderer can fall back to a generic icon when it can't
+            // resolve a real signed URL.
+            objectRef: `demo://prospect-${i + 1}-photo-1.jpg`,
+            caption: "Site photo",
+            uploadedById: creator.id
+          }
+        });
+        createdProspects.push(prospect);
+      }
+
+      // o) Announcements
+      let announcementCount = 0;
+      const author = createdReps[0]?.id ?? null;
+      for (const a of demoData.announcements) {
+        await tx.announcement.create({
+          data: {
+            tenantId,
+            title: a.title,
+            body: a.body,
+            roles: [],
+            createdById: author,
+            isDemo: true
+          }
+        });
+        announcementCount++;
       }
 
       return {
         teams: createdTeams.length,
         reps: createdReps.length,
+        kpiTargets: kpiCount,
+        customerGroups: createdGroups.length,
         customers: createdCustomers.length,
+        addresses: createdCustomers.reduce((n, c) => n + c.addressIds.length, 0),
+        items: createdItems.length,
         deals: createdDeals.length,
-        visits: visitIdx
+        dealUpdates: dealUpdateCount,
+        quotations: quoteIdx,
+        quotationItems: quoteItemCount,
+        visits: visitsIdx,
+        coVisitors: coVisitorCount,
+        prospects: createdProspects.length,
+        announcements: announcementCount
       };
     });
 
@@ -986,11 +1270,43 @@ Respond ONLY with valid JSON, no markdown or explanation.`
     requireRoleAtLeast(request, UserRole.ADMIN);
     assertTenantPathAccess(request, tenantId);
 
-    // Delete in correct order (visits → deals → customers → users → teams) to respect FK constraints
-    const [visits, deals, customers, users, teams] = await prisma.$transaction([
+    // KPI targets have no FK relation to User (just a userId string), so we
+    // resolve demo user IDs up-front to scope the cleanup.
+    const demoUserIds = (await prisma.user.findMany({
+      where: { tenantId, isDemo: true },
+      select: { id: true }
+    })).map(u => u.id);
+
+    // Order matters — every deleteMany must run BEFORE any of its onDelete:Restrict
+    // parents are removed. Cascade-only children (QuotationItem, ProspectPhoto,
+    // CustomerAddress, CustomerContact, AnnouncementAck) are removed implicitly
+    // when their parent row is deleted, so we don't list them.
+    const [
+      kpiTargets,
+      progressUpdates,
+      coVisitors,
+      quotations,
+      visits,
+      prospects,
+      deals,
+      customers,
+      announcements,
+      items,
+      customerGroups,
+      users,
+      teams
+    ] = await prisma.$transaction([
+      prisma.salesKpiTarget.deleteMany({ where: { tenantId, userId: { in: demoUserIds } } }),
+      prisma.dealProgressUpdate.deleteMany({ where: { deal: { tenantId, isDemo: true } } }),
+      prisma.visitCoVisitor.deleteMany({ where: { tenantId, visit: { isDemo: true } } }),
+      prisma.quotation.deleteMany({ where: { tenantId, customer: { isDemo: true } } }),
       prisma.visit.deleteMany({ where: { tenantId, isDemo: true } }),
+      prisma.prospect.deleteMany({ where: { tenantId, isDemo: true } }),
       prisma.deal.deleteMany({ where: { tenantId, isDemo: true } }),
       prisma.customer.deleteMany({ where: { tenantId, isDemo: true } }),
+      prisma.announcement.deleteMany({ where: { tenantId, isDemo: true } }),
+      prisma.item.deleteMany({ where: { tenantId, isDemo: true } }),
+      prisma.customerGroup.deleteMany({ where: { tenantId, isDemo: true } }),
       prisma.user.deleteMany({ where: { tenantId, isDemo: true } }),
       prisma.team.deleteMany({ where: { tenantId, isDemo: true } })
     ]);
@@ -999,9 +1315,17 @@ Respond ONLY with valid JSON, no markdown or explanation.`
       ok: true,
       message: "All demo data has been deleted.",
       deleted: {
+        kpiTargets: kpiTargets.count,
+        progressUpdates: progressUpdates.count,
+        coVisitors: coVisitors.count,
+        quotations: quotations.count,
         visits: visits.count,
+        prospects: prospects.count,
         deals: deals.count,
         customers: customers.count,
+        announcements: announcements.count,
+        items: items.count,
+        customerGroups: customerGroups.count,
         users: users.count,
         teams: teams.count
       }
