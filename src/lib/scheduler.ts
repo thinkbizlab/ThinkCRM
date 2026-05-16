@@ -353,7 +353,15 @@ export async function startScheduler(): Promise<void> {
         where: { createdAt: { lt: oneDayAgo } },
       });
 
-      console.log(`[scheduler] data-retention: audit deleted=${deleted.count} anonymized=${anonymized.count}, tokens purged=${purgedTokens.count}, challenges purged=${purgedChallenges.count}, client-requests purged=${purgedClientRequests.count}`);
+      // Mobile discard analytics — 90 days is enough to spot quarterly trends
+      // without growing unbounded. Older events get archived externally if
+      // anyone wants long-tail analytics.
+      const ninetyDaysAgo = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+      const purgedDiscards = await prisma.syncDiscardEvent.deleteMany({
+        where: { createdAt: { lt: ninetyDaysAgo } },
+      });
+
+      console.log(`[scheduler] data-retention: audit deleted=${deleted.count} anonymized=${anonymized.count}, tokens purged=${purgedTokens.count}, challenges purged=${purgedChallenges.count}, client-requests purged=${purgedClientRequests.count}, sync-discards purged=${purgedDiscards.count}`);
     } catch (err) {
       console.error("[scheduler] data-retention job error", err);
     }

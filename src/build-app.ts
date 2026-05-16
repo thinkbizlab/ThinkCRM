@@ -102,6 +102,7 @@ import { config } from "./config.js";
 import { authRoutes } from "./modules/auth/routes.js";
 import { billingRoutes } from "./modules/billing/routes.js";
 import { syncRoutes } from "./modules/sync/routes.js";
+import { mobileDiscardRoutes } from "./modules/sync/mobile-discards.routes.js";
 import { cronRoutes } from "./modules/cron/routes.js";
 import { superAdminRoutes } from "./modules/super-admin/routes.js";
 import { announcementRoutes } from "./modules/announcements/routes.js";
@@ -362,6 +363,7 @@ export async function buildApp() {
   await app.register(settingsRoutes, { prefix: "/api/v1" });
   await app.register(apiFirstRoutes, { prefix: "/api/v1" });
   await app.register(syncRoutes, { prefix: "/api/v1" });
+  await app.register(mobileDiscardRoutes, { prefix: "/api/v1" });
   await app.register(cronRoutes, { prefix: "/api/v1" });
   await app.register(superAdminRoutes, { prefix: "/api/v1" });
   await app.register(announcementRoutes, { prefix: "/api/v1" });

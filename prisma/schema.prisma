@@ -85,6 +85,7 @@ model Tenant {
   announcements               Announcement[]
   announcementAcks            AnnouncementAck[]
   clientRequestLogs           ClientRequestLog[]
+  syncDiscardEvents           SyncDiscardEvent[]
 }
 
 model User {
@@ -1396,6 +1397,29 @@ model OAuthState {
   expiresAt  DateTime
 
   @@index([expiresAt])
+}
+
+// Mobile sync-queue discard event. When a rep manually discards a permanently
+// failed offline action (4xx that exhausted retries), the client posts here so
+// admins can answer "what classes of errors are landing in the failure bucket".
+// Pruned by the data-retention cron after 90 days — enough to spot quarterly
+// trends without growing unbounded.
+model SyncDiscardEvent {
+  id               String   @id @default(cuid())
+  tenantId         String
+  userId           String
+  kind             String   // "visit_checkin" | "visit_checkout"
+  visitId          String
+  retryCount       Int
+  lastError        String?  // truncated client-side to 500 chars
+  queuedDurationMs Int      // createdAt → discardedAt span
+  platform         String   // "IOS" | "ANDROID"
+  createdAt        DateTime @default(now())
+
+  tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, kind, createdAt])
 }
 
 // Idempotency log for mobile clients. When the offline-sync queue replays a

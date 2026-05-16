@@ -225,6 +225,24 @@ data class TargetVsActual(
     data class Triple(val visits: Double, val newDealValue: Double, val revenue: Double)
 }
 
+// MARK: Mobile sync analytics
+
+@Serializable
+data class SyncDiscardEvent(
+    val kind: String,                  // "visit_checkin" | "visit_checkout"
+    val visitId: String,
+    val retryCount: Int,
+    val lastError: String? = null,
+    val queuedDurationMs: Int,
+    val platform: String               // "ANDROID"
+)
+
+@Serializable
+data class SyncDiscardBatch(val events: List<SyncDiscardEvent>)
+
+@Serializable
+data class SyncDiscardPostResponse(val inserted: Int)
+
 @Serializable
 data class TeamPerformanceRow(
     val teamId: String,

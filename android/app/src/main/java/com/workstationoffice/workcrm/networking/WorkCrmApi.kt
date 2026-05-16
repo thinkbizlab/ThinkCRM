@@ -95,4 +95,9 @@ interface WorkCrmApi {
         @Query("repId") repId: String? = null,
         @Query("teamId") teamId: String? = null
     ): DashboardOverview
+
+    // Mobile sync analytics — best-effort POST when a rep discards a row
+    // that exhausted retries. Backend caps the batch at 50 events.
+    @POST("sync/discards")
+    suspend fun postSyncDiscards(@Body body: SyncDiscardBatch): SyncDiscardPostResponse
 }

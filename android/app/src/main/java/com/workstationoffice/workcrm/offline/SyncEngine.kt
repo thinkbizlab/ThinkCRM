@@ -24,6 +24,24 @@ import retrofit2.HttpException
 object SyncEngine {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
+    /**
+     * Reset a row so it's eligible immediately and clear its backoff/error
+     * state, then schedule a drain. Used by the "Retry now" button on the
+     * Sync Status screen — drain() alone wouldn't pick up a permanently-failed
+     * row since the failure path pushed nextEligibleAt 24h into the future.
+     */
+    suspend fun retryNow(context: Context, actionId: String) {
+        val dao = OfflineDatabase.get().pendingActionDao()
+        val row = dao.listAll().firstOrNull { it.id == actionId } ?: return
+        dao.update(row.copy(
+            retryCount     = 0,
+            lastError      = null,
+            lastAttemptAt  = null,
+            nextEligibleAt = System.currentTimeMillis()
+        ))
+        scheduleNow(context)
+    }
+
     /** Enqueue a one-time drain. Idempotent — APPEND_OR_REPLACE keeps the queue moving without duplicating runs. */
     fun scheduleNow(context: Context) {
         val request = OneTimeWorkRequestBuilder<SyncWorker>()

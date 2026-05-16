@@ -54,10 +54,30 @@ fun SyncStatusScreen() {
                         }
                         if (action.lastError != null && action.retryCount >= 3) {
                             Spacer(modifier = Modifier.height(8.dp))
-                            SecondaryButton(text = "Discard") {
-                                scope.launch {
-                                    OfflineDatabase.get().pendingActionDao().delete(action.id)
-                                    action.selfieFilename?.let { SelfieStore.delete(context, it) }
+                            // Retry now + Discard side-by-side. Retry resets
+                            // backoff and wakes the WorkManager job — useful
+                            // when the rep knows the server-side cause is
+                            // fixed (network came back, config corrected).
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Box(modifier = Modifier.weight(1f)) {
+                                    SecondaryButton(text = "Retry now") {
+                                        scope.launch {
+                                            SyncEngine.retryNow(context, action.id)
+                                        }
+                                    }
+                                }
+                                Box(modifier = Modifier.weight(1f)) {
+                                    SecondaryButton(text = "Discard") {
+                                        scope.launch {
+                                            // Capture state BEFORE delete so analytics gets the final
+                                            // retryCount + lastError snapshot.
+                                            val event = DiscardAnalytics.event(action)
+                                            OfflineDatabase.get().pendingActionDao().delete(action.id)
+                                            action.selfieFilename?.let { SelfieStore.delete(context, it) }
+                                            // Fire-and-forget POST — never blocks the UI.
+                                            launch { DiscardAnalytics.report(listOf(event)) }
+                                        }
+                                    }
                                 }
                             }
                         }

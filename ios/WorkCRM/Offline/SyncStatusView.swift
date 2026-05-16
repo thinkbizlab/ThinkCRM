@@ -95,15 +95,22 @@ private struct ActionRow: View {
                     .lineLimit(3)
             }
 
-            // Only offer discard once the row has visibly failed — otherwise
-            // a tap during normal exponential backoff would silently drop the
-            // user's check-in.
+            // Once a row has visibly failed, offer Retry now + Discard
+            // side-by-side. Retry resets backoff and wakes the engine —
+            // useful when the rep knows the server-side issue is fixed
+            // (e.g. tenant config corrected, network recovered).
             if action.lastError != nil && action.retryCount >= 3 {
-                Button("Discard", role: .destructive) {
-                    showingConfirm = true
+                HStack(spacing: Theme.Spacing.md) {
+                    Button("Retry now") {
+                        Task { await SyncEngine.shared.retryNow(actionId: action.id) }
+                    }
+                    .buttonStyle(SecondaryButtonStyle())
+
+                    Button("Discard", role: .destructive) {
+                        showingConfirm = true
+                    }
+                    .buttonStyle(SecondaryButtonStyle())
                 }
-                .buttonStyle(SecondaryButtonStyle())
-                .frame(maxWidth: 160)
             }
         }
         .card()
@@ -114,10 +121,15 @@ private struct ActionRow: View {
         ) {
             Button("Discard", role: .destructive) {
                 Task { @MainActor in
+                    // Capture the row state BEFORE removal so analytics
+                    // gets the final retryCount + lastError snapshot.
+                    let event = DiscardAnalytics.event(for: action)
                     PendingActionStore.shared.remove(id: action.id)
                     if case .checkIn(let p) = action.payload {
                         SelfieStore.shared.delete(filename: p.selfieFilename)
                     }
+                    // Fire-and-forget — never blocks the UI.
+                    Task.detached { await DiscardAnalytics.report([event]) }
                 }
             }
             Button(t(.commonCancel), role: .cancel) {}

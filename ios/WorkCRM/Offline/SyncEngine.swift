@@ -16,6 +16,22 @@ public actor SyncEngine {
 
     private init() {}
 
+    /// Reset a row so it's eligible immediately and clear its backoff/error
+    /// state. Used by the "Retry now" button on the Sync Status screen — we
+    /// don't just call drain() because a permanently-failed row has
+    /// nextEligibleAt 24h in the future from the failure path.
+    public func retryNow(actionId: String) async {
+        await MainActor.run {
+            guard let action = PendingActionStore.shared.actions.first(where: { $0.id == actionId }) else { return }
+            var reset = action
+            reset.retryCount = 0
+            reset.lastError = nil
+            reset.nextEligibleAt = Date()
+            PendingActionStore.shared.update(reset)
+        }
+        await drain()
+    }
+
     /// Process eligible rows in `createdAt ASC` order, one at a time. The
     /// per-row failure paths classify the response and either remove the row
     /// (success), reschedule it (transient), or mark it failed (permanent).
