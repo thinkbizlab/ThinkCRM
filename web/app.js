@@ -8624,6 +8624,11 @@ function renderSettings() {
         msg.style.color = "var(--clr-success)";
         btn.textContent = "Done";
         btn.disabled = true;
+        // Invalidate user-list caches so a subsequent visit to KPI / Team
+        // Structure / Roles re-fetches and includes the new rep.
+        state.cache.salesRepsLoaded = false;
+        state.cache.allUsersLoaded = false;
+        state.cache.tenantInfo = null;
         setTimeout(() => { close(); loadSettings(); }, 1500);
       } catch (err) {
         msg.textContent = err.message || "Failed to send invite.";
@@ -12099,6 +12104,7 @@ async function loadDashboardContext() {
     api("/teams")
   ]);
   state.cache.salesReps = salesReps;
+  state.cache.salesRepsLoaded = true;
   state.cache.teams = teams;
   state.cache.teamsLoaded = true;
 }
@@ -12142,8 +12148,11 @@ async function loadSettings(page = state.settingsPage || "my-profile", options =
     !state.cache.visitConfig ||
     !state.cache.masterApiLock
   );
-  const needsKpiTargets = page === "kpi-targets" && (force || !Array.isArray(state.cache.kpiTargets));
-  const needsSalesReps = page === "kpi-targets" && role !== "REP" && (force || !Array.isArray(state.cache.salesReps));
+  // Same caveat as teamsLoaded: state.cache.kpiTargets / salesReps initialize to [],
+  // so an Array.isArray check is always true and never re-fetches. Gate on the
+  // explicit loaded flags instead.
+  const needsKpiTargets = page === "kpi-targets" && (force || !state.cache.kpiTargetsLoaded);
+  const needsSalesReps = page === "kpi-targets" && role !== "REP" && (force || !state.cache.salesRepsLoaded);
   // state.cache.teams initializes to [] (see state.js), so Array.isArray is always
   // true at boot — we must gate on the explicit teamsLoaded flag instead, or the
   // team-structure / roles / my-profile pages never trigger their /teams fetch
@@ -12196,6 +12205,7 @@ async function loadSettings(page = state.settingsPage || "my-profile", options =
     requests.push(
       api("/kpi-targets").then((kpiTargets) => {
         state.cache.kpiTargets = kpiTargets;
+        state.cache.kpiTargetsLoaded = true;
       })
     );
   }
@@ -12203,6 +12213,7 @@ async function loadSettings(page = state.settingsPage || "my-profile", options =
     requests.push(
       api("/users/visible-reps").then((salesReps) => {
         state.cache.salesReps = salesReps;
+        state.cache.salesRepsLoaded = true;
       })
     );
   }
