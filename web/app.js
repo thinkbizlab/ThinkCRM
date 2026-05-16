@@ -12100,6 +12100,7 @@ async function loadDashboardContext() {
   ]);
   state.cache.salesReps = salesReps;
   state.cache.teams = teams;
+  state.cache.teamsLoaded = true;
 }
 
 async function loadCalendarContext() {
@@ -12143,7 +12144,11 @@ async function loadSettings(page = state.settingsPage || "my-profile", options =
   );
   const needsKpiTargets = page === "kpi-targets" && (force || !Array.isArray(state.cache.kpiTargets));
   const needsSalesReps = page === "kpi-targets" && role !== "REP" && (force || !Array.isArray(state.cache.salesReps));
-  const needsTeams = (page === "my-profile" || page === "team-structure" || page === "roles") && (force || !Array.isArray(state.cache.teams));
+  // state.cache.teams initializes to [] (see state.js), so Array.isArray is always
+  // true at boot — we must gate on the explicit teamsLoaded flag instead, or the
+  // team-structure / roles / my-profile pages never trigger their /teams fetch
+  // and the skeleton state never clears.
+  const needsTeams = (page === "my-profile" || page === "team-structure" || page === "roles") && (force || !state.cache.teamsLoaded);
   const needsTenantSummary = isAdmin && (page === "company" || page === "roles") && (
     force ||
     !Array.isArray(state.cache.allUsers) ||
