@@ -11865,21 +11865,26 @@ async function loadMaster(page = state.masterPage || "customers", options = {}) 
   const scopeParam = state.customerScope !== "mine"
     ? `?scope=${encodeURIComponent(state.customerScope)}`
     : "";
-  const customFieldDefinitions = state.cache.customFieldDefinitions || {};
-  const needsPaymentTerms = force || !Array.isArray(state.cache.paymentTerms);
-  const needsCustomers = force || !Array.isArray(state.cache.customers) || state.cache.customerScopeLoaded !== state.customerScope;
-  const needsItems = force || !Array.isArray(state.cache.items);
-  const needsCustomerGroups = force || !Array.isArray(state.cache.customerGroups);
-  const needsPaymentTermFields = force || !Array.isArray(customFieldDefinitions["payment-terms"]);
-  const needsCustomerFields = force || !Array.isArray(customFieldDefinitions.customers);
-  const needsItemFields = force || !Array.isArray(customFieldDefinitions.items);
-  const needsCustomerGroupFields = force || !Array.isArray(customFieldDefinitions["customer-groups"]);
+  // state.cache.{paymentTerms,customers,items,customerGroups,customFieldDefinitions[*]}
+  // all initialize to [] in state.js, so an `!Array.isArray(...)` gate always
+  // returns false even on a cold cache and the fetch never fires. Gate on
+  // explicit *Loaded flags instead, set inside each .then below.
+  const customFieldsLoaded = state.cache.customFieldsLoaded || {};
+  const needsPaymentTerms = force || !state.cache.paymentTermsLoaded;
+  const needsCustomers = force || !state.cache.customersLoaded || state.cache.customerScopeLoaded !== state.customerScope;
+  const needsItems = force || !state.cache.itemsLoaded;
+  const needsCustomerGroups = force || !state.cache.customerGroupsLoaded;
+  const needsPaymentTermFields = force || !customFieldsLoaded["payment-terms"];
+  const needsCustomerFields = force || !customFieldsLoaded.customers;
+  const needsItemFields = force || !customFieldsLoaded.items;
+  const needsCustomerGroupFields = force || !customFieldsLoaded["customer-groups"];
   const requests = [];
 
   if ((page === "customers" || page === "payment-terms") && needsPaymentTerms) {
     requests.push(
       api("/payment-terms").then((paymentTerms) => {
         state.cache.paymentTerms = paymentTerms;
+        state.cache.paymentTermsLoaded = true;
       })
     );
   }
@@ -11889,6 +11894,10 @@ async function loadMaster(page = state.masterPage || "customers", options = {}) 
         state.cache.customFieldDefinitions = {
           ...(state.cache.customFieldDefinitions || {}),
           "payment-terms": paymentTermCustomFields
+        };
+        state.cache.customFieldsLoaded = {
+          ...(state.cache.customFieldsLoaded || {}),
+          "payment-terms": true
         };
       })
     );
@@ -11902,6 +11911,7 @@ async function loadMaster(page = state.masterPage || "customers", options = {}) 
     requests.push(
       api(`/customers${scopeParam}`).then((customers) => {
         state.cache.customers = customers;
+        state.cache.customersLoaded = true;
         state.cache.customerScopeLoaded = state.customerScope;
       })
     );
@@ -11927,6 +11937,7 @@ async function loadMaster(page = state.masterPage || "customers", options = {}) 
     requests.push(
       api("/customer-groups").then((customerGroups) => {
         state.cache.customerGroups = customerGroups;
+        state.cache.customerGroupsLoaded = true;
       })
     );
   }
@@ -11936,6 +11947,10 @@ async function loadMaster(page = state.masterPage || "customers", options = {}) 
         state.cache.customFieldDefinitions = {
           ...(state.cache.customFieldDefinitions || {}),
           customers: customerCustomFields
+        };
+        state.cache.customFieldsLoaded = {
+          ...(state.cache.customFieldsLoaded || {}),
+          customers: true
         };
       })
     );
@@ -11947,6 +11962,10 @@ async function loadMaster(page = state.masterPage || "customers", options = {}) 
           ...(state.cache.customFieldDefinitions || {}),
           "customer-groups": customerGroupCustomFields
         };
+        state.cache.customFieldsLoaded = {
+          ...(state.cache.customFieldsLoaded || {}),
+          "customer-groups": true
+        };
       })
     );
   }
@@ -11955,6 +11974,7 @@ async function loadMaster(page = state.masterPage || "customers", options = {}) 
     requests.push(
       api("/items").then((items) => {
         state.cache.items = items;
+        state.cache.itemsLoaded = true;
       })
     );
   }
@@ -11965,6 +11985,10 @@ async function loadMaster(page = state.masterPage || "customers", options = {}) 
           ...(state.cache.customFieldDefinitions || {}),
           items: itemCustomFields
         };
+        state.cache.customFieldsLoaded = {
+          ...(state.cache.customFieldsLoaded || {}),
+          items: true
+        };
       })
     );
   }
@@ -11973,6 +11997,7 @@ async function loadMaster(page = state.masterPage || "customers", options = {}) 
     requests.push(
       api("/customer-groups").then((customerGroups) => {
         state.cache.customerGroups = customerGroups;
+        state.cache.customerGroupsLoaded = true;
       })
     );
   }
@@ -11982,6 +12007,10 @@ async function loadMaster(page = state.masterPage || "customers", options = {}) 
         state.cache.customFieldDefinitions = {
           ...(state.cache.customFieldDefinitions || {}),
           "customer-groups": customerGroupCustomFields
+        };
+        state.cache.customFieldsLoaded = {
+          ...(state.cache.customFieldsLoaded || {}),
+          "customer-groups": true
         };
       })
     );
@@ -12163,12 +12192,10 @@ async function loadSettings(page = state.settingsPage || "my-profile", options =
     !Array.isArray(state.cache.allUsers) ||
     !state.cache.tenantInfo
   );
-  const needsIntegrationCredentials = page === "integrations" && isManager && (
-    force ||
-    !Array.isArray(state.cache.integrationCredentials)
-  );
+  // Same [] init / Array.isArray issue — gate on explicit loaded flags.
+  const needsIntegrationCredentials = page === "integrations" && isManager && (force || !state.cache.integrationCredentialsLoaded);
   const needsDelegationData = page === "roles" && isAdmin && (force || !state.cache.delegationsLoaded);
-  const needsPendingInvites = page === "roles" && isAdmin && (force || !Array.isArray(state.cache.pendingInvites));
+  const needsPendingInvites = page === "roles" && isAdmin && (force || !state.cache.pendingInvitesLoaded);
   const needsSyncData = isAdmin && page === "data-sync" && (
     force ||
     !Array.isArray(state.cache.syncApiKeys) ||
@@ -12244,6 +12271,7 @@ async function loadSettings(page = state.settingsPage || "my-profile", options =
     requests.push(
       api(`/tenants/${tenantId}/integrations/credentials`).then((integrationCredentials) => {
         state.cache.integrationCredentials = integrationCredentials;
+        state.cache.integrationCredentialsLoaded = true;
       })
     );
   }
@@ -12251,7 +12279,8 @@ async function loadSettings(page = state.settingsPage || "my-profile", options =
     requests.push(
       api("/users/pending-invites").then((invites) => {
         state.cache.pendingInvites = invites;
-      }).catch(() => { state.cache.pendingInvites = []; })
+        state.cache.pendingInvitesLoaded = true;
+      }).catch(() => { state.cache.pendingInvites = []; state.cache.pendingInvitesLoaded = true; })
     );
   }
 
