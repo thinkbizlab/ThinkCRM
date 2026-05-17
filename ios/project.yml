@@ -50,6 +50,7 @@ targets:
         NSCameraUsageDescription: WorkCRM uses the camera to capture a check-in selfie when you arrive at a customer site.
         NSMicrophoneUsageDescription: WorkCRM uses the microphone to record voice notes during check-out.
         NSLocationWhenInUseUsageDescription: WorkCRM records your GPS location at visit check-in and check-out so managers can verify on-site visits.
+        NSFaceIDUsageDescription: WorkCRM uses Face ID to unlock your signed-in session each time you open the app, so customer data stays protected if your phone is lost.
         UIBackgroundModes: [remote-notification, fetch, processing]
         BGTaskSchedulerPermittedIdentifiers: [com.workstationoffice.workcrm.sync]
         # Build-time interpolation: filled by the active xcconfig (Debug/Release).
