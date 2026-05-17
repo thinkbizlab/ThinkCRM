@@ -647,14 +647,19 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     const creds = await resolveMs365OAuthCreds(tenantSlug);
     if (!creds) throw app.httpErrors.notImplemented("MS365 OAuth is not configured for this workspace.");
 
-    // Exchange the authorization code for an access token. With PKCE, Microsoft
-    // verifies that SHA-256(code_verifier) === the code_challenge we sent in /begin.
+    // Exchange the authorization code for an access token. PKCE only — once the
+    // Azure AD app has a "Mobile and desktop applications" platform registered,
+    // it counts as a public client (allowPublicClient=true). Microsoft then
+    // *rejects* token-exchange requests that send a client_secret with
+    // `AADSTS700025: Client is public so neither 'client_assertion' nor
+    // 'client_secret' should be presented.` The web flow above continues to
+    // send client_secret because its redirect URI matches the Web platform
+    // (confidential client); the token endpoint chooses platform per redirect.
     const tokenRes = await fetch(`https://login.microsoftonline.com/${creds.msTenantId}/oauth2/v2.0/token`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
         client_id:     creds.clientId,
-        client_secret: creds.clientSecret,
         code,
         redirect_uri:  finalRedirect,
         grant_type:    "authorization_code",
