@@ -52,6 +52,10 @@ targets:
         NSLocationWhenInUseUsageDescription: WorkCRM records your GPS location at visit check-in and check-out so managers can verify on-site visits.
         UIBackgroundModes: [remote-notification, fetch, processing]
         BGTaskSchedulerPermittedIdentifiers: [com.workstationoffice.workcrm.sync]
+        # App icon is defined in Assets.xcassets/AppIcon.appiconset; CFBundleIconName
+        # tells the build system which set to use. Without this key, iOS falls back
+        # to a default icon at install time.
+        CFBundleIconName: AppIcon
         # Build-time interpolation: filled by the active xcconfig (Debug/Release).
         WorkCRMAPIBaseURL: $(WORK_CRM_API_BASE_URL)
     settings:

@@ -18,3 +18,7 @@ test-results/
 .DS_Store
 web/**/*.br
 web/**/*.gz
+
+# XcodeGen outputs — regenerated from ios/project.yml on every `xcodegen generate`.
+ios/WorkCRM.xcodeproj/
+ios/WorkCRM/Info.plist

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Adaptive-icon background — matches the foreground PNG's black canvas
+         so any mask shape (circle, squircle, rounded square) reveals a single
+         continuous black surface around the silver Workstation mark. -->
+    <color name="ic_launcher_background">#000000</color>
+</resources>
