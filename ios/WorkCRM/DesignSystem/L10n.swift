@@ -20,6 +20,13 @@ public enum L10n: String {
     case tabKpi
     case tabMore
 
+    case dealsScopeAll
+    case dealsScopeMine
+    case dealsScopeTeam
+    case dealsSearchPlaceholder
+    case dealsShowClosed
+    case dealsOverdueLabel
+
     case visitsTitle
     case visitsEmpty
     case visitCheckIn
@@ -58,6 +65,13 @@ public enum L10n: String {
         .tabDeals:          ("ดีล",                    "Deals"),
         .tabKpi:            ("เป้า KPI",               "KPI"),
         .tabMore:           ("เพิ่มเติม",               "More"),
+
+        .dealsScopeAll:         ("ทั้งหมด",               "All"),
+        .dealsScopeMine:        ("ของฉัน",                "Me"),
+        .dealsScopeTeam:        ("ทีมของฉัน",             "My team"),
+        .dealsSearchPlaceholder:("ค้นหาดีล",              "Search deals"),
+        .dealsShowClosed:       ("รวมที่ปิดแล้ว",         "Show closed"),
+        .dealsOverdueLabel:     ("ต้องติดตาม",            "Needs follow-up"),
 
         .visitsTitle:       ("รายการเยี่ยมวันนี้",      "Today's visits"),
         .visitsEmpty:       ("ไม่มีนัดในวันนี้",         "No visits scheduled"),

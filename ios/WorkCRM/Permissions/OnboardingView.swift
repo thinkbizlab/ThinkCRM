@@ -179,18 +179,17 @@ public struct OnboardingView: View {
         return Theme.Color.accent
     }
 
-    @ViewBuilder
     private func statusBadge(for kind: PermissionKind) -> some View {
-        let text: String
-        let color: Color
-        if permissions.isGranted(kind) {
-            text = "✓ Allowed"; color = Theme.Color.success
-        } else if permissions.isDenied(kind) {
-            text = "Denied — open Settings to enable"; color = Theme.Color.danger
-        } else {
-            text = "Not asked yet"; color = Theme.Color.textSecondary
-        }
-        Text(text)
+        let (text, color): (String, Color) = {
+            if permissions.isGranted(kind) {
+                return ("✓ Allowed", Theme.Color.success)
+            } else if permissions.isDenied(kind) {
+                return ("Denied — open Settings to enable", Theme.Color.danger)
+            } else {
+                return ("Not asked yet", Theme.Color.textSecondary)
+            }
+        }()
+        return Text(text)
             .font(Theme.Font.caption().weight(.semibold))
             .foregroundStyle(color)
     }
@@ -203,5 +202,3 @@ public enum OnboardingPage: Equatable, Hashable {
     case permission(PermissionKind)
     case allDone
 }
-
-extension PermissionKind: Hashable {}
