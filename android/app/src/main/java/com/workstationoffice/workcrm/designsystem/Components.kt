@@ -22,6 +22,12 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 
+/**
+ * Primary CTA — solid white fill, black text. Mirrors workselected.com's
+ * primary action style: on the near-black surface the dominant button pops
+ * in white, not gold. Gold (Tokens.accent) is kept for accent usage —
+ * eyebrows, KPI ring fills, active chips, link arrows — never bulk fills.
+ */
 @Composable
 fun PrimaryButton(text: String, enabled: Boolean = true, onClick: () -> Unit) {
     Button(
@@ -29,7 +35,7 @@ fun PrimaryButton(text: String, enabled: Boolean = true, onClick: () -> Unit) {
         enabled = enabled,
         shape   = RoundedCornerShape(8.dp),
         colors  = ButtonDefaults.buttonColors(
-            containerColor = Tokens.accent,
+            containerColor = Tokens.textPrimary,
             contentColor   = Tokens.textOnLight
         ),
         modifier = Modifier.fillMaxWidth().height(48.dp)
