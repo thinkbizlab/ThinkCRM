@@ -46,10 +46,27 @@ public final class AuthViewModel: ObservableObject {
         } catch let error as MicrosoftOAuthError {
             self.errorMessage = error.errorDescription
         } catch let error as APIError {
-            self.errorMessage = humanise(error)
+            // For OAuth, surface the backend's actual message instead of the
+            // password-flow's generic "Sign-in failed". The backend's specific
+            // reason ("No active account for…", "Token exchange failed", "Invalid
+            // or expired state") is what an admin needs to diagnose.
+            self.errorMessage = extractServerMessage(error) ?? humanise(error)
         } catch {
             self.errorMessage = error.localizedDescription
         }
+    }
+
+    /// Pull the human-readable `message` field out of the Fastify 4xx JSON body.
+    /// `@fastify/sensible` returns errors like `{"statusCode":401,"error":"Unauthorized","message":"No active account for …"}`.
+    private func extractServerMessage(_ error: APIError) -> String? {
+        guard case .http(_, let body?) = error,
+              let data = body.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let message = json["message"] as? String,
+              !message.isEmpty else {
+            return nil
+        }
+        return message
     }
 
     private func finishSignIn(with response: LoginResponse) async {

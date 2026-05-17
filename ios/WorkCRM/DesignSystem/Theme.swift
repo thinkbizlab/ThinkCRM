@@ -90,6 +90,11 @@ public struct SecondaryButtonStyle: ButtonStyle {
             .font(Theme.Font.body().weight(.semibold))
             .foregroundStyle(Theme.Color.textPrimary)
             .frame(maxWidth: .infinity, minHeight: 48)
+            // contentShape makes the whole 48pt-tall frame hit-testable, not
+            // just the inner label glyphs. Without it, a Button containing a
+            // small HStack (icon + short text) ignores taps on the empty
+            // padding either side, which feels broken.
+            .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous))
             .background(
                 RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous)
                     .strokeBorder(Theme.Color.surfaceBorder, lineWidth: 1)
