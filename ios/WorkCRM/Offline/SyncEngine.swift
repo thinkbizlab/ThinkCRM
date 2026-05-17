@@ -65,12 +65,14 @@ public actor SyncEngine {
                 SelfieStore.shared.delete(filename: p.selfieFilename)
             }
         } catch let APIError.http(status, body) where (400..<500).contains(status) && status != 401 && status != 408 && status != 429 {
-            // Permanent client error — leave the row but flag it so the
-            // user can act on it. Push nextEligibleAt far into the future
-            // so we don't burn cycles re-trying.
+            // Permanent client error — leave the row but flag it so the user
+            // can act on it. Push nextEligibleAt far into the future so we
+            // don't burn cycles re-trying, and bump retryCount past the Sync
+            // Status "show Discard" threshold (>= 3) so the user has an
+            // immediate way to clear the stuck row.
             var failed = action
-            failed.retryCount += 1
-            failed.lastError = "HTTP \(status): \(body ?? "")"
+            failed.retryCount = max(failed.retryCount + 1, 3)
+            failed.lastError = friendlyPermanentError(status: status, body: body)
             failed.lastAttemptAt = Date()
             failed.nextEligibleAt = Date().addingTimeInterval(24 * 60 * 60)
             await MainActor.run { PendingActionStore.shared.update(failed) }
@@ -114,6 +116,26 @@ public actor SyncEngine {
             clientRequestId: action.id
         )
         let _: VisitCheckOutResponse = try await APIClient.shared.post("visits/\(action.visitId)/checkout", body: request)
+    }
+
+    /// Map HTTP status codes to messages that tell the user what to do, not
+    /// what went wrong technically. The raw `HTTP 413: …` is useful for me in
+    /// Sentry but unhelpful sitting in a rep's Sync Status screen.
+    private func friendlyPermanentError(status: Int, body: String?) -> String {
+        switch status {
+        case 413:
+            return "Selfie too large to upload. Discard this row and re-take the check-in."
+        case 410:
+            return "Selfie file missing on device. Discard this row and re-take the check-in."
+        case 404:
+            return "Visit not found — it may have been deleted or reassigned. Discard this row."
+        case 403:
+            return "You don't have permission to check in to this visit. Discard this row."
+        case 400:
+            return "Request rejected by the server. \(body ?? "")".trimmingCharacters(in: .whitespaces)
+        default:
+            return "HTTP \(status): \(body ?? "")".trimmingCharacters(in: .whitespaces)
+        }
     }
 
     /// 30s, 2m, 10m, 30m, 1h, capped at 1h.
