@@ -34,6 +34,41 @@ public struct DeviceRegistrationRequest: Codable, Sendable {
     public let deviceName: String?
 }
 
+// MARK: - MS365 mobile OAuth (PKCE)
+
+public struct OAuthBeginRequest: Codable, Sendable {
+    public let tenantSlug: String
+    public let codeChallenge: String    // base64url(SHA256(verifier))
+    public let redirectUri: String
+
+    public init(tenantSlug: String, codeChallenge: String, redirectUri: String) {
+        self.tenantSlug = tenantSlug
+        self.codeChallenge = codeChallenge
+        self.redirectUri = redirectUri
+    }
+}
+
+public struct OAuthBeginResponse: Codable, Sendable {
+    public let authorizationUrl: String
+    public let state: String
+}
+
+public struct OAuthCompleteRequest: Codable, Sendable {
+    public let tenantSlug: String
+    public let code: String
+    public let state: String
+    public let codeVerifier: String     // 43-128 url-safe chars
+    public let redirectUri: String
+
+    public init(tenantSlug: String, code: String, state: String, codeVerifier: String, redirectUri: String) {
+        self.tenantSlug = tenantSlug
+        self.code = code
+        self.state = state
+        self.codeVerifier = codeVerifier
+        self.redirectUri = redirectUri
+    }
+}
+
 // MARK: - User
 
 public struct User: Codable, Identifiable, Sendable, Equatable {

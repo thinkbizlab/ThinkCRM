@@ -24,6 +24,12 @@ interface WorkCrmApi {
     @POST("auth/refresh")
     suspend fun refresh(@Body body: RefreshRequest): RefreshResponse
 
+    @POST("auth/oauth/ms365/mobile/begin")
+    suspend fun ms365MobileBegin(@Body body: OAuthBeginRequest): OAuthBeginResponse
+
+    @POST("auth/oauth/ms365/mobile/complete")
+    suspend fun ms365MobileComplete(@Body body: OAuthCompleteRequest): LoginResponse
+
     @POST("auth/devices")
     suspend fun registerDevice(@Body body: DeviceRegistrationRequest): kotlinx.serialization.json.JsonElement
 

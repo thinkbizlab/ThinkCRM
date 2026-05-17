@@ -50,10 +50,58 @@ public struct LoginView: View {
                 .buttonStyle(PrimaryButtonStyle())
                 .disabled(auth.isSubmitting || email.isEmpty || password.isEmpty || tenantSlug.isEmpty)
 
+                // ── Divider between password sign-in and the OAuth path ────────
+                HStack(spacing: Theme.Spacing.sm) {
+                    Rectangle().fill(Theme.Color.surfaceBorder).frame(height: 0.5)
+                    Text("or").font(Theme.Font.caption()).foregroundStyle(Theme.Color.textSecondary)
+                    Rectangle().fill(Theme.Color.surfaceBorder).frame(height: 0.5)
+                }
+
+                Button {
+                    Task {
+                        await auth.signInWithMicrosoft(
+                            tenantSlug: tenantSlug.trimmingCharacters(in: .whitespaces)
+                        )
+                    }
+                } label: {
+                    HStack(spacing: Theme.Spacing.sm) {
+                        // Microsoft "windowed" mark, drawn inline to avoid bundling an asset.
+                        // Four equal coloured squares — matches Microsoft's brand guidelines
+                        // closely enough for an internal CRM. Each colour is hard-coded so
+                        // the mark renders correctly in both light and dark backgrounds.
+                        msftMark
+                        Text("Sign in with Microsoft")
+                    }
+                }
+                .buttonStyle(SecondaryButtonStyle())
+                .disabled(auth.isSubmitting || tenantSlug.isEmpty)
+                .accessibilityLabel("Sign in with Microsoft")
+                .accessibilityHint("Opens the Microsoft sign-in sheet")
+
                 Spacer()
             }
             .padding(Theme.Spacing.xl)
         }
+    }
+
+    private var msftMark: some View {
+        // 16×16 grid of 4 coloured squares, 1pt gap. Inline so we don't depend
+        // on an asset catalogue entry.
+        let s: CGFloat = 7
+        let g: CGFloat = 1
+        return ZStack {
+            VStack(spacing: g) {
+                HStack(spacing: g) {
+                    Rectangle().fill(Color(hex: 0xF25022)).frame(width: s, height: s)  // red
+                    Rectangle().fill(Color(hex: 0x7FBA00)).frame(width: s, height: s)  // green
+                }
+                HStack(spacing: g) {
+                    Rectangle().fill(Color(hex: 0x00A4EF)).frame(width: s, height: s)  // blue
+                    Rectangle().fill(Color(hex: 0xFFB900)).frame(width: s, height: s)  // yellow
+                }
+            }
+        }
+        .frame(width: s * 2 + g, height: s * 2 + g)
     }
 
     @ViewBuilder

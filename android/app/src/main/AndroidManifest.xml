@@ -25,11 +25,21 @@
         <activity
             android:name=".app.MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|keyboardHidden|keyboard|screenLayout|smallestScreenSize|uiMode|fontScale"
             android:theme="@style/Theme.WorkCRM">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- OAuth redirect: Microsoft sends the browser to `workcrm://oauth/callback?code=…`,
+                 Android routes it back into this activity via singleTask + onNewIntent so the
+                 in-flight Compose flow can complete with the authorization code. -->
+            <intent-filter android:autoVerify="false">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="workcrm" android:host="oauth" android:pathPrefix="/callback" />
             </intent-filter>
         </activity>
 
