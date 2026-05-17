@@ -35,6 +35,13 @@ struct DealKanbanView: View {
                 .refreshable { await model.refresh() }
             }
         }
+        // Declared once at the parent rather than inside KanbanColumn — the
+        // column gets instantiated once per stage, so per-column registration
+        // would push N identical destinations onto the same NavigationStack and
+        // trigger SwiftUI's "declared earlier on the stack" warning.
+        .navigationDestination(for: Deal.self) { d in
+            DealDetailView(deal: d)
+        }
         .task { await model.refresh() }
     }
 }
@@ -65,9 +72,8 @@ private struct KanbanColumn: View {
                 }
             }
         }
-        .navigationDestination(for: Deal.self) { d in
-            DealDetailView(deal: d)
-        }
+        // No .navigationDestination here — declared once on DealKanbanView so
+        // the same destination isn't re-registered per column.
     }
 }
 
