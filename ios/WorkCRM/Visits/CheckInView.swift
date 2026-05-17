@@ -17,6 +17,7 @@ public struct CheckInView: View {
     @State private var showingCamera = true
     @State private var isFinalising = false
     @State private var errorMessage: String?
+    @State private var deniedPermission: PermissionKind?
 
     public init(visit: Visit) { self.visit = visit }
 
@@ -85,12 +86,31 @@ public struct CheckInView: View {
             )
             .ignoresSafeArea()
         }
+        // Surfaces "Location permission denied" or "Camera denied" with an
+        // Open Settings button. The check-in cannot proceed without these,
+        // so we intercept before queuing the action.
+        .sheet(item: $deniedPermission) { kind in
+            PermissionDeniedSheet(kind: kind) {
+                deniedPermission = nil
+            }
+            .presentationDetents([.medium])
+        }
     }
 
     private func finalise() async {
         guard let imageData = capturedImage else { return }
         isFinalising = true
         defer { isFinalising = false }
+
+        // Pre-check: if location was previously denied in Settings, iOS won't
+        // re-prompt — surface the denial sheet directly instead of letting
+        // CoreLocation throw a raw kCLErrorDenied at the user.
+        PermissionsManager.shared.refresh()
+        if PermissionsManager.shared.isDenied(.location) {
+            deniedPermission = .location
+            return
+        }
+
         do {
             let location = try await LocationService.shared.currentLocation()
             let action = await persist(imageData: imageData, location: location)
@@ -100,6 +120,10 @@ public struct CheckInView: View {
             Task.detached { await SyncEngine.shared.drain() }
             BackgroundSync.schedule()
             dismiss()
+        } catch LocationService.LocationError.authorizationDenied {
+            // The .notDetermined → denied path lands here.
+            PermissionsManager.shared.refresh()
+            deniedPermission = .location
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
