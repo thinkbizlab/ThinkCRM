@@ -66,8 +66,11 @@ extension Color {
 
 // MARK: - Buttons
 
-/// Primary CTA — solid gold fill, white text, sharp 8pt corners. Use for the
-/// dominant action on a screen (Login, Check-In, Confirm).
+/// Primary CTA — solid white fill, black text, sharp 8pt corners. Mirrors
+/// workselected.com's primary action style: on the site's near-black surface,
+/// the dominant CTA pops in white, not gold. Gold (`Theme.Color.accent`) is
+/// kept for accent usage — collection-style eyebrows, KPI ring fills, active
+/// chips, link arrows — never bulk fills.
 public struct PrimaryButtonStyle: ButtonStyle {
     public init() {}
     public func makeBody(configuration: Configuration) -> some View {
@@ -75,9 +78,10 @@ public struct PrimaryButtonStyle: ButtonStyle {
             .font(Theme.Font.body().weight(.semibold))
             .foregroundStyle(Theme.Color.textOnLight)
             .frame(maxWidth: .infinity, minHeight: 48)
+            .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous))
             .background(
                 RoundedRectangle(cornerRadius: Theme.Radius.button, style: .continuous)
-                    .fill(Theme.Color.accent.opacity(configuration.isPressed ? 0.8 : 1.0))
+                    .fill(Theme.Color.textPrimary.opacity(configuration.isPressed ? 0.8 : 1.0))
             )
     }
 }
