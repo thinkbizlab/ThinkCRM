@@ -17,6 +17,8 @@
     <application
         android:name=".app.WorkCRMApplication"
         android:label="WorkCRM"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@style/Theme.WorkCRM"
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"
