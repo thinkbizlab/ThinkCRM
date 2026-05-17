@@ -9,6 +9,7 @@ public struct CheckOutView: View {
     @State private var result: String = ""
     @State private var isFinalising = false
     @State private var errorMessage: String?
+    @State private var deniedPermission: PermissionKind?
 
     public init(visit: Visit) { self.visit = visit }
 
@@ -54,11 +55,26 @@ public struct CheckOutView: View {
             }
             .padding(Theme.Spacing.xl)
         }
+        // Intercept location permission denial before CoreLocation throws a
+        // raw kCLErrorDenied at the user.
+        .sheet(item: $deniedPermission) { kind in
+            PermissionDeniedSheet(kind: kind) {
+                deniedPermission = nil
+            }
+            .presentationDetents([.medium])
+        }
     }
 
     private func finalise() async {
         isFinalising = true
         defer { isFinalising = false }
+
+        PermissionsManager.shared.refresh()
+        if PermissionsManager.shared.isDenied(.location) {
+            deniedPermission = .location
+            return
+        }
+
         do {
             let location = try await LocationService.shared.currentLocation()
             let action = PendingAction.newCheckOut(
@@ -72,6 +88,9 @@ public struct CheckOutView: View {
             Task.detached { await SyncEngine.shared.drain() }
             BackgroundSync.schedule()
             dismiss()
+        } catch LocationService.LocationError.authorizationDenied {
+            PermissionsManager.shared.refresh()
+            deniedPermission = .location
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }

@@ -14,16 +14,28 @@ struct WorkCRMApp: App {
     }
 }
 
-/// Top-level router: if there's a stored session, show the biometric gate then
-/// the main tab UI. If not, show LoginView. Reacts live to sign-in / sign-out
-/// via the published `session` on `AuthViewModel`.
+/// Top-level router. Three states:
+///   - Not signed in → LoginView
+///   - Signed in but onboarding incomplete → OnboardingView (asks for system
+///     permissions in plain language, one at a time)
+///   - Signed in and onboarded → BiometricGate + MainTabView
+///
+/// Onboarding completion is sticky in `UserDefaults`; a fresh install (or
+/// the user signing out + back in with a different account) re-runs it.
 struct RootView: View {
     @EnvironmentObject private var auth: AuthViewModel
+    @State private var didCompleteOnboarding = UserDefaults.standard.bool(forKey: OnboardingView.completionKey)
 
     var body: some View {
         Group {
             if auth.isSignedIn {
-                BiometricGate { MainTabView() }
+                if didCompleteOnboarding {
+                    BiometricGate { MainTabView() }
+                } else {
+                    OnboardingView {
+                        didCompleteOnboarding = true
+                    }
+                }
             } else {
                 LoginView()
             }
