@@ -190,6 +190,14 @@ export const cronRoutes: FastifyPluginAsync = async (app) => {
     return runJobForAllTenants("invoiceAutoSend");
   });
 
+  // ── Overdue Reminder ──────────────────────────────────────────────────────
+  // Daily 08:00 Asia/Bangkok ping listing each rep's overdue visits + deals.
+  // Personal LINE DM with team-channel fallback, plus a team summary post.
+  app.get("/cron/overdue-reminder", async (request) => {
+    verifyCronSecret(request);
+    return runJobForAllTenants("overdueReminder");
+  });
+
   // ── Trial Expiry (system-level, not per-tenant job) ───────────────────────
   app.get("/cron/trial-expiry", async (request) => {
     verifyCronSecret(request);

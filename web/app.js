@@ -5116,8 +5116,9 @@ function renderSettings() {
         <div class="notif-group">
           ${toggle("dealFollowUp", "Follow-up deal reminder",   "Remind me before a deal follow-up date is due")}
           ${toggle("visitRemind",  "Check-in reminder",         "Remind me when I have a visit scheduled for check-in")}
-          ${toggle("kpiAlert",     `${icon('target')} KPI Alert`,             "แจ้งเตือนประจำวัน 5 วันสุดท้ายของเดือน หากคืบหน้าต่ำกว่า 85% (ส่งส่วนตัว หรือกลุ่มหากไม่มีช่องส่วนตัว)")}
-          ${toggle("weeklyDigest", `${icon('chart')} Weekly Digest`,          "สรุปผลงานทุกวันจันทร์ 06:00 น. ส่งเข้าช่องกลุ่มของทีม")}
+          ${toggle("kpiAlert",        `${icon('target')} KPI Alert`,             "แจ้งเตือนประจำวัน 5 วันสุดท้ายของเดือน หากคืบหน้าต่ำกว่า 85% (ส่งส่วนตัว หรือกลุ่มหากไม่มีช่องส่วนตัว)")}
+          ${toggle("weeklyDigest",    `${icon('chart')} Weekly Digest`,          "สรุปผลงานทุกวันจันทร์ 06:00 น. ส่งเข้าช่องกลุ่มของทีม")}
+          ${toggle("overdueReminder", `${icon('warning')} Overdue Reminder`,     "แจ้งเตือนงานเยี่ยมและดีลที่ค้างติดตาม ทุกวันเวลา 08:00 น. ส่งเข้า LINE ส่วนตัว หรือกลุ่มทีม")}
         </div>
       </section>
 

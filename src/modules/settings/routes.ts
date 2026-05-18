@@ -3226,8 +3226,9 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     visitScheduled: z.boolean().optional(),
     visitCheckin:   z.boolean().optional(),
     visitCheckout:  z.boolean().optional(),
-    kpiAlert:       z.boolean().optional(),
-    weeklyDigest:   z.boolean().optional()
+    kpiAlert:        z.boolean().optional(),
+    weeklyDigest:    z.boolean().optional(),
+    overdueReminder: z.boolean().optional()
   });
 
   app.get("/users/me/notif-prefs", async (request) => {

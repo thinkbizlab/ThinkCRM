@@ -65,6 +65,10 @@
     {
       "path": "/api/v1/cron/warm-login-cache",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/v1/cron/overdue-reminder",
+      "schedule": "0 1 * * *"
     }
   ]
 }

@@ -99,6 +99,16 @@ export const JOB_DEFS: JobDef[] = [
       const { runInvoiceAutoSendForTenant } = await import("../modules/billing/invoice-email.js");
       return runInvoiceAutoSendForTenant(tenantId);
     }
+  },
+  {
+    key: "overdueReminder",
+    label: "Overdue Reminder",
+    description: "แจ้งเตือนงานเยี่ยมและดีลที่ค้างติดตาม ทุกวันเวลา 08:00 น. ส่งเข้าช่องส่วนตัวและช่องกลุ่มของทีม (LINE)",
+    defaultCronExpr: "0 8 * * *", // 08:00 tenant TZ
+    run: async (tenantId) => {
+      const { runOverdueReminderForTenant } = await import("./overdue-notify.js");
+      return runOverdueReminderForTenant(tenantId);
+    }
   }
 ];
 
