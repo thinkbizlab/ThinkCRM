@@ -60,6 +60,8 @@ model Tenant {
   taxConfig                   TenantTaxConfig?
   visitConfig                 TenantVisitConfig?
   kpiTargets                  SalesKpiTarget[]
+  kpiTargetMetrics            SalesKpiTargetMetric[]
+  kpiMetricConfigs            TenantKpiMetricConfig[]
   aiAnalysisRuns              AiAnalysisRun[]
   aiVisitRecommendationRuns   AiVisitRecommendationRun[]
   voiceNoteJobs               VoiceNoteJob[]
@@ -920,19 +922,72 @@ model VisitCoVisitorCompetencyScore {
   @@unique([visitCoVisitorId, competencyTemplateId])
 }
 
+// Legacy fixed-shape KPI target row, kept for one release after the dynamic-KPI
+// rollout so the iOS / Android dashboards (which still read these three fields)
+// keep working. New writes also fan out into `SalesKpiTargetMetric` rows; new
+// reads should prefer that table. The three columns will be dropped in a
+// follow-up migration once the mobile clients have been rebuilt against the
+// generic `kpiMetrics[]` response shape.
 model SalesKpiTarget {
   id                 String   @id @default(cuid())
   tenantId           String
   userId             String
   targetMonth        String
-  visitTargetCount   Int
-  newDealValueTarget Float
-  revenueTarget      Float
+  visitTargetCount   Int      /// @deprecated — mirrored to SalesKpiTargetMetric.VISIT_CHECKED_IN_COUNT
+  newDealValueTarget Float    /// @deprecated — mirrored to SalesKpiTargetMetric.NEW_DEAL_VALUE
+  revenueTarget      Float    /// @deprecated — mirrored to SalesKpiTargetMetric.WON_DEAL_VALUE
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
   tenant             Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, userId, targetMonth])
+}
+
+/// Per-tenant KPI metric configuration. One row per (tenant, catalog metric key)
+/// the tenant has elected to track. Catalog itself is system-defined in
+/// `src/lib/kpi-catalog.ts`; this table only stores opt-in + display overrides
+/// (labels, alert threshold, sort order). Default seed for every existing
+/// tenant is the three legacy metrics: VISIT_CHECKED_IN_COUNT, NEW_DEAL_VALUE,
+/// WON_DEAL_VALUE.
+model TenantKpiMetricConfig {
+  id             String   @id @default(cuid())
+  tenantId       String
+  metricKey      String
+  labelTh        String?
+  labelEn        String?
+  sortOrder      Int      @default(0)
+  isActive       Boolean  @default(true)
+  /// Per-metric alert threshold (percent). When actual / target < threshold /
+  /// 100 the kpi-alert cron fires. NULL means inherit the tenant-default
+  /// (currently 85 — same as the previous hardcoded behaviour).
+  alertThreshold Float?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, metricKey])
+  @@index([tenantId, isActive, sortOrder])
+}
+
+/// Per-rep, per-month, per-metric target value. Replaces the three fixed
+/// columns on `SalesKpiTarget` so adding a new metric never requires a
+/// schema migration. Mirrors the (tenantId, userId, targetMonth) tuple on
+/// `SalesKpiTarget` so the two tables are easy to join during the
+/// deprecation window.
+model SalesKpiTargetMetric {
+  id          String   @id @default(cuid())
+  tenantId    String
+  userId      String
+  targetMonth String
+  metricKey   String
+  targetValue Float
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId, targetMonth, metricKey])
+  @@index([tenantId, userId, targetMonth])
+  @@index([tenantId, metricKey])
 }
 
 model IntegrationSource {

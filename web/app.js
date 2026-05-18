@@ -2145,6 +2145,7 @@ const settingsPageRouteMap = {
   "team-structure": "/settings/team-structure",
   "roles":          "/settings/roles",
   "kpi-targets":    "/settings/kpi-targets",
+  "kpi-config":     "/settings/kpi-configuration",
   "competencies":   "/settings/competencies",
   "integrations":   "/settings/integrations",
   "data-sync":      "/settings/data-sync",
@@ -4841,6 +4842,7 @@ function renderSettings() {
     { page: "team-structure", label: "Team Structure",         ic: "users", roles: ["ADMIN", "DIRECTOR", "MANAGER", "SUPERVISOR", "REP"] },
     { page: "roles",          label: "Roles & Permissions",   ic: "lockKey", roles: ["ADMIN"] },
     { page: "kpi-targets",    label: "KPI Targets",            ic: "target", roles: ["ADMIN", "DIRECTOR", "MANAGER", "SUPERVISOR", "REP"] },
+    { page: "kpi-config",     label: "KPI Configuration",       ic: "target", roles: ["ADMIN"] },
     { page: "competencies",   label: "Co-Visit Competencies",  ic: "clipboard", roles: ["ADMIN"] },
     { page: "integrations",   label: "Integrations",          ic: "plug", roles: ["ADMIN"] },
     { page: "custom-domain",  label: "Custom Domain",          ic: "globe", roles: ["ADMIN"] },
@@ -5642,6 +5644,78 @@ function renderSettings() {
         ` : `<div class="empty-state compact"><div><strong>No KPI targets yet</strong>${canEditKpi ? `<p>Use the form above to set per-person targets.</p>` : ""}</div></div>`}
       </section>
     `;
+  } else if (page === "kpi-config") {
+    // Admin-only — read the catalog from the backend, render one row per
+    // metric grouped by `group`. Each row has: active toggle + label
+    // overrides (Thai/English) + alert threshold. Save POSTs the whole list
+    // (no partial updates) so we don't have to manage row-level state.
+    const cfg = state.cache.kpiConfig;
+    if (!cfg) {
+      // First open — kick off the fetch and render a skeleton.
+      api(`/tenants/${tenantId}/kpi-config`)
+        .then((data) => { state.cache.kpiConfig = data; renderSettings(); })
+        .catch((err) => setStatus(err.message || "Failed to load KPI configuration.", true));
+      pageHtml = `
+        <section class="card">
+          <h3 class="section-title">${icon('target')} KPI Configuration</h3>
+          <div class="muted small">Loading…</div>
+        </section>
+      `;
+    } else {
+      const GROUP_LABELS = {
+        activity:    "Activity / กิจกรรม",
+        deals:       "Deals / ดีล",
+        quotations:  "Quotations / ใบเสนอราคา",
+        prospects:   "Prospects / ผู้คาดหวัง",
+        customers:   "Customers / ลูกค้า"
+      };
+      const UNIT_LABEL = { count: "count", currency: "currency (฿)", percent: "%", minutes: "minutes" };
+      const groups = ["activity", "deals", "quotations", "prospects", "customers"];
+      const sections = groups.map((group) => {
+        const rowsInGroup = cfg.metrics.filter((m) => m.group === group);
+        if (rowsInGroup.length === 0) return "";
+        const rowsHtml = rowsInGroup.map((m) => `
+          <div class="settings-field-row" data-metric-key="${escHtml(m.metricKey)}" style="align-items:flex-end;gap:var(--sp-3);border-bottom:1px solid var(--surface-border);padding:var(--sp-2) 0">
+            <label class="form-label" style="flex:0 0 auto;display:flex;align-items:center;gap:var(--sp-2)">
+              <input type="checkbox" class="kpi-cfg-active" ${m.isActive ? "checked" : ""} />
+              <span class="kpi-cfg-key" style="font-family:monospace;font-size:0.78rem">${escHtml(m.metricKey)}</span>
+            </label>
+            <label class="form-label" style="flex:1 1 200px">
+              <span class="muted small">Label (TH)</span>
+              <input class="form-input kpi-cfg-label-th" type="text" maxlength="120" placeholder="${escHtml(m.defaultLabelTh)}" value="${m.labelTh != null ? escHtml(m.labelTh) : ""}" />
+            </label>
+            <label class="form-label" style="flex:1 1 200px">
+              <span class="muted small">Label (EN)</span>
+              <input class="form-input kpi-cfg-label-en" type="text" maxlength="120" placeholder="${escHtml(m.defaultLabelEn)}" value="${m.labelEn != null ? escHtml(m.labelEn) : ""}" />
+            </label>
+            <label class="form-label" style="flex:0 0 110px">
+              <span class="muted small">Alert threshold (%)</span>
+              <input class="form-input kpi-cfg-alert" type="number" min="0" max="100" step="1" placeholder="85" value="${m.alertThreshold != null ? m.alertThreshold : ""}" />
+            </label>
+            <span class="muted small" style="flex:0 0 90px;text-align:right">${UNIT_LABEL[m.unit] || m.unit}</span>
+          </div>
+        `).join("");
+        return `
+          <section class="card" style="margin-bottom:var(--sp-3)">
+            <h4 class="section-title" style="font-size:0.95rem">${GROUP_LABELS[group] || group}</h4>
+            ${rowsHtml}
+          </section>
+        `;
+      }).join("");
+      pageHtml = `
+        <section class="card">
+          <h3 class="section-title">${icon('target')} KPI Configuration</h3>
+          <p class="muted" style="margin-bottom:var(--sp-3)">
+            Choose which metrics this workspace tracks. Targets and dashboards iterate over the active set; labels here override the defaults shown in alerts and the digest.
+          </p>
+          ${sections}
+          <div class="inline-actions" style="margin-top:var(--sp-3)">
+            <button type="button" id="kpi-config-save">Save</button>
+            <span class="muted small" id="kpi-config-status"></span>
+          </div>
+        </section>
+      `;
+    }
   } else if (page === "competencies") {
     const templates = state.cache.competencyTemplatesAdmin;
     const loading = templates === null;
@@ -8875,6 +8949,41 @@ function renderSettings() {
     if (!form) return;
     form.scrollIntoView({ behavior: "smooth", block: "start" });
     form.querySelector('select[name="userId"]')?.focus();
+  });
+
+  // ── KPI Configuration page — collect every row's controls and PUT. ─────
+  qs("#kpi-config-save")?.addEventListener("click", async () => {
+    const btn = qs("#kpi-config-save");
+    const statusEl = qs("#kpi-config-status");
+    const rows = Array.from(views.settings.querySelectorAll("[data-metric-key]"));
+    const metrics = rows.map((row, idx) => {
+      const metricKey = row.dataset.metricKey;
+      const isActive = row.querySelector(".kpi-cfg-active")?.checked ?? false;
+      const labelThRaw = row.querySelector(".kpi-cfg-label-th")?.value ?? "";
+      const labelEnRaw = row.querySelector(".kpi-cfg-label-en")?.value ?? "";
+      const alertRaw = row.querySelector(".kpi-cfg-alert")?.value ?? "";
+      const labelTh = labelThRaw.trim() === "" ? null : labelThRaw.trim();
+      const labelEn = labelEnRaw.trim() === "" ? null : labelEnRaw.trim();
+      const alertThreshold = alertRaw.trim() === "" ? null : Number(alertRaw);
+      return { metricKey, isActive, labelTh, labelEn, sortOrder: idx, alertThreshold };
+    });
+    if (btn) { btn.disabled = true; }
+    if (statusEl) { statusEl.textContent = "Saving…"; }
+    try {
+      await api(`/tenants/${state.user.tenantId}/kpi-config`, {
+        method: "PUT",
+        body: { metrics }
+      });
+      // Re-fetch so labels/sort reflect server canonical state on next render.
+      state.cache.kpiConfig = await api(`/tenants/${state.user.tenantId}/kpi-config`);
+      setStatus("KPI configuration saved.");
+      renderSettings();
+    } catch (error) {
+      setStatus(error.message || "Failed to save KPI configuration.", true);
+      if (statusEl) { statusEl.textContent = ""; }
+    } finally {
+      if (btn) { btn.disabled = false; }
+    }
   });
 
   qs("#kpi-invite-rep-btn")?.addEventListener("click", async () => {
@@ -13450,6 +13559,7 @@ const SPI_DESC = {
   "team-structure": "Manage teams and reporting structure",
   roles:            "Configure role chain and access",
   "kpi-targets":    "Per-person, per-month sales targets",
+  "kpi-config":     "Choose which metrics this workspace tracks",
   integrations:     "AI, communication and cloud APIs",
   "custom-domain":  "Use your own domain for the app",
   "data-sync":      "ERP / data-source connections",

@@ -2953,6 +2953,105 @@ export const settingsRoutes: FastifyPluginAsync = async (app) => {
     });
   });
 
+  // ── KPI Configuration (dynamic per-tenant metric catalog) ────────────────
+  //
+  // Admin-only. The catalog of available metrics is system-defined in
+  // `src/lib/kpi-catalog.ts`; this endpoint pair lets the tenant admin pick
+  // which catalog entries to track and override their display labels.
+
+  app.get("/tenants/:id/kpi-config", async (request) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+    const params = request.params as { id: string };
+    if (params.id !== tenantId) {
+      throw app.httpErrors.forbidden("Cannot read KPI config of another tenant.");
+    }
+    const { KPI_CATALOG } = await import("../../lib/kpi-catalog.js");
+    const rows = await prisma.tenantKpiMetricConfig.findMany({
+      where: { tenantId },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }]
+    });
+    const rowByKey = new Map(rows.map((r) => [r.metricKey, r]));
+    // Return the full catalog so the admin UI can render every available
+    // metric — those without a tenant row default to `isActive: false`.
+    const merged = KPI_CATALOG.map((entry, idx) => {
+      const row = rowByKey.get(entry.key);
+      return {
+        metricKey: entry.key,
+        defaultLabelTh: entry.defaultLabelTh,
+        defaultLabelEn: entry.defaultLabelEn,
+        unit: entry.unit,
+        direction: entry.direction,
+        group: entry.group,
+        isActive: row?.isActive ?? false,
+        labelTh: row?.labelTh ?? null,
+        labelEn: row?.labelEn ?? null,
+        sortOrder: row?.sortOrder ?? idx,
+        alertThreshold: row?.alertThreshold ?? null
+      };
+    });
+    return { metrics: merged };
+  });
+
+  const kpiConfigUpdateSchema = z.object({
+    metrics: z.array(z.object({
+      metricKey: z.string().min(1).max(64),
+      isActive: z.boolean(),
+      labelTh: z.string().trim().max(120).nullable().optional(),
+      labelEn: z.string().trim().max(120).nullable().optional(),
+      sortOrder: z.number().int().min(0).max(1000),
+      alertThreshold: z.number().min(0).max(100).nullable().optional()
+    })).min(1).max(64)
+  });
+
+  app.put("/tenants/:id/kpi-config", async (request) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+    const params = request.params as { id: string };
+    if (params.id !== tenantId) {
+      throw app.httpErrors.forbidden("Cannot update KPI config of another tenant.");
+    }
+    const parsed = kpiConfigUpdateSchema.safeParse(request.body);
+    if (!parsed.success) {
+      throw app.httpErrors.badRequest(zodMsg(parsed.error));
+    }
+    const { isKnownKpiMetric } = await import("../../lib/kpi-catalog.js");
+    for (const m of parsed.data.metrics) {
+      if (!isKnownKpiMetric(m.metricKey)) {
+        throw app.httpErrors.badRequest(`Unknown metric key: ${m.metricKey}`);
+      }
+    }
+    // Upsert each metric row. We don't delete rows that aren't in the payload
+    // — the UI is expected to send every catalog entry it knows about with
+    // isActive set appropriately. That keeps DELETE semantics out of the API
+    // and means an older client (missing a recently-added catalog metric)
+    // can't accidentally erase a config row for that metric.
+    await prisma.$transaction(
+      parsed.data.metrics.map((m) =>
+        prisma.tenantKpiMetricConfig.upsert({
+          where: { tenantId_metricKey: { tenantId, metricKey: m.metricKey } },
+          create: {
+            tenantId,
+            metricKey: m.metricKey,
+            isActive: m.isActive,
+            labelTh: m.labelTh ?? null,
+            labelEn: m.labelEn ?? null,
+            sortOrder: m.sortOrder,
+            alertThreshold: m.alertThreshold ?? null
+          },
+          update: {
+            isActive: m.isActive,
+            labelTh: m.labelTh ?? null,
+            labelEn: m.labelEn ?? null,
+            sortOrder: m.sortOrder,
+            alertThreshold: m.alertThreshold ?? null
+          }
+        })
+      )
+    );
+    return { ok: true, count: parsed.data.metrics.length };
+  });
+
   app.post("/storage/r2/presign-upload", async (request) => {
     const tenantId = requireTenantId(request);
     const parsed = storagePresignUploadSchema.safeParse(request.body);
