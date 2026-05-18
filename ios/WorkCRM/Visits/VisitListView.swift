@@ -244,8 +244,20 @@ private final class VisitListViewModel: ObservableObject {
     private func load(reset: Bool) async {
         isLoading = true
         defer { isLoading = false }
+        // "Today's Visits" — bound to the device's local calendar day so a rep
+        // sees only visits whose plannedAt falls on today. Without this filter
+        // the backend returns the rep's full visit list ordered by plannedAt
+        // ascending and the screen ends up showing oldest visits ever.
+        let calendar = Calendar.current
+        let startOfToday    = calendar.startOfDay(for: Date())
+        let startOfTomorrow = calendar.date(byAdding: .day, value: 1, to: startOfToday) ?? startOfToday
         do {
-            let page = try await VisitsRepository.shared.list(limit: pageSize, offset: offset)
+            let page = try await VisitsRepository.shared.list(
+                dateFrom: startOfToday,
+                dateTo:   startOfTomorrow,
+                limit:    pageSize,
+                offset:   offset
+            )
             total = page.total
             offset += page.rows.count
             if reset {
