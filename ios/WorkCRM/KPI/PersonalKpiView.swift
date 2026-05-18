@@ -75,28 +75,67 @@ struct PersonalKpiView: View {
 
     private var isUrgent: Bool { DashboardRepository.daysLeftInMonth() <= 5 }
 
+    @ViewBuilder
     private func ringsRow(entry: TargetVsActual) -> some View {
-        HStack(alignment: .top, spacing: Theme.Spacing.lg) {
-            KpiRing(
-                progress:      entry.progress.visits / 100.0,
-                label:         t(.kpiVisits),
-                primaryText:   String(Int(entry.actual.visits)),
-                secondaryText: "/ \(Int(entry.target.visits))"
-            )
-            KpiRing(
-                progress:      entry.progress.revenue / 100.0,
-                label:         t(.kpiRevenue),
-                primaryText:   shortBaht(entry.actual.revenue),
-                secondaryText: shortBaht(entry.target.revenue)
-            )
-            KpiRing(
-                progress:      entry.progress.newDealValue / 100.0,
-                label:         "Pipeline",
-                primaryText:   shortBaht(entry.actual.newDealValue),
-                secondaryText: shortBaht(entry.target.newDealValue)
-            )
+        // Prefer the dynamic per-role kpiMetrics array when the server emits
+        // it. Older builds + tenants that haven't enabled any metric for the
+        // signed-in user's role keep the legacy 3-ring layout below.
+        if let metrics = entry.kpiMetrics, !metrics.isEmpty {
+            HStack(alignment: .top, spacing: Theme.Spacing.lg) {
+                ForEach(metrics.prefix(3)) { m in
+                    KpiRing(
+                        progress:      m.pct / 100.0,
+                        label:         metricLabel(m),
+                        primaryText:   formatKpiValue(m.actual, unit: m.unit),
+                        secondaryText: formatKpiValue(m.target, unit: m.unit)
+                    )
+                }
+            }
+            .frame(maxWidth: .infinity)
+        } else {
+            HStack(alignment: .top, spacing: Theme.Spacing.lg) {
+                KpiRing(
+                    progress:      entry.progress.visits / 100.0,
+                    label:         t(.kpiVisits),
+                    primaryText:   String(Int(entry.actual.visits)),
+                    secondaryText: "/ \(Int(entry.target.visits))"
+                )
+                KpiRing(
+                    progress:      entry.progress.revenue / 100.0,
+                    label:         t(.kpiRevenue),
+                    primaryText:   shortBaht(entry.actual.revenue),
+                    secondaryText: shortBaht(entry.target.revenue)
+                )
+                KpiRing(
+                    progress:      entry.progress.newDealValue / 100.0,
+                    label:         "Pipeline",
+                    primaryText:   shortBaht(entry.actual.newDealValue),
+                    secondaryText: shortBaht(entry.target.newDealValue)
+                )
+            }
+            .frame(maxWidth: .infinity)
         }
-        .frame(maxWidth: .infinity)
+    }
+
+    /// Pick the tenant-resolved label appropriate for the device locale.
+    /// Thai falls through to English when the tenant left the label blank
+    /// (server already merged catalog defaults so neither side is empty).
+    private func metricLabel(_ m: KpiMetric) -> String {
+        let code = Locale.current.language.languageCode?.identifier ?? "en"
+        return code == "th" ? m.labelTh : m.labelEn
+    }
+
+    /// Format an actual / target value per the metric's declared unit.
+    /// Currency → ฿1.2M shorthand (reuse `shortBaht`); count → integer;
+    /// percent → "85%"; minutes → "45m". Keeps the ring legible without
+    /// the row chasing pixels.
+    private func formatKpiValue(_ v: Double, unit: String) -> String {
+        switch unit {
+        case "currency": return shortBaht(v)
+        case "percent":  return "\(Int(v.rounded()))%"
+        case "minutes":  return "\(Int(v.rounded()))m"
+        default:         return String(Int(v.rounded()))
+        }
     }
 
     @ViewBuilder

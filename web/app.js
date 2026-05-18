@@ -5645,13 +5645,12 @@ function renderSettings() {
       </section>
     `;
   } else if (page === "kpi-config") {
-    // Admin-only — read the catalog from the backend, render one row per
-    // metric grouped by `group`. Each row has: active toggle + label
-    // overrides (Thai/English) + alert threshold. Save POSTs the whole list
-    // (no partial updates) so we don't have to manage row-level state.
+    // Admin-only — per-role tab strip on top, one config matrix below.
+    // Each role gets an independent metric set (a Manager can see Win Rate
+    // while a Rep tracks Visits). Server returns the full {REP, SUPERVISOR,
+    // MANAGER, DIRECTOR} matrix in one round-trip so the tabs flip instantly.
     const cfg = state.cache.kpiConfig;
     if (!cfg) {
-      // First open — kick off the fetch and render a skeleton.
       api(`/tenants/${tenantId}/kpi-config`)
         .then((data) => { state.cache.kpiConfig = data; renderSettings(); })
         .catch((err) => setStatus(err.message || "Failed to load KPI configuration.", true));
@@ -5662,6 +5661,22 @@ function renderSettings() {
         </section>
       `;
     } else {
+      const ROLES = ["REP", "SUPERVISOR", "MANAGER", "DIRECTOR"];
+      const ROLE_LABEL = {
+        REP:        "Sales Rep",
+        SUPERVISOR: "Supervisor",
+        MANAGER:    "Manager",
+        DIRECTOR:   "Director"
+      };
+      const activeRole = state.kpiConfigRole && ROLES.includes(state.kpiConfigRole)
+        ? state.kpiConfigRole
+        : "REP";
+      const tabs = ROLES.map((r) => `
+        <button type="button"
+          class="segmented-item kpi-cfg-role-tab${r === activeRole ? " active" : ""}"
+          data-role="${r}">${ROLE_LABEL[r]}</button>
+      `).join("");
+
       const GROUP_LABELS = {
         activity:    "Activity / กิจกรรม",
         deals:       "Deals / ดีล",
@@ -5671,8 +5686,9 @@ function renderSettings() {
       };
       const UNIT_LABEL = { count: "count", currency: "currency (฿)", percent: "%", minutes: "minutes" };
       const groups = ["activity", "deals", "quotations", "prospects", "customers"];
+      const roleMetrics = (cfg.matrix && cfg.matrix[activeRole]) || [];
       const sections = groups.map((group) => {
-        const rowsInGroup = cfg.metrics.filter((m) => m.group === group);
+        const rowsInGroup = roleMetrics.filter((m) => m.group === group);
         if (rowsInGroup.length === 0) return "";
         const rowsHtml = rowsInGroup.map((m) => `
           <div class="settings-field-row" data-metric-key="${escHtml(m.metricKey)}" style="align-items:flex-end;gap:var(--sp-3);border-bottom:1px solid var(--surface-border);padding:var(--sp-2) 0">
@@ -5706,11 +5722,12 @@ function renderSettings() {
         <section class="card">
           <h3 class="section-title">${icon('target')} KPI Configuration</h3>
           <p class="muted" style="margin-bottom:var(--sp-3)">
-            Choose which metrics this workspace tracks. Targets and dashboards iterate over the active set; labels here override the defaults shown in alerts and the digest.
+            Choose which metrics each role tracks. Targets and dashboards iterate over the active set; labels here override the defaults shown in alerts and the digest. Each role has an independent metric set — a Sales Rep can track different KPIs from a Manager.
           </p>
+          <div class="segmented" style="margin-bottom:var(--sp-3)">${tabs}</div>
           ${sections}
           <div class="inline-actions" style="margin-top:var(--sp-3)">
-            <button type="button" id="kpi-config-save">Save</button>
+            <button type="button" id="kpi-config-save">Save ${ROLE_LABEL[activeRole]}</button>
             <span class="muted small" id="kpi-config-status"></span>
           </div>
         </section>
@@ -8951,10 +8968,20 @@ function renderSettings() {
     form.querySelector('select[name="userId"]')?.focus();
   });
 
-  // ── KPI Configuration page — collect every row's controls and PUT. ─────
+  // ── KPI Configuration page — role tabs + per-role save. ───────────────
+  views.settings.querySelectorAll(".kpi-cfg-role-tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      const role = tab.dataset.role;
+      if (!role) return;
+      state.kpiConfigRole = role;
+      renderSettings();
+    });
+  });
+
   qs("#kpi-config-save")?.addEventListener("click", async () => {
     const btn = qs("#kpi-config-save");
     const statusEl = qs("#kpi-config-status");
+    const role = state.kpiConfigRole || "REP";
     const rows = Array.from(views.settings.querySelectorAll("[data-metric-key]"));
     const metrics = rows.map((row, idx) => {
       const metricKey = row.dataset.metricKey;
@@ -8972,11 +8999,12 @@ function renderSettings() {
     try {
       await api(`/tenants/${state.user.tenantId}/kpi-config`, {
         method: "PUT",
-        body: { metrics }
+        body: { role, metrics }
       });
-      // Re-fetch so labels/sort reflect server canonical state on next render.
+      // Re-fetch the full matrix so the role tabs the admin DIDN'T touch
+      // also stay in sync if the server merges anything.
       state.cache.kpiConfig = await api(`/tenants/${state.user.tenantId}/kpi-config`);
-      setStatus("KPI configuration saved.");
+      setStatus(`KPI configuration saved for ${role}.`);
       renderSettings();
     } catch (error) {
       setStatus(error.message || "Failed to save KPI configuration.", true);

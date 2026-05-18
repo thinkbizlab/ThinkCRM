@@ -943,15 +943,19 @@ model SalesKpiTarget {
   @@unique([tenantId, userId, targetMonth])
 }
 
-/// Per-tenant KPI metric configuration. One row per (tenant, catalog metric key)
-/// the tenant has elected to track. Catalog itself is system-defined in
-/// `src/lib/kpi-catalog.ts`; this table only stores opt-in + display overrides
-/// (labels, alert threshold, sort order). Default seed for every existing
-/// tenant is the three legacy metrics: VISIT_CHECKED_IN_COUNT, NEW_DEAL_VALUE,
-/// WON_DEAL_VALUE.
+/// Per-tenant, per-role KPI metric configuration. One row per
+/// (tenant, role, catalog metric key). The role split lets a company show
+/// reps activity-focused metrics (visits, prospects) while managers see
+/// outcome-focused metrics (win rate, revenue, pipeline value). Catalog
+/// itself is system-defined in `src/lib/kpi-catalog.ts`; this table only
+/// stores opt-in + display overrides (labels, alert threshold, sort order)
+/// scoped to each role.
+///
+/// ADMIN never has KPI rows (admins aren't measured on a sales book).
 model TenantKpiMetricConfig {
   id             String   @id @default(cuid())
   tenantId       String
+  role           UserRole
   metricKey      String
   labelTh        String?
   labelEn        String?
@@ -965,8 +969,8 @@ model TenantKpiMetricConfig {
   updatedAt      DateTime @updatedAt
   tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
-  @@unique([tenantId, metricKey])
-  @@index([tenantId, isActive, sortOrder])
+  @@unique([tenantId, role, metricKey])
+  @@index([tenantId, role, isActive, sortOrder])
 }
 
 /// Per-rep, per-month, per-metric target value. Replaces the three fixed

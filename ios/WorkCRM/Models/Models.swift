@@ -209,6 +209,12 @@ public struct TargetVsActual: Codable, Sendable, Identifiable {
     public let target: Triple
     public let actual: Triple
     public let progress: Triple
+    /// New per-tenant, per-role dynamic metric array. The backend emits one
+    /// entry per metric the rep's role has enabled (see
+    /// `TenantKpiMetricConfig`). When non-nil the UI should prefer this over
+    /// the legacy `target / actual / progress` Triple — the Triple is kept
+    /// for backward compatibility with shipped clients only.
+    public let kpiMetrics: [KpiMetric]?
     public var id: String { userId }
 
     public struct Triple: Codable, Sendable {
@@ -216,6 +222,24 @@ public struct TargetVsActual: Codable, Sendable, Identifiable {
         public let newDealValue: Double
         public let revenue: Double
     }
+}
+
+/// One row in the dynamic KPI catalog response. The labels are server-
+/// resolved (tenant override → catalog default) so the client renders the
+/// merged string directly without consulting the catalog.
+public struct KpiMetric: Codable, Sendable, Identifiable {
+    public let key: String
+    public let labelTh: String
+    public let labelEn: String
+    public let unit: String        // "count" | "currency" | "percent" | "minutes"
+    public let direction: String   // "higher_is_better" | "lower_is_better"
+    public let group: String
+    public let target: Double
+    public let actual: Double
+    public let pct: Double
+    public let alertThreshold: Double?
+    public let sortOrder: Int
+    public var id: String { key }
 }
 
 public struct TeamPerformanceRow: Codable, Sendable, Identifiable {

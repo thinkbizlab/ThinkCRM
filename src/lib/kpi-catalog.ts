@@ -27,7 +27,7 @@
  * at render time and any tenant can opt the new metric in.
  */
 
-import type { PrismaClient } from "@prisma/client";
+import type { PrismaClient, UserRole } from "@prisma/client";
 import { prisma } from "./prisma.js";
 
 export type KpiUnit = "count" | "currency" | "percent" | "minutes";
@@ -546,10 +546,15 @@ export function monthWindow(monthKey: string): { monthStart: Date; monthEnd: Dat
   return { monthStart, monthEnd };
 }
 
-/** Resolve a tenant's active metric configuration, merging catalog defaults
- *  with tenant overrides. Returned in tenant-specified `sortOrder`. */
+/** Resolve a tenant's active metric configuration for a SPECIFIC role,
+ *  merging catalog defaults with tenant overrides. Returned in
+ *  tenant-specified `sortOrder`.
+ *
+ *  ADMIN is intentionally not a valid role here — admins aren't measured on
+ *  a sales book. Callers passing ADMIN get an empty array. */
 export async function loadTenantKpiConfig(
   tenantId: string,
+  role: UserRole,
   db: PrismaClient = prisma
 ): Promise<Array<{
   entry: KpiCatalogEntry;
@@ -559,7 +564,7 @@ export async function loadTenantKpiConfig(
   alertThreshold: number;
 }>> {
   const rows = await db.tenantKpiMetricConfig.findMany({
-    where: { tenantId, isActive: true },
+    where: { tenantId, role, isActive: true },
     orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }]
   });
   const out: Array<{

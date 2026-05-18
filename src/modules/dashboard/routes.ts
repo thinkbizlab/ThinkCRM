@@ -261,11 +261,75 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
     const userNameById  = new Map(users.map((user) => [user.id, user.fullName]));
     const userAvatarById = new Map(users.map((user) => [user.id, user.avatarUrl ?? null]));
 
-    const targetVsActual = scopedTargets.map((target) => {
+    // ── Dynamic per-role KPI metrics ────────────────────────────────────
+    // For each rep with a target row, fetch the metrics their ROLE has
+    // configured, compute the actual via the catalog, and merge with any
+    // per-rep target value stored on SalesKpiTargetMetric. Legacy Triple
+    // fields below stay for one release window so old web/iOS clients
+    // that read `target.visits / .newDealValue / .revenue` keep working.
+    const { loadTenantKpiConfig, monthWindow } = await import("../../lib/kpi-catalog.js");
+    const { monthStart, monthEnd } = monthWindow(monthKey);
+    const targetUserIds = scopedTargets.map((t) => t.userId);
+    const [perRepMetricRows, configByRole] = await Promise.all([
+      prisma.salesKpiTargetMetric.findMany({
+        where: { tenantId, userId: { in: targetUserIds }, targetMonth: monthKey },
+        select: { userId: true, metricKey: true, targetValue: true }
+      }),
+      // One config-load per role we'll see — collapse the rep set down to
+      // their distinct roles so we don't read the same rows N times.
+      (async () => {
+        const distinctRoles = Array.from(new Set(
+          targetUserIds
+            .map((id) => userById.get(id)?.role)
+            .filter((r): r is UserRole => !!r && r !== UserRole.ADMIN)
+        ));
+        const out = new Map<UserRole, Awaited<ReturnType<typeof loadTenantKpiConfig>>>();
+        await Promise.all(distinctRoles.map(async (r) => {
+          out.set(r, await loadTenantKpiConfig(tenantId, r, prisma));
+        }));
+        return out;
+      })()
+    ]);
+    const perRepMetricByKey = new Map<string, Map<string, number>>();
+    for (const row of perRepMetricRows) {
+      let m = perRepMetricByKey.get(row.userId);
+      if (!m) { m = new Map(); perRepMetricByKey.set(row.userId, m); }
+      m.set(row.metricKey, row.targetValue);
+    }
+
+    const targetVsActual = await Promise.all(scopedTargets.map(async (target) => {
       const actual = actualByUser[target.userId] ?? { visits: 0, newDealValue: 0, revenue: 0, teamId: null };
       const progressVisits = target.visitTargetCount === 0 ? 0 : (actual.visits / target.visitTargetCount) * 100;
       const progressNewDeal = target.newDealValueTarget === 0 ? 0 : (actual.newDealValue / target.newDealValueTarget) * 100;
       const progressRevenue = target.revenueTarget === 0 ? 0 : (actual.revenue / target.revenueTarget) * 100;
+
+      // Per-role kpiMetrics[] for this rep (dynamic catalog).
+      const repRole = userById.get(target.userId)?.role;
+      const cfg = repRole ? configByRole.get(repRole) ?? [] : [];
+      const perRepTargets = perRepMetricByKey.get(target.userId) ?? new Map();
+      const kpiMetrics = await Promise.all(cfg.map(async (m) => {
+        const targetValue = perRepTargets.get(m.entry.key) ?? 0;
+        const actualValue = await m.entry.compute(prisma, {
+          tenantId,
+          userId: target.userId,
+          monthStart,
+          monthEnd
+        });
+        const pct = targetValue > 0 ? (actualValue / targetValue) * 100 : 0;
+        return {
+          key: m.entry.key,
+          labelTh: m.labelTh,
+          labelEn: m.labelEn,
+          unit: m.entry.unit,
+          direction: m.entry.direction,
+          group: m.entry.group,
+          target: Number(targetValue.toFixed(2)),
+          actual: Number(actualValue.toFixed(2)),
+          pct: Number(pct.toFixed(2)),
+          alertThreshold: m.alertThreshold,
+          sortOrder: m.sortOrder
+        };
+      }));
 
       return {
         userId: target.userId,
@@ -274,6 +338,9 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
         teamId: actual.teamId,
         teamName: actual.teamId ? (teamNameById.get(actual.teamId) ?? "Unassigned Team") : "Unassigned Team",
         month: target.targetMonth,
+        // Legacy fixed-shape fields — kept for backward compat with the
+        // existing iOS / web KPI views. The new `kpiMetrics` array is the
+        // forward-looking shape; clients should prefer it when present.
         target: {
           visits: target.visitTargetCount,
           newDealValue: target.newDealValueTarget,
@@ -288,9 +355,10 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
           visits: Number(progressVisits.toFixed(2)),
           newDealValue: Number(progressNewDeal.toFixed(2)),
           revenue: Number(progressRevenue.toFixed(2))
-        }
+        },
+        kpiMetrics
       };
-    });
+    }));
 
     const teamPerformanceMap = new Map<
       string,
