@@ -137,6 +137,38 @@ export async function buildApp() {
   });
   const __dirname = dirname(fileURLToPath(import.meta.url));
 
+  // ── Empty-body parser ─────────────────────────────────────────────────────
+  // Vercel's serverless wrapper attaches a non-JSON Content-Type (typically
+  // `application/octet-stream`) to bodyless POST/DELETE/PATCH requests
+  // forwarded from the browser, even when the original request sent no
+  // Content-Type at all. Fastify's default JSON parser refuses to handle
+  // anything other than `application/json` and replies 415 Unsupported Media
+  // Type, breaking action endpoints like POST /auth/heartbeat,
+  // DELETE /visits/:id, DELETE /admin/deals/:id, etc.
+  //
+  // Register a wildcard parser that accepts anything when Content-Length is 0
+  // (or the body is empty) and passes through to the handler with `body =
+  // undefined`. JSON-bodied requests still hit Fastify's built-in parser
+  // because that one is registered first and has higher specificity.
+  app.addContentTypeParser(
+    "*",
+    { parseAs: "string" },
+    (_req, body, done) => {
+      if (typeof body !== "string" || body.length === 0) {
+        done(null, undefined);
+        return;
+      }
+      // Best-effort: if a body actually arrived under an unknown content
+      // type, try to parse it as JSON so legacy clients still work. Fall
+      // back to the raw string otherwise.
+      try {
+        done(null, JSON.parse(body));
+      } catch {
+        done(null, body);
+      }
+    }
+  );
+
   // Error tracking — Sentry captures unhandled errors from all routes.
   if (config.SENTRY_DSN) {
     Sentry.setupFastifyErrorHandler(app);
