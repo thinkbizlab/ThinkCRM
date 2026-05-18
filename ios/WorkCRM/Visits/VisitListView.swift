@@ -7,6 +7,7 @@ public struct VisitListView: View {
     @StateObject private var model     = VisitListViewModel()
     @StateObject private var pending   = PendingActionStore.shared
     @StateObject private var reach     = Reachability.shared
+    @State       private var isAddingVisit = false
 
     public init() {}
 
@@ -20,6 +21,24 @@ public struct VisitListView: View {
                 pendingFooter
                     .padding(.horizontal, Theme.Spacing.lg)
                     .padding(.bottom, Theme.Spacing.md)
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    isAddingVisit = true
+                } label: {
+                    Image(systemName: "plus")
+                        .accessibilityLabel(t(.visitFormAddTitle))
+                }
+            }
+        }
+        .sheet(isPresented: $isAddingVisit) {
+            // Default to planned creates; the form's segmented control lets
+            // the rep flip to unplanned drop-in. After save, refresh the list
+            // so the new visit appears at the top (and the badge counts).
+            VisitFormView(mode: .createPlanned) { _ in
+                Task { await model.refresh() }
             }
         }
         .task { await model.refresh() }

@@ -11,12 +11,13 @@ import SwiftUI
 /// queue a second pending row, which the server would dedupe but the UX would
 /// be confusing).
 public struct VisitDetailView: View {
-    public let visit: Visit
+    @State private var visit: Visit
     @StateObject private var pending = PendingActionStore.shared
     @State private var showingCheckIn  = false
     @State private var showingCheckOut = false
+    @State private var showingEdit     = false
 
-    public init(visit: Visit) { self.visit = visit }
+    public init(visit: Visit) { _visit = State(initialValue: visit) }
 
     public var body: some View {
         ZStack {
@@ -56,11 +57,27 @@ public struct VisitDetailView: View {
             }
         }
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            // Edit is only meaningful before check-in — the backend rejects
+            // PATCH /visits/:id on CHECKED_IN / CHECKED_OUT records with 400.
+            if visit.status == "PLANNED" {
+                ToolbarItem(placement: .primaryAction) {
+                    Button(t(.visitFormEdit)) { showingEdit = true }
+                }
+            }
+        }
         .sheet(isPresented: $showingCheckIn) {
             NavigationStack { CheckInView(visit: visit) }
         }
         .sheet(isPresented: $showingCheckOut) {
             NavigationStack { CheckOutView(visit: visit) }
+        }
+        .sheet(isPresented: $showingEdit) {
+            VisitFormView(mode: .edit(visit)) { updated in
+                // Reflect the saved fields immediately so the detail header
+                // and Objective card refresh without a navigation reload.
+                visit = updated
+            }
         }
     }
 

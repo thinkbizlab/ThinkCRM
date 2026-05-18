@@ -28,6 +28,22 @@ public actor MasterDataRepository {
         ]
         return try await APIClient.shared.get("items", query: query)
     }
+
+    /// Type-ahead customer search. Backend enforces a 3-char minimum on `q`
+    /// to keep ILIKE costs bounded; callers should gate the request the same
+    /// way before hitting this. Scope mirrors the web client:
+    ///   - "mine" (default) → customers I own
+    ///   - "team"           → customers visible via team hierarchy
+    ///   - "all"            → tenant-wide (admin)
+    /// Backend: `GET /api/v1/customers/search?q=&limit=&scope=`
+    public func searchCustomers(q: String, limit: Int = 20, scope: String = "team") async throws -> [Customer] {
+        let query: [URLQueryItem] = [
+            URLQueryItem(name: "q",     value: q),
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "scope", value: scope)
+        ]
+        return try await APIClient.shared.get("customers/search", query: query)
+    }
 }
 
 /// Backend's customer-list pagination response shape — distinct from the

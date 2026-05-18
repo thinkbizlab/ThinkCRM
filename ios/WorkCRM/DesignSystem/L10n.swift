@@ -34,6 +34,23 @@ public enum L10n: String {
     case visitPendingSync
     case visitOffline
 
+    case visitFormAddTitle
+    case visitFormEditTitle
+    case visitFormModePlanned
+    case visitFormModeUnplanned
+    case visitFormCustomer
+    case visitFormCustomerPlaceholder
+    case visitFormPlannedAt
+    case visitFormObjective
+    case visitFormObjectivePlaceholder
+    case visitFormUnplannedNote
+    case visitFormSave
+    case visitFormEdit
+    case customerPickerTitle
+    case customerPickerSearchPlaceholder
+    case customerPickerEmpty
+    case customerPickerHintShort
+
     case kpiPersonalTitle
     case kpiTeamTitle
     case kpiVisits
@@ -79,6 +96,24 @@ public enum L10n: String {
         .visitCheckOut:     ("เช็คเอาท์",              "Check out"),
         .visitPendingSync:  ("รอซิงค์",                 "Pending sync"),
         .visitOffline:      ("ออฟไลน์",                 "Offline"),
+
+        .visitFormAddTitle:             ("สร้างการเยี่ยม",        "New Visit"),
+        .visitFormEditTitle:            ("แก้ไขการเยี่ยม",        "Edit Visit"),
+        .visitFormModePlanned:          ("วางแผน",                "Planned"),
+        .visitFormModeUnplanned:        ("ไม่ได้วางแผน",          "Unplanned"),
+        .visitFormCustomer:             ("ลูกค้า",                "Customer"),
+        .visitFormCustomerPlaceholder:  ("เลือกลูกค้า",           "Select customer"),
+        .visitFormPlannedAt:            ("วัน-เวลา",              "Date & time"),
+        .visitFormObjective:            ("วัตถุประสงค์",          "Objective"),
+        .visitFormObjectivePlaceholder: ("เช่น นำเสนอผลิตภัณฑ์",  "e.g. Product demo"),
+        .visitFormUnplannedNote:        ("จะใช้พิกัดปัจจุบันเพื่อสร้างไซต์ที่ไม่ระบุหากไม่ได้เลือกลูกค้า",
+                                         "Current GPS will create an unidentified site if no customer is selected."),
+        .visitFormSave:                 ("บันทึก",                "Save"),
+        .visitFormEdit:                 ("แก้ไข",                  "Edit"),
+        .customerPickerTitle:           ("เลือกลูกค้า",            "Select customer"),
+        .customerPickerSearchPlaceholder:("ค้นหาด้วยชื่อหรือรหัส",  "Search by name or code"),
+        .customerPickerEmpty:           ("ไม่พบลูกค้า",            "No customers found"),
+        .customerPickerHintShort:       ("พิมพ์อย่างน้อย 3 ตัวอักษร", "Type at least 3 characters"),
 
         .kpiPersonalTitle:  ("เป้าหมายของฉัน",         "My KPI"),
         .kpiTeamTitle:      ("เป้าหมายทีม",            "Team KPI"),
