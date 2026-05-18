@@ -369,6 +369,11 @@ export function renderDeal360() {
               <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
               Plan Visit
             </button>` : ""}
+            ${state.user?.role === "ADMIN" ? `
+            <button class="c360-action btn-danger-outline" id="d360-admin-delete" type="button" title="Admin: force-delete this deal">
+              <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              Delete
+            </button>` : ""}
           </div>
         </div>
 
@@ -444,6 +449,34 @@ export function renderDeal360() {
 
   views.deals.querySelector("#d360-quick-update")?.addEventListener("click", () => {
     deps.openDealEditModal(deal);
+  });
+
+  views.deals.querySelector("#d360-admin-delete")?.addEventListener("click", async () => {
+    // Two-step: fetch cascade impact, then a single confirm() lists what gets
+    // wiped so the admin doesn't accidentally trash a deal whose attached
+    // quotations they didn't realise existed. Audit log on the backend keeps
+    // a permanent record of the actor + payload either way.
+    try {
+      const impact = await api(`/admin/deals/${deal.id}/delete-impact`);
+      const cascadeBits = [];
+      if (impact.cascade.quotations > 0)       cascadeBits.push(`${impact.cascade.quotations} quotation${impact.cascade.quotations === 1 ? "" : "s"}`);
+      if (impact.cascade.progressUpdates > 0)  cascadeBits.push(`${impact.cascade.progressUpdates} progress update${impact.cascade.progressUpdates === 1 ? "" : "s"}`);
+      const cascadeLine = cascadeBits.length ? `\n\nThis will also remove: ${cascadeBits.join(", ")}.` : "";
+      const ok = window.confirm(
+        `Force-delete this deal?\n\n${deal.dealNo} — ${deal.dealName}\nOwner: ${deal.owner?.fullName || "—"}` +
+        cascadeLine +
+        `\n\nThis action cannot be undone.`
+      );
+      if (!ok) return;
+      await api(`/admin/deals/${deal.id}`, { method: "DELETE" });
+      setStatus("Deal deleted.");
+      state.deal360 = null;
+      navigateToView("deals");
+      switchView("deals");
+      if (state.cache.kanban) renderDeals(state.cache.kanban);
+    } catch (error) {
+      setStatus(error.message || "Failed to delete deal.", true);
+    }
   });
 
   views.deals.querySelectorAll(".c360-tab-btn").forEach((btn) => {

@@ -688,6 +688,7 @@ function renderVisitDetailContent(visit, changelogs) {
   const durationMs = (checkInAt && checkOutAt) ? (checkOutAt - checkInAt) : null;
   const diffInfo = fmtDiffLabel(plannedVsActualMs);
   const isOwnVisit = visit.rep?.id === state.user?.id;
+  const isAdmin = state.user?.role === "ADMIN";
   const canEdit = isOwnVisit && visit.status === "PLANNED";
   const canCheckIn = isOwnVisit && visit.status === "PLANNED";
   const canCheckOut = isOwnVisit && visit.status === "CHECKED_IN";
@@ -714,6 +715,10 @@ function renderVisitDetailContent(visit, changelogs) {
           ${canEdit ? `<button type="button" class="ghost small vd-edit-btn" data-visit-id="${visit.id}" title="Edit visit">
             <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
             Edit
+          </button>` : ""}
+          ${isAdmin ? `<button type="button" class="btn-danger-outline small vd-admin-delete-btn" data-visit-id="${visit.id}" data-visit-no="${escHtml(visit.visitNo || "")}" data-visit-customer="${customerNameForModal}" title="Admin: force-delete this visit">
+            <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            Delete
           </button>` : ""}
         </div>
       </div>
@@ -1064,6 +1069,35 @@ function renderVisitDetailContent(visit, changelogs) {
   visitDetailBody.innerHTML = heroHtml + customerHtml + dealHtml + timingHtml + objectiveHtml + resultHtml + locationHtml + voiceNotesHtml + coachingHtml + coVisitHtml + changelogHtml;
 
   visitDetailBody.querySelector(".vd-edit-btn")?.addEventListener("click", () => openVisitEditModal(visit));
+
+  visitDetailBody.querySelector(".vd-admin-delete-btn")?.addEventListener("click", async (ev) => {
+    // Admin-only force-delete (any status, any owner). Fetches the cascade
+    // impact first so the confirm message shows what else gets wiped (e.g.
+    // co-visitor evaluations). Audit log captures everything before deletion.
+    const btn = ev.currentTarget;
+    const id = btn.dataset.visitId;
+    const visitNo = btn.dataset.visitNo || "";
+    const customer = btn.dataset.visitCustomer || "—";
+    try {
+      const impact = await api(`/admin/visits/${id}/delete-impact`);
+      const cascadeLine = impact.cascade.coVisitors > 0
+        ? `\n\nThis will also remove: ${impact.cascade.coVisitors} co-visitor evaluation${impact.cascade.coVisitors === 1 ? "" : "s"}.`
+        : "";
+      const ok = window.confirm(
+        `Force-delete this visit?\n\n${visitNo} — ${customer}\nStatus: ${impact.visit.status}\nRep: ${impact.visit.rep?.fullName || "—"}` +
+        cascadeLine +
+        `\n\nThis action cannot be undone.`
+      );
+      if (!ok) return;
+      await api(`/admin/visits/${id}`, { method: "DELETE" });
+      deps.setStatus("Visit deleted.");
+      const visitDetailPanel = getVisitDetailPanel();
+      if (visitDetailPanel) visitDetailPanel.hidden = true;
+      await loadVisits();
+    } catch (error) {
+      deps.setStatus(error.message || "Failed to delete visit.", true);
+    }
+  });
 
   visitDetailBody.querySelector(".vd-checkin-btn")?.addEventListener("click", (ev) => {
     const btn = ev.currentTarget;

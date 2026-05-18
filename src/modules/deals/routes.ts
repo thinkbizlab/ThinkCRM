@@ -1263,6 +1263,72 @@ export const dealRoutes: FastifyPluginAsync = async (app) => {
     return reply.code(204).send();
   });
 
+  // ── Admin: force-delete a deal ─────────────────────────────────────────────
+  //
+  // Use case: training cleanup. New employees produce test deals while they
+  // learn the app; admin wipes them without the normal owner-visibility check.
+  // Restricted to ADMIN so a manager can't accidentally remove a real deal.
+  // Quotation/QuotationItem/DealProgressUpdate cascade via Prisma's onDelete:
+  // Cascade — the response reports cascade counts so the confirm modal can
+  // show "This deal + 2 quotations + 5 progress updates".
+
+  app.get("/admin/deals/:id/delete-impact", async (request) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+    const params = request.params as { id: string };
+    const deal = await prisma.deal.findFirst({
+      where: { id: params.id, tenantId },
+      select: {
+        id: true,
+        dealNo: true,
+        dealName: true,
+        status: true,
+        estimatedValue: true,
+        closedAt: true,
+        owner: { select: { id: true, fullName: true } },
+        customer: { select: { id: true, name: true } }
+      }
+    });
+    if (!deal) {
+      throw app.httpErrors.notFound("Deal not found.");
+    }
+    const [progressUpdates, quotations] = await Promise.all([
+      prisma.dealProgressUpdate.count({ where: { dealId: deal.id } }),
+      prisma.quotation.count({ where: { dealId: deal.id } })
+    ]);
+    return {
+      deal,
+      cascade: { progressUpdates, quotations }
+    };
+  });
+
+  app.delete("/admin/deals/:id", async (request, reply) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+    const actorId = requireUserId(request);
+    const params = request.params as { id: string };
+    const deal = await prisma.deal.findFirst({
+      where: { id: params.id, tenantId }
+    });
+    if (!deal) {
+      throw app.httpErrors.notFound("Deal not found.");
+    }
+    await prisma.$transaction(async (tx) => {
+      await tx.deal.delete({ where: { id: params.id } });
+      await writeEntityChangelog({
+        db: tx,
+        tenantId,
+        entityType: EntityType.DEAL,
+        entityId: params.id,
+        action: "DELETE",
+        changedById: actorId,
+        before: deal,
+        context: { workflow: "ADMIN_FORCE_DELETE" }
+      });
+    });
+    return reply.code(204).send();
+  });
+
   app.post("/deals/:id/quotations", async (request, reply) => {
     const tenantId = requireTenantId(request);
     const visibleUserIdList = [...(await listVisibleUserIds(request))];

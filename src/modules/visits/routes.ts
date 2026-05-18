@@ -5,11 +5,11 @@ import {
   VisitType,
   type Prisma
 } from "../../lib/prisma-generated.js";
-import { ChannelType, IntegrationPlatform, SourceStatus, Prisma as PrismaRuntime } from "@prisma/client";
+import { ChannelType, IntegrationPlatform, SourceStatus, UserRole, Prisma as PrismaRuntime } from "@prisma/client";
 import type { FastifyPluginAsync } from "fastify";
 import { config } from "../../config.js";
 import { z } from "zod";
-import { canActOnBehalfOf, listVisibleUserIds, requireTenantId, requireUserId, zodMsg } from "../../lib/http.js";
+import { canActOnBehalfOf, listVisibleUserIds, requireRoleAtLeast, requireTenantId, requireUserId, zodMsg } from "../../lib/http.js";
 import { canCoVisitRep } from "../../lib/co-visit.js";
 import { writeEntityChangelog } from "../../lib/changelog.js";
 import { prisma } from "../../lib/prisma.js";
@@ -1489,6 +1489,89 @@ export const visitRoutes: FastifyPluginAsync = async (app) => {
       context: { workflow: "DELETE" }
     });
 
+    await prisma.visit.delete({ where: { id: visit.id } });
+
+    return reply.code(204).send();
+  });
+
+  // ── Admin: force-delete a visit ────────────────────────────────────────────
+  //
+  // Use case: training cleanup. New employees produce test visits while they
+  // learn the app; the admin needs to wipe those without the normal "rep-owner
+  // + PLANNED-only" constraints of DELETE /visits/:id. Restricted to ADMIN so
+  // a manager can't accidentally wipe a real CHECKED_OUT visit. Audit log
+  // records both the actor and the full prior payload so the change is
+  // traceable forever.
+
+  app.get("/admin/visits/:id/delete-impact", async (request) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+    const params = request.params as { id: string };
+    const visit = await prisma.visit.findFirst({
+      where: { id: params.id, tenantId },
+      select: {
+        id: true,
+        visitNo: true,
+        status: true,
+        plannedAt: true,
+        objective: true,
+        rep: { select: { id: true, fullName: true } },
+        customer: { select: { id: true, name: true } },
+        prospect: { select: { id: true, displayName: true } }
+      }
+    });
+    if (!visit) {
+      throw app.httpErrors.notFound("Visit not found.");
+    }
+    const coVisitorCount = await prisma.visitCoVisitor.count({
+      where: { visitId: visit.id }
+    });
+    return {
+      visit,
+      cascade: { coVisitors: coVisitorCount }
+    };
+  });
+
+  app.delete("/admin/visits/:id", async (request, reply) => {
+    requireRoleAtLeast(request, UserRole.ADMIN);
+    const tenantId = requireTenantId(request);
+    const actorId = requireUserId(request);
+    const params = request.params as { id: string };
+
+    const visit = await prisma.visit.findFirst({
+      where: { id: params.id, tenantId }
+    });
+    if (!visit) {
+      throw app.httpErrors.notFound("Visit not found.");
+    }
+
+    await writeEntityChangelog({
+      db: prisma,
+      tenantId,
+      entityType: EntityType.VISIT,
+      entityId: visit.id,
+      action: "DELETE",
+      changedById: actorId,
+      before: {
+        repId: visit.repId,
+        plannedAt: visit.plannedAt,
+        objective: visit.objective,
+        siteLat: visit.siteLat,
+        siteLng: visit.siteLng,
+        dealId: visit.dealId,
+        customerId: visit.customerId,
+        prospectId: visit.prospectId,
+        visitType: visit.visitType,
+        status: visit.status,
+        checkInAt: visit.checkInAt,
+        checkOutAt: visit.checkOutAt
+      },
+      after: null,
+      context: { workflow: "ADMIN_FORCE_DELETE" }
+    });
+
+    // VisitCoVisitor rows cascade via Prisma onDelete: Cascade — no manual
+    // cleanup needed.
     await prisma.visit.delete({ where: { id: visit.id } });
 
     return reply.code(204).send();
