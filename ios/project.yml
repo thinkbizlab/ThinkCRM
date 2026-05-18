@@ -59,6 +59,9 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.workstationoffice.workcrm
         GENERATE_INFOPLIST_FILE: NO          # we ship Info.plist via the info: block above
+        # AppIcon lives in WorkCRM/Assets.xcassets/AppIcon.appiconset (single-size
+        # 1024x1024). Xcode auto-generates the smaller sizes from that file.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
       configs:
         Debug:
           xcconfig: Configs/Debug.xcconfig
